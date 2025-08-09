@@ -1,0 +1,7 @@
+pyqt6
+requests
+beautifulsoup4
+browser-cookie3
+websockets
+qasync
+tzdata

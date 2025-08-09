@@ -2,11 +2,23 @@ import asyncio
 import requests
 from bs4 import BeautifulSoup
 from PyQt6.QtCore import qDebug
+from core import config
 
-BALANCE_URL = "https://intrade27.bar/balance.php"
-TRADE_URL = "https://intrade27.bar/ajax5_new.php"
-TRADE_CHECK_URL = "https://intrade27.bar/trade_check2.php"
-PERCENT_URL = "https://intrade27.bar/ajax_percent.php"
+BALANCE_URL = f"{config.base_url}/balance.php"
+TRADE_URL = f"{config.base_url}/ajax5_new.php"
+TRADE_CHECK_URL = f"{config.base_url}/trade_check2.php"
+PERCENT_URL = f"{config.base_url}/ajax_percent.php"
+RISK_URL = f"{config.base_url}/risk_manage.php"
+
+def set_risk(session, user_id, user_hash, risk_min, risk_max):
+    payload = {
+        "user_id": user_id,
+        "user_hash": user_hash,
+        "risk_manage_min": risk_min,
+        "risk_manage_max": risk_max
+    }
+    r = session.post(RISK_URL, data=payload)
+    return r.ok
 
 def get_balance(session, user_id, user_hash):
     payload = {"user_id": user_id, "user_hash": user_hash}
@@ -43,8 +55,8 @@ def place_trade(session, user_id, user_hash, investment, option, status):
         "investment": str(investment),
         "time": "1",
         "date": "0",
-        "trade_type": "Sprint",
-        "status": status,
+        "trade_type": "sprint",
+        "status": str(status),
     }
     r = session.post(TRADE_URL, data=payload)
     soup = BeautifulSoup(r.text, "html.parser")
@@ -65,4 +77,3 @@ async def check_trade_result(session, user_id, user_hash, trade_id, wait_time=62
         except:
             return None
     return None
-
