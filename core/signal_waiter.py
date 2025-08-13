@@ -2,7 +2,6 @@ import asyncio
 from datetime import datetime, timezone
 from core.ws_client import last_signals
 from zoneinfo import ZoneInfo
-import sys
 
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
@@ -11,10 +10,10 @@ async def wait_for_signal(symbol):
     while True:
         value = last_signals.get(symbol)
         if value is None:
-            print('Не найден сигнал на валюту. Ждем 5 секунд')
+            print("Не найден сигнал на валюту. Ждем 5 секунд")
             await asyncio.sleep(5)
             continue
-        direction, next_time = value
+        direction, next_time, _ = value
         if direction in (1, 2):
             print(f"{symbol}. Прогноз: {direction}")
             return direction
@@ -26,4 +25,3 @@ async def wait_for_signal(symbol):
         else:
             print("Задержка. Ждем 3 секунды")
             await asyncio.sleep(3)
-            continue

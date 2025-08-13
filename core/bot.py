@@ -1,5 +1,6 @@
 import asyncio
 
+
 class Bot:
     def __init__(self, strategy_cls, strategy_kwargs, on_log, on_finish):
         self.strategy_cls = strategy_cls
@@ -8,20 +9,33 @@ class Bot:
         self.on_finish = on_finish
         self._task = None
         self._strategy = None
+        self._started = False
 
     def start(self):
+        if self._started:
+            return
         self._strategy = self.strategy_cls(**self.strategy_kwargs)
         self._task = asyncio.create_task(self._run())
+        self._started = True
 
     async def _run(self):
         try:
             await self._strategy.run()
+        except asyncio.CancelledError:
+            try:
+                self._strategy.stop()
+            except Exception:
+                pass
+            raise
         finally:
             self.on_finish()
+            self._started = False
 
     def stop(self):
         if self._strategy:
             self._strategy.stop()
+        if self._task and not self._task.done():
+            self._task.cancel()
 
     def pause(self):
         if self._strategy:
@@ -32,5 +46,11 @@ class Bot:
             self._strategy.resume()
 
     def is_running(self):
-        return self._task and not self._task.done()
+        return bool(self._task and not self._task.done())
 
+    def has_started(self):
+        return self._started
+
+    @property
+    def strategy(self):
+        return self._strategy

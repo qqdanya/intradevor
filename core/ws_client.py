@@ -17,8 +17,9 @@ timeframe_map = {
     "H1": timedelta(hours=1),
     "H4": timedelta(hours=4),
     "D1": timedelta(days=1),
-    "W1": timedelta(weeks=1)
+    "W1": timedelta(weeks=1),
 }
+
 
 def show_connection_error(error_text: str):
     app = QApplication.instance()
@@ -28,12 +29,13 @@ def show_connection_error(error_text: str):
     QMessageBox.critical(
         None,
         "Ошибка подключения",
-        f"Не удалось подключиться к серверу WebSocket:\n{error_text}"
+        f"Не удалось подключиться к серверу WebSocket:\n{error_text}",
     )
     raise SystemExit(1)
 
+
 async def listen_to_signals():
-    uri = "ws://192.168.1.70:8080"
+    uri = "ws://192.168.56.101:8080"
     try:
         async with websockets.connect(uri) as websocket:
             print("[WS] Подключено к WebSocket-серверу.")
@@ -45,11 +47,22 @@ async def listen_to_signals():
                     direction = data.get("direction", "")
                     timeframe = data.get("timeframe", "")
                     date_time_str = data.get("datetime", "")
-                   
-                    if symbol and direction in (0, 1, 2) and timeframe and date_time_str:
-                        date_time = datetime.fromisoformat(date_time_str).replace(tzinfo=ZoneInfo("Europe/Moscow"))
+
+                    if (
+                        symbol
+                        and direction in (0, 1, 2)
+                        and timeframe
+                        and date_time_str
+                    ):
+                        date_time = datetime.fromisoformat(date_time_str).replace(
+                            tzinfo=ZoneInfo("Europe/Moscow")
+                        )
                         next_time = date_time + timeframe_map[timeframe]
-                        last_signals[symbol] = (direction, next_time)
+                        last_signals[symbol] = (
+                            direction,
+                            next_time,
+                            timeframe_map[timeframe],
+                        )
                         msg = f"[WS] {symbol} / Свеча закончилась. Прогноз: {direction}. Следующая проверка {next_time}"
                         if signal_log_callback:
                             signal_log_callback(msg)
@@ -58,4 +71,3 @@ async def listen_to_signals():
                     print("[WS] Ошибка парсинга сигнала.")
     except Exception as e:
         show_connection_error(str(e))
-
