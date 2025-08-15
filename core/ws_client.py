@@ -58,12 +58,12 @@ async def listen_to_signals():
                             tzinfo=ZoneInfo("Europe/Moscow")
                         )
                         next_time = date_time + timeframe_map[timeframe]
-                        last_signals[symbol] = (
+                        last_signals[(symbol, timeframe)] = (
                             direction,
                             next_time,
                             timeframe_map[timeframe],
                         )
-                        msg = f"[WS] {symbol} / Свеча закончилась. Прогноз: {direction}. Следующая проверка {next_time}"
+                        msg = f"[WS] {symbol} / {timeframe}. Прогноз: {direction}. Следующая проверка {next_time}"
                         if signal_log_callback:
                             signal_log_callback(msg)
 

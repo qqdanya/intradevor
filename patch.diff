@@ -1,0 +1,57 @@
+--- a/strategies/martingale.py
++++ b/strategies/martingale.py
+@@
+-import asyncio
+-from core.intrade_api import (
+-    get_balance_info,
+-    get_current_percent,
+-    place_trade,
+-    check_trade_result,
+-)
++import asyncio
++from core.intrade_api_async import (
++    get_balance_info as api_get_balance_info,
++    get_current_percent as api_get_current_percent,
++    place_trade as api_place_trade,
++    check_trade_result as api_check_trade_result,
++)
+
+@@
+-class MartingaleStrategy(StrategyBase):
+-    def __init__(self, session, user_id, user_hash, symbol, direction, investment, timeframe_seconds, min_percent, **kwargs):
++class MartingaleStrategy(StrategyBase):
++    def __init__(self, http_client, user_id, user_hash, symbol, direction, investment, timeframe_seconds, min_percent, **kwargs):
+         super().__init__(**kwargs)
+-        self.session = session
++        self.http_client = http_client
+         self.user_id = user_id
+         self.user_hash = user_hash
+         self.symbol = symbol
+         self.direction = direction
+         self.investment = investment
+         self.timeframe_seconds = timeframe_seconds
+         self.min_percent = min_percent
+
+@@
+-        balance_info = get_balance_info(self.session, self.user_id, self.user_hash)
++        balance_info = await api_get_balance_info(self.http_client, self.user_id, self.user_hash)
+         # self.log(f"Баланс: {balance_info}")
+
+@@  # цикл ожидания приемлемого процента
+-            percent = get_current_percent(self.session, self.investment, self.symbol)
++            percent = await api_get_current_percent(self.http_client, self.investment, self.symbol)
+
+@@  # выставление сделки
+-        trade = place_trade(
+-            self.session, self.user_id, self.user_hash,
+-            self.symbol, self.direction, self.investment, self.timeframe_seconds
+-        )
++        trade = await api_place_trade(
++            self.http_client, self.user_id, self.user_hash,
++            self.symbol, self.direction, self.investment, self.timeframe_seconds
++        )
+
+@@  # проверка результата
+-        ok, pnl = check_trade_result(self.session, self.user_id, self.user_hash, trade_id)
++        ok, pnl = await api_check_trade_result(self.http_client, self.user_id, self.user_hash, trade_id)
+

@@ -10,6 +10,7 @@ class StrategyBase:
         self.symbol = symbol
         self.log = log_callback
         self.params = params  # живой dict
+        self.timeframe = self.params.get("timeframe", "M1")
         self._running = False
 
         # Пауза/стоп
@@ -34,14 +35,17 @@ class StrategyBase:
         self._pause_event.set()
 
     async def _pause_point(self):
-        # ждём конца паузы, но прервёмся мгновенно, если пришёл stop()
-        done, _ = await asyncio.wait(
-            {
-                asyncio.create_task(self._pause_event.wait()),
-                asyncio.create_task(self._stop_event.wait()),
-            },
+        wait_pause = asyncio.create_task(self._pause_event.wait())
+        wait_stop = asyncio.create_task(self._stop_event.wait())
+        done, pending = await asyncio.wait(
+            {wait_pause, wait_stop},
             return_when=asyncio.FIRST_COMPLETED,
         )
+        # >>> ключевая правка: отменяем вторую «висящую» задачу
+        for t in pending:
+            t.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+
         if self._stop_event.is_set():
             raise asyncio.CancelledError
 
@@ -89,6 +93,12 @@ class StrategyBase:
                 if not t.done():
                     t.cancel()
             await asyncio.gather(task, stop_task, return_exceptions=True)
+
+    def is_paused(self) -> bool:
+        return not self._pause_event.is_set()
+
+    def is_stopped(self) -> bool:
+        return not self._running
 
     # --- live settings ---
     def update_params(self, **params):

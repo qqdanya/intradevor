@@ -1,0 +1,297 @@
+*** a/gui/main_window.py
+--- b/gui/main_window.py
+@@
+ from PyQt6.QtWidgets import (
+     QWidget,
+     QLabel,
+     QVBoxLayout,
+     QTextEdit,
+     QPushButton,
+     QListWidget,
+     QListWidgetItem,
+ )
+ from PyQt6.QtCore import QTimer
+ from gui.bot_add_dialog import AddBotDialog
+ from core.session import (
+     create_session_from_browser_cookies,
+     extract_user_credentials,
+     save_session,
+-    load_session,
++    load_session,
++    create_http_client_from_browser_cookies,
+ )
+-from core.intrade_api import get_balance_info, change_currency
++from core.intrade_api import change_currency
++from core.intrade_api_async import get_balance_info as api_get_balance_info
+ from core.ws_client import listen_to_signals
+ from core.bot_manager import BotManager
+ from core.bot import Bot
+ from strategies.martingale import MartingaleStrategy
+ from collections import defaultdict
+ from gui.strategy_control_dialog import StrategyControlDialog
+ from functools import partial
+ import asyncio
+ 
+ 
+ class MainWindow(QWidget):
+     def __init__(self):
+         super().__init__()
+ 
+         self.session = None
+         self.user_id = None
+         self.user_hash = None
++        self.http_client = None  # aiohttp-клиент для async API
+ 
+         self.available_symbols = [
+             "AUDCAD",
+             "AUDCHF",
+             "AUDJPY",
+             "AUDNZD",
+             "AUDUSD",
+             "CADJPY",
+             "EURAUD",
+             "EURCAD",
+             "EURCHF",
+             "EURGBP",
+             "EURJPY",
+             "EURUSD",
+             "GBPAUD",
+             "GBPCHF",
+             "GBPJPY",
+             "GBPNZD",
+             "NZDJPY",
+             "NZDUSD",
+             "USDCAD",
+             "USDCHF",
+             "USDJPY",
+             "BTCUSDT",
+         ]
+         self.available_strategies = {
+             "martingale": MartingaleStrategy,
+             # "oscar_grind": OscarGrindStrategy,
+         }
+ 
+         self.strategy_labels = {
+             "martingale": "Мартингейл",
+         }
+ 
+         self.bot_items = {}
+         self.bot_widgets = {}
+         self.bot_logs = defaultdict(list)
+         self.bot_log_listeners = defaultdict(list)
+ 
+         self.user_id_label = QLabel("user_id: loading...")
+         self.user_hash_label = QLabel("user_hash: loading...")
+         self.balance_label = QLabel("Баланс: loading...")
+ 
+         self.bot_manager = BotManager()
+ 
+         self.change_currency_button = QPushButton("Сменить")
+         self.change_currency_button.clicked.connect(self.on_change_currency_clicked)
+ 
+         self.add_bot_button = QPushButton("Новый бот")
+         self.add_bot_button.clicked.connect(self.show_add_bot_dialog)
+ 
+         self.bot_list = QListWidget()
+         self.bot_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+         self.bot_list.itemDoubleClicked.connect(self._on_item_double_clicked)
+ 
+         self.signal_log = QTextEdit()
+         self.signal_log.setReadOnly(True)
+ 
+         layout = QVBoxLayout()
+         layout.addWidget(self.user_id_label)
+         layout.addWidget(self.user_hash_label)
+         layout.addWidget(self.balance_label)
+         layout.addWidget(self.change_currency_button)
+         layout.addWidget(self.add_bot_button)
+         layout.addWidget(QLabel("Список ботов:"))
+         layout.addWidget(self.bot_list)
+         layout.addWidget(self.signal_log)
+         self.setLayout(layout)
+ 
+         QTimer.singleShot(0, self.start_async_tasks)
+ 
+     def strategy_label(self, key: str) -> str:
+         return self.strategy_labels.get(key, key)
+ 
+     # -------------------- async init --------------------
+     def start_async_tasks(self):
+         from core import ws_client
+ 
+         ws_client.signal_log_callback = self.append_to_log
+-        asyncio.create_task(self._init_session_and_loop())
++        asyncio.create_task(self._init_session_and_loop())
++        asyncio.create_task(self._init_http_client())  # создаём aiohttp-клиент
+         asyncio.create_task(listen_to_signals())
+ 
+     async def _init_session_and_loop(self):
+         session = await asyncio.to_thread(load_session)
+         if not session:
+             session = await asyncio.to_thread(create_session_from_browser_cookies)
+             if session:
+                 await asyncio.to_thread(save_session, session)
+ 
+         user_id, user_hash = await asyncio.to_thread(extract_user_credentials, session)
+         if not user_id or not user_hash:
+             self.user_id_label.setText("Ошибка: нет user_id")
+             self.user_hash_label.setText("")
+             self.balance_label.setText("Баланс: ошибка")
+             return
+ 
+         self.session = session
+         self.user_id = user_id
+         self.user_hash = user_hash
+ 
+         self.user_id_label.setText(f"user_id: {user_id}")
+         self.user_hash_label.setText(f"user_hash: {user_hash}")
+ 
+         await self._update_balance_loop()
+ 
++    async def _init_http_client(self):
++        """
++        Создаёт единый aiohttp-клиент из куков браузера.
++        Должна вызываться один раз на старте.
++        """
++        try:
++            self.http_client = await create_http_client_from_browser_cookies()
++        except Exception as e:
++            # Мягко логируем, UI продолжит жить (некоторые функции будут недоступны)
++            self.append_to_log(f"[HTTP] Не удалось создать HttpClient: {e}")
++
+     async def _update_balance_loop(self):
+         while True:
+             try:
+-                # сетевой запрос в отдельном потоке, чтобы не блокировать event loop
+-                amount, currency, display = await asyncio.to_thread(
+-                    get_balance_info, self.session, self.user_id, self.user_hash
+-                )
++                # ждём, пока http_client будет готов (создаётся в отдельной задаче)
++                while self.http_client is None:
++                    await asyncio.sleep(0.1)
++                # асинхронный запрос баланса через aiohttp
++                amount, currency, display = await api_get_balance_info(
++                    self.http_client, self.user_id, self.user_hash
++                )
+                 # в label выводим уже готовую строку с символом валюты
+                 self.balance_label.setText(f"Баланс: {display}")
+ 
+                 # сохраняем валюту ТОЛЬКО для будущих ботов (не пушим в уже запущенные)
+                 self.account_currency = currency
+ 
+             except Exception as e:
+                 print(f"[!] Ошибка при получении баланса: {e}")
+                 self.balance_label.setText("Баланс: ошибка")
+ 
+             await asyncio.sleep(5)
+ 
+     # -------------------- logging --------------------
+ 
+     def _make_bot_logger(self, bot):
+         def _log(text: str):
+             s = str(text)
+             # общий лог
+             # self.append_to_log(s)
+             # буфер бота
+             self.bot_logs[bot].append(s)
+             # живые слушатели (диалоги)
+             for cb in list(self.bot_log_listeners.get(bot, [])):
+                 try:
+                     cb(s)
+                 except Exception:
+                     pass
+ 
+         return _log
+ 
+     def append_to_log(self, text: str):
+         self.signal_log.append(str(text))
+ 
+     # -------------------- bots --------------------
+     def show_add_bot_dialog(self):
+         dialog = AddBotDialog(
+             available_symbols=self.available_symbols,
+             available_strategies=self.available_strategies,
+             strategy_labels=self.strategy_labels,
+         )
+         if not dialog.exec():
+             return
+ 
+         strategy_key = dialog.selected_strategy
+         symbol = dialog.selected_symbol
+         timeframe = dialog.selected_timeframe
+ 
+         if not all([self.session, self.user_id, self.user_hash]):
+             self.append_to_log("❌ Сессия не готова. Подождите...")
+             return
+ 
+         strategy_class = self.available_strategies.get(strategy_key)
+ 
+         if not strategy_class:
+             self.append_to_log(f"❌ Стратегия '{strategy_key}' не найдена.")
+             return
+ 
+         # ВАЖНО: создаём Bot БЕЗ автозапуска
+         bot = Bot(
+             strategy_cls=strategy_class,
+             strategy_kwargs={
+-                "session": self.session,
++                # стратегии должны принимать http_client (aiohttp) вместо session
++                "http_client": self.http_client,
+                 "user_id": self.user_id,
+                 "user_hash": self.user_hash,
+                 "symbol": symbol,
+                 "strategy_key": strategy_key,
+                 "log_callback": None,  # временно
+                 "timeframe": timeframe,
+             },
+             on_log=self.append_to_log,
+             on_finish=lambda b=None: self.on_bot_finished(bot),
+         )
+         # после создания — назначаем пер-ботовый логгер
+         bot.strategy_kwargs["log_callback"] = self._make_bot_logger(bot)
+ 
+         self.bot_manager.add_bot(bot)
+ 
+         # элемент UI
+         from gui.bot_item_widget import BotItemWidget
+ 
+         item = QListWidgetItem()
+         title = f"{self.strategy_label(strategy_key)} [{symbol} {timeframe}]"
+         from functools import partial
+ 
+         widget = BotItemWidget(
+             title=title,
+             on_settings=partial(self.open_strategy_control_dialog, bot),  # ← вот так
+             on_pause_resume=lambda paused, b=bot: self.toggle_pause(b, paused),
+             on_stop=partial(self.stop_bot, bot),
+         )
+ 
+         item.setSizeHint(widget.sizeHint())
+         self.bot_list.addItem(item)
+         self.bot_list.setItemWidget(item, widget)
+ 
+         self.bot_items[bot] = item
+         self.bot_widgets[bot] = widget
+ 
+         self.append_to_log(
+             f"🤖 Создан бот: {self.strategy_label(strategy_key)} [{symbol}]. Нажмите ▶, чтобы запустить."
+         )
+@@
+     def on_change_currency_clicked(self):
+         change_currency(self.session, self.user_id, self.user_hash)
++
++    def closeEvent(self, e):
++        """
++        Аккуратное закрытие aiohttp-клиента при выходе.
++        """
++        async def _shutdown_http():
++            try:
++                if self.http_client:
++                    await self.http_client.close()
++            except Exception:
++                pass
++        try:
++            asyncio.get_event_loop().create_task(_shutdown_http())
++        finally:
++            super().closeEvent(e)
+

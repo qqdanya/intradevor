@@ -15,6 +15,13 @@ TRADE_URL = f"{config.base_url}/ajax5_new.php"
 TRADE_CHECK_URL = f"{config.base_url}/trade_check2.php"
 PERCENT_URL = f"{config.base_url}/ajax_percent.php"
 RISK_URL = f"{config.base_url}/risk_manage.php"
+CURRENCY_URL = f"{config.base_url}/user_currency_edit.php"
+
+
+def change_currency(session, user_id, user_hash):
+    payload = {"user_id": user_id, "user_hash": user_hash}
+    r = session.post(CURRENCY_URL, data=payload)
+    return r.ok
 
 
 def set_risk(session, user_id, user_hash, risk_min, risk_max):

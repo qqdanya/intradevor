@@ -5,3 +5,4 @@ browser-cookie3
 websockets
 qasync
 tzdata
+aiohttp

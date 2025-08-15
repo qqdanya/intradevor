@@ -9,12 +9,19 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import QTimer
 from gui.bot_add_dialog import AddBotDialog
-from core.session import create_session_from_browser_cookies, extract_user_credentials
-from core.intrade_api import get_balance_info
+from core.session import (
+    create_session_from_browser_cookies,
+    extract_user_credentials,
+    save_session,
+    load_session,
+)
+from core.intrade_api import get_balance_info, change_currency
 from core.ws_client import listen_to_signals
 from core.bot_manager import BotManager
 from core.bot import Bot
 from strategies.martingale import MartingaleStrategy
+from collections import defaultdict
+from gui.strategy_control_dialog import StrategyControlDialog
 from functools import partial
 import asyncio
 
@@ -62,12 +69,17 @@ class MainWindow(QWidget):
 
         self.bot_items = {}
         self.bot_widgets = {}
+        self.bot_logs = defaultdict(list)
+        self.bot_log_listeners = defaultdict(list)
 
         self.user_id_label = QLabel("user_id: loading...")
         self.user_hash_label = QLabel("user_hash: loading...")
         self.balance_label = QLabel("Баланс: loading...")
 
         self.bot_manager = BotManager()
+
+        self.change_currency_button = QPushButton("Сменить")
+        self.change_currency_button.clicked.connect(self.on_change_currency_clicked)
 
         self.add_bot_button = QPushButton("Новый бот")
         self.add_bot_button.clicked.connect(self.show_add_bot_dialog)
@@ -83,6 +95,7 @@ class MainWindow(QWidget):
         layout.addWidget(self.user_id_label)
         layout.addWidget(self.user_hash_label)
         layout.addWidget(self.balance_label)
+        layout.addWidget(self.change_currency_button)
         layout.addWidget(self.add_bot_button)
         layout.addWidget(QLabel("Список ботов:"))
         layout.addWidget(self.bot_list)
@@ -103,12 +116,11 @@ class MainWindow(QWidget):
         asyncio.create_task(listen_to_signals())
 
     async def _init_session_and_loop(self):
-        session = await asyncio.to_thread(create_session_from_browser_cookies)
+        session = await asyncio.to_thread(load_session)
         if not session:
-            self.user_id_label.setText("Ошибка: нет сессии")
-            self.user_hash_label.setText("")
-            self.balance_label.setText("Баланс: ошибка")
-            return
+            session = await asyncio.to_thread(create_session_from_browser_cookies)
+            if session:
+                await asyncio.to_thread(save_session, session)
 
         user_id, user_hash = await asyncio.to_thread(extract_user_credentials, session)
         if not user_id or not user_hash:
@@ -146,6 +158,23 @@ class MainWindow(QWidget):
             await asyncio.sleep(5)
 
     # -------------------- logging --------------------
+
+    def _make_bot_logger(self, bot):
+        def _log(text: str):
+            s = str(text)
+            # общий лог
+            # self.append_to_log(s)
+            # буфер бота
+            self.bot_logs[bot].append(s)
+            # живые слушатели (диалоги)
+            for cb in list(self.bot_log_listeners.get(bot, [])):
+                try:
+                    cb(s)
+                except Exception:
+                    pass
+
+        return _log
+
     def append_to_log(self, text: str):
         self.signal_log.append(str(text))
 
@@ -161,6 +190,7 @@ class MainWindow(QWidget):
 
         strategy_key = dialog.selected_strategy
         symbol = dialog.selected_symbol
+        timeframe = dialog.selected_timeframe
 
         if not all([self.session, self.user_id, self.user_hash]):
             self.append_to_log("❌ Сессия не готова. Подождите...")
@@ -181,25 +211,31 @@ class MainWindow(QWidget):
                 "user_hash": self.user_hash,
                 "symbol": symbol,
                 "strategy_key": strategy_key,
-                "log_callback": self.append_to_log,
-                # начальные параметры можно сложить сюда как "params": {...}
+                "log_callback": None,  # временно
+                "timeframe": timeframe,
             },
             on_log=self.append_to_log,
             on_finish=lambda b=None: self.on_bot_finished(bot),
         )
+        # после создания — назначаем пер-ботовый логгер
+        bot.strategy_kwargs["log_callback"] = self._make_bot_logger(bot)
+
         self.bot_manager.add_bot(bot)
 
         # элемент UI
         from gui.bot_item_widget import BotItemWidget
 
         item = QListWidgetItem()
-        title = f"{self.strategy_label(strategy_key)} [{symbol}]"
+        title = f"{self.strategy_label(strategy_key)} [{symbol} {timeframe}]"
+        from functools import partial
+
         widget = BotItemWidget(
             title=title,
-            on_settings=partial(self.open_settings_dialog, bot),
+            on_settings=partial(self.open_strategy_control_dialog, bot),  # ← вот так
             on_pause_resume=lambda paused, b=bot: self.toggle_pause(b, paused),
             on_stop=partial(self.stop_bot, bot),
         )
+
         item.setSizeHint(widget.sizeHint())
         self.bot_list.addItem(item)
         self.bot_list.setItemWidget(item, widget)
@@ -210,6 +246,10 @@ class MainWindow(QWidget):
         self.append_to_log(
             f"🤖 Создан бот: {self.strategy_label(strategy_key)} [{symbol}]. Нажмите ▶, чтобы запустить."
         )
+
+    def open_strategy_control_dialog(self, bot):
+        dlg = StrategyControlDialog(self, bot, parent=self)
+        dlg.exec()
 
     def on_bot_finished(self, bot):
         # удаляем элемент из списка UI и менеджера
@@ -309,5 +349,8 @@ class MainWindow(QWidget):
     def _on_item_double_clicked(self, item):
         for bot, it in self.bot_items.items():
             if it is item:
-                self.open_settings_dialog(bot)
+                self.open_strategy_control_dialog(bot)
                 break
+
+    def on_change_currency_clicked(self):
+        change_currency(self.session, self.user_id, self.user_hash)

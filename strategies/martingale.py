@@ -118,7 +118,12 @@ class MartingaleStrategy(StrategyBase):
                 # Ожидаем сигнал (UP/DOWN = 1/2) с таймаутом
                 try:
                     signal = await self.wait_cancellable(
-                        wait_for_signal(self.symbol), timeout=signal_timeout_sec
+                        wait_for_signal(
+                            self.symbol,
+                            self.timeframe,
+                            check_pause=self.is_paused,
+                        ),
+                        timeout=signal_timeout_sec,
                     )
                 except asyncio.TimeoutError:
                     self.log(f"[{self.symbol}] ⏳ Таймаут ожидания сигнала.")
@@ -131,9 +136,11 @@ class MartingaleStrategy(StrategyBase):
                     continue
 
                 # Берём длительность таймфрейма из last_signals
-                value = last_signals.get(self.symbol)
+                value = last_signals.get((self.symbol, self.timeframe))
                 if value is None:
-                    self.log(f"[{self.symbol}] ⚠️ Нет данных по длительности сигнала.")
+                    self.log(
+                        f"[{self.symbol}] ⚠️ Нет данных по длительности сигнала для {self.timeframe}."
+                    )
                     continue
                 _, _, time_delta = value  # ожидается timedelta
 
