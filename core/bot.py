@@ -1,3 +1,4 @@
+# core/bot.py
 import asyncio
 
 
@@ -28,6 +29,18 @@ class Bot:
                 pass
             raise
         finally:
+            # NEW: аккуратно закрываем per-bot HttpClient, если он есть
+            try:
+                client = getattr(self._strategy, "http_client", None)
+                if client is not None:
+                    close_coro = getattr(client, "aclose", None) or getattr(
+                        client, "close", None
+                    )
+                    if callable(close_coro):
+                        await close_coro()
+            except Exception:
+                pass
+
             self.on_finish()
             self._started = False
 

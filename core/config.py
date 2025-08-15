@@ -6,6 +6,8 @@ _CONFIG_FILE = "config.json"
 # Значения по умолчанию
 domain = "intrade27.bar"
 base_url = f"https://{domain}"
+ws_url = "ws://192.168.56.101:8080"
+
 
 def load_config():
     global domain, base_url
@@ -17,6 +19,7 @@ def load_config():
         except Exception as e:
             print(f"[config] Ошибка загрузки config.json: {e}")
     base_url = f"https://{domain}"
+
 
 def save_config():
     global domain, base_url
@@ -30,6 +33,14 @@ def save_config():
         print(f"[config] Ошибка сохранения config.json: {e}")
     base_url = f"https://{domain}"  # Обновляем base_url после сохранения
 
+
 # Загружаем конфиг при импорте модуля
 load_config()
 
+
+def get_base_url() -> str:
+    return base_url
+
+
+def get_domain() -> str:
+    return domain

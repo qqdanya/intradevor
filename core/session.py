@@ -1,87 +1,94 @@
+# core/session.py
+from __future__ import annotations
+
 import sys
-import os
-import pickle
+from typing import Dict, Tuple
+
 import browser_cookie3
-import requests
-from bs4 import BeautifulSoup
 from PyQt6.QtWidgets import QApplication, QMessageBox
-from core import config
-from typing import Dict
-from core.http_async import HttpClient
+
 from core.config import get_base_url, get_domain
-
-
-SESSION_FILE = "session.pkl"
-
-
-def save_session(session: requests.Session):
-    with open(SESSION_FILE, "wb") as f:
-        pickle.dump(session.cookies, f)
-
-
-def load_session() -> requests.Session | None:
-    if not os.path.exists(SESSION_FILE):
-        return None
-    s = requests.Session()
-    with open(SESSION_FILE, "rb") as f:
-        s.cookies.update(pickle.load(f))
-    return s
+from core.http_async import HttpClient, HttpConfig
 
 
 def show_critical_error(text: str):
     app = QApplication.instance()
     if app is None:
         app = QApplication(sys.argv)
-
     QMessageBox.critical(None, "Ошибка", text)
-    sys.exit(1)
+    raise SystemExit(1)
 
 
-def create_session_from_browser_cookies():
-    try:
-        cookies = browser_cookie3.firefox(domain_name=config.domain)
-        session = requests.Session()
-        session.cookies.update(cookies)
-        return session
-    except Exception as e:
-        show_critical_error(f"Не удалось загрузить cookies: {e}")
-
-
-def extract_user_credentials(session):
-    user_id = user_hash = None
-    for cookie in session.cookies:
-        if cookie.name == "user_id":
-            user_id = cookie.value
-        if cookie.name == "user_hash":
-            user_hash = cookie.value
-
-    if not user_id or not user_hash:
-        show_critical_error("Не удалось извлечь user_id и user_hash из cookies.")
-
-    return user_id, user_hash
+# ---- cookies helpers ---------------------------------------------------------
 
 
 def _cookies_for_domain(domain: str) -> Dict[str, str]:
-    jar = browser_cookie3.load()  # можно ограничить конкретным браузером, если нужно
+    """
+    Безопасно собираем (name -> value) из поддерживаемых браузеров,
+    НЕ вызывая browser_cookie3.load() (который пытается дергать все, включая Arc и т.п.).
+    """
+    import browser_cookie3 as bc3
+
     cookies: Dict[str, str] = {}
-    for c in jar:
-        # фильтруем по домену
-        if domain in (c.domain or ""):
-            cookies[c.name] = c.value
+
+    loaders = [
+        ("chrome", bc3.chrome),
+        ("chromium", bc3.chromium),
+        ("brave", bc3.brave),
+        ("vivaldi", bc3.vivaldi),
+        ("edge", bc3.edge),
+        ("opera", bc3.opera),
+        ("firefox", bc3.firefox),
+    ]
+
+    for name, loader in loaders:
+        try:
+            jar = loader(domain_name=domain)  # таргетировано по домену
+        except Exception:
+            # тихо игнорируем браузеры, где нет профиля/ключей/путей и т.д.
+            continue
+
+        # объединяем куки из этого браузера
+        for c in jar:
+            c_dom = getattr(c, "domain", "") or ""
+            if domain in c_dom:
+                cookies[c.name] = c.value
+
     return cookies
 
 
+# ---- HttpClient фабрика и утилиты -------------------------------------------
+
+
 async def create_http_client_from_browser_cookies() -> HttpClient:
-    base_url = get_base_url()  # например, "https://example.com/"
-    domain = get_domain()  # например, "example.com"
-    cookies = _cookies_for_domain(domain)
-    return HttpClient(
-        base_url, cookies=cookies, headers={"User-Agent": "Intradevor/1.0"}
-    )
+    """
+    Создаёт глобальный HttpClient с куками браузера для текущего домена.
+    """
+    cfg = HttpConfig(base_url=get_base_url(), user_agent="Intradevor/1.0")
+    client = HttpClient(cfg, cookies=_cookies_for_domain(get_domain()))
+    await client.ensure_session()
+    return client
 
 
-if __name__ == "__main__":
-    session = create_session_from_browser_cookies()
-    user_id, user_hash = extract_user_credentials(session)
-    print("user_id:", user_id)
-    print("user_hash:", user_hash)
+async def refresh_http_client_cookies(client: HttpClient) -> None:
+    """
+    Перечитать куки из браузера и заменить их у клиента (для переключений ДЕМО/РЕАЛ и т.п.).
+    ⚠ Не трогает пер-ботовые форки: обновляй только глобальный клиент.
+    """
+    new_cookies = _cookies_for_domain(get_domain())
+    # очистить и залить заново
+    await client.clear_cookies()
+    await client.update_cookies(new_cookies)
+
+
+async def extract_user_credentials_from_client(
+    client: HttpClient,
+) -> Tuple[str | None, str | None]:
+    """
+    Достать user_id и user_hash из cookie_jar клиента.
+    """
+    session = await client.ensure_session()
+    simple = session.cookie_jar.filter_cookies(get_base_url())
+    user_id = simple.get("user_id").value if "user_id" in simple else None
+    user_hash = simple.get("user_hash").value if "user_hash" in simple else None
+    return user_id, user_hash

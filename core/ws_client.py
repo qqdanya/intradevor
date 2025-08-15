@@ -35,39 +35,56 @@ def show_connection_error(error_text: str):
 
 
 async def listen_to_signals():
-    uri = "ws://192.168.56.101:8080"
-    try:
-        async with websockets.connect(uri) as websocket:
-            print("[WS] Подключено к WebSocket-серверу.")
-            async for message in websocket:
-                try:
-                    data = json.loads(message)
+    from core.config import ws_url
 
-                    symbol = data.get("symbol", "").upper()
-                    direction = data.get("direction", "")
-                    timeframe = data.get("timeframe", "")
-                    date_time_str = data.get("datetime", "")
+    retry = 0
+    while True:
+        try:
+            async with websockets.connect(
+                ws_url, ping_interval=20, ping_timeout=10
+            ) as websocket:
+                retry = 0
+                print("[WS] Подключено к WebSocket-серверу.")
+                async for message in websocket:
+                    try:
+                        data = json.loads(message)
 
-                    if (
-                        symbol
-                        and direction in (0, 1, 2)
-                        and timeframe
-                        and date_time_str
-                    ):
-                        date_time = datetime.fromisoformat(date_time_str).replace(
-                            tzinfo=ZoneInfo("Europe/Moscow")
-                        )
-                        next_time = date_time + timeframe_map[timeframe]
-                        last_signals[(symbol, timeframe)] = (
-                            direction,
-                            next_time,
-                            timeframe_map[timeframe],
-                        )
-                        msg = f"[WS] {symbol} / {timeframe}. Прогноз: {direction}. Следующая проверка {next_time}"
-                        if signal_log_callback:
-                            signal_log_callback(msg)
+                        symbol = data.get("symbol", "").upper()
+                        direction = data.get("direction", "")
+                        timeframe = data.get("timeframe", "")
+                        date_time_str = data.get("datetime", "")
 
-                except json.JSONDecodeError:
-                    print("[WS] Ошибка парсинга сигнала.")
-    except Exception as e:
-        show_connection_error(str(e))
+                        if (
+                            symbol
+                            and direction in (0, 1, 2)
+                            and timeframe
+                            and date_time_str
+                        ):
+                            td = timeframe_map.get(timeframe)
+                            if td is None:
+                                if signal_log_callback:
+                                    signal_log_callback(
+                                        f"[WS] Неизвестный таймфрейм '{timeframe}' — игнор."
+                                    )
+                                continue
+                            date_time = datetime.fromisoformat(date_time_str)
+                            next_time = date_time + td
+                            last_signals[(symbol, timeframe)] = (
+                                direction,
+                                next_time,
+                                td,
+                            )
+                            msg = f"[WS] {symbol} / {timeframe}. Прогноз: {direction}. Следующая проверка {next_time}"
+                            if signal_log_callback:
+                                signal_log_callback(msg)
+
+                    except json.JSONDecodeError:
+                        print("[WS] Ошибка парсинга сигнала.")
+        except Exception as e:
+            delay = min(30, 2 ** min(retry, 5))
+            if signal_log_callback:
+                signal_log_callback(
+                    f"[WS] Потеря соединения: {e}. Повтор через {delay}s"
+                )
+            await asyncio.sleep(delay)
+            retry += 1

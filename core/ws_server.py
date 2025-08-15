@@ -8,6 +8,7 @@ PORT = 8080
 
 connected_clients = set()
 
+
 async def handle_connection(websocket):
     # Регистрируем клиента
     connected_clients.add(websocket)
@@ -26,17 +27,12 @@ async def handle_connection(websocket):
                 # Преобразуем строку времени в объект datetime для вывода (если валидно)
                 try:
                     bar_time = datetime.strptime(datetime_str, "%Y-%m-%d %H:%M:%S")
-                    bar_time_str = bar_time.strftime('%Y-%m-%d %H:%M:%S')
+                    bar_time_str = bar_time.strftime("%Y-%m-%d %H:%M:%S")
                 except Exception:
                     bar_time_str = datetime_str
 
                 # Преобразуем направление в строку для читаемости
-                direction_map = {
-                    0: "none",
-                    1: "up",
-                    2: "down",
-                    3: "both"
-                }
+                direction_map = {0: "none", 1: "up", 2: "down", 3: "both"}
                 direction = direction_map.get(direction_code, "unknown")
 
                 print(f"📈 [{symbol} {timeframe}] → {direction} | time: {bar_time_str}")
@@ -48,7 +44,9 @@ async def handle_connection(websocket):
                         try:
                             await client.send(message)
                         except Exception as e:
-                            print(f"[!] Ошибка при отправке клиенту {client.remote_address}: {e}")
+                            print(
+                                f"[!] Ошибка при отправке клиенту {client.remote_address}: {e}"
+                            )
                             disconnected.add(client)
 
                 for dc in disconnected:
@@ -64,11 +62,12 @@ async def handle_connection(websocket):
         # Убираем клиента при отключении
         connected_clients.discard(websocket)
 
+
 async def run_server():
     print(f"🚀 WebSocket-сервер запущен на ws://{HOST}:{PORT}")
     async with websockets.serve(handle_connection, HOST, PORT):
         await asyncio.Future()  # Ожидание навсегда
 
+
 if __name__ == "__main__":
     asyncio.run(run_server())
-
