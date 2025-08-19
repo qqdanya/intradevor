@@ -6,7 +6,8 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-last_signals = {}
+from core.signal_waiter import push_signal  # <-- добавили
+
 signal_log_callback = None
 
 timeframe_map = {
@@ -44,22 +45,35 @@ async def listen_to_signals():
                 ws_url, ping_interval=20, ping_timeout=10
             ) as websocket:
                 retry = 0
-                print("[WS] Подключено к WebSocket-серверу.")
+                signal_log_callback("[WS] Подключено к WebSocket-серверу.")
                 async for message in websocket:
                     try:
                         data = json.loads(message)
 
-                        symbol = data.get("symbol", "").upper()
-                        direction = data.get("direction", "")
-                        timeframe = data.get("timeframe", "")
+                        symbol = (data.get("symbol") or "").upper()
+                        timeframe = (data.get("timeframe") or "").upper()
                         date_time_str = data.get("datetime", "")
 
-                        if (
-                            symbol
-                            and direction in (0, 1, 2)
-                            and timeframe
-                            and date_time_str
-                        ):
+                        # direction может быть 0/1/2 или строкой 'none' / 'up' / 'down'
+                        raw_dir = data.get("direction", None)
+
+                        # нормализуем в {1,2,None}
+                        direction = None
+                        if isinstance(raw_dir, int):
+                            if raw_dir in (1, 2):
+                                direction = raw_dir
+                            else:
+                                direction = None  # 0 или любой другой => none / очистка
+                        elif isinstance(raw_dir, str):
+                            d = raw_dir.strip().lower()
+                            if d in ("1", "up", "buy", "long"):
+                                direction = 1
+                            elif d in ("2", "down", "sell", "short"):
+                                direction = 2
+                            else:
+                                direction = None  # 'none' и т.п.
+
+                        if symbol and timeframe and date_time_str:
                             td = timeframe_map.get(timeframe)
                             if td is None:
                                 if signal_log_callback:
@@ -67,16 +81,18 @@ async def listen_to_signals():
                                         f"[WS] Неизвестный таймфрейм '{timeframe}' — игнор."
                                     )
                                 continue
-                            date_time = datetime.fromisoformat(date_time_str)
-                            next_time = date_time + td
-                            last_signals[(symbol, timeframe)] = (
-                                direction,
-                                next_time,
-                                td,
-                            )
-                            msg = f"[WS] {symbol} / {timeframe}. Прогноз: {direction}. Следующая проверка {next_time}"
+
+                            # ВАЖНО: отправляем в ожидатель ВСЕ сообщения (включая none)
+                            push_signal(symbol, timeframe, direction)
+
+                            # просто лог (для наглядности)
+                            dt = datetime.fromisoformat(date_time_str)
+                            dt_naive = dt.replace(tzinfo=None)
+                            msg_dir = {1: "UP", 2: "DOWN", None: "none"}[direction]
                             if signal_log_callback:
-                                signal_log_callback(msg)
+                                signal_log_callback(
+                                    f"[WS] {symbol} / {timeframe}. Прогноз: {msg_dir}. Время свечи: {dt_naive.strftime('%H:%M')}"
+                                )
 
                     except json.JSONDecodeError:
                         print("[WS] Ошибка парсинга сигнала.")
@@ -84,7 +100,7 @@ async def listen_to_signals():
             delay = min(30, 2 ** min(retry, 5))
             if signal_log_callback:
                 signal_log_callback(
-                    f"[WS] Потеря соединения: {e}. Повтор через {delay}s"
+                    f"[WS] Потеря соединения: {e}. Повтор через {delay}c"
                 )
             await asyncio.sleep(delay)
             retry += 1

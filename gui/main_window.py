@@ -7,14 +7,27 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QListWidget,
     QListWidgetItem,
+    QDialog,
+    QFormLayout,
+    QSpinBox,
+    QDialogButtonBox,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+    QMessageBox,
 )
-from PyQt6.QtGui import QTextCursor
-from PyQt6.QtCore import QTimer
+from PyQt6.QtGui import QTextCursor, QColor, QBrush
+from PyQt6.QtCore import Qt, QTimer
 from collections import defaultdict
 from functools import partial
 import asyncio
 
+from core.symbols import ui_symbol
+from core.money import format_money
+from core.logger import ts
+
 from gui.bot_add_dialog import AddBotDialog
+from gui.risk_dialog import RiskDialog
 from core.session import (
     create_http_client_from_browser_cookies,
     refresh_http_client_cookies,
@@ -25,6 +38,7 @@ from core.intrade_api_async import (
     change_currency,
     is_demo_account,
     toggle_real_demo,
+    set_risk,
 )
 from core.ws_client import listen_to_signals
 from core.bot_manager import BotManager
@@ -43,28 +57,28 @@ class MainWindow(QWidget):
         self.is_demo = False
 
         self.available_symbols = [
-            "AUDCAD",
-            "AUDCHF",
-            "AUDJPY",
-            "AUDNZD",
-            "AUDUSD",
-            "CADJPY",
-            "EURAUD",
-            "EURCAD",
-            "EURCHF",
-            "EURGBP",
-            "EURJPY",
-            "EURUSD",
-            "GBPAUD",
-            "GBPCHF",
-            "GBPJPY",
-            "GBPNZD",
-            "NZDJPY",
-            "NZDUSD",
-            "USDCAD",
-            "USDCHF",
-            "USDJPY",
-            "BTCUSDT",
+            "AUD/CAD",
+            "AUD/CHF",
+            "AUD/JPY",
+            "AUD/NZD",
+            "AUD/USD",
+            "CAD/JPY",
+            "EUR/AUD",
+            "EUR/CAD",
+            "EUR/CHF",
+            "EUR/GBP",
+            "EUR/JPY",
+            "EUR/USD",
+            "GBP/AUD",
+            "GBP/CHF",
+            "GBP/JPY",
+            "GBP/NZD",
+            "NZD/JPY",
+            "NZD/USD",
+            "USD/CAD",
+            "USD/CHF",
+            "USD/JPY",
+            "BTC/USDT",
         ]
         self.available_strategies = {
             "martingale": MartingaleStrategy,
@@ -77,6 +91,7 @@ class MainWindow(QWidget):
         self.bot_widgets = {}
         self.bot_logs = defaultdict(list)
         self.bot_log_listeners = defaultdict(list)
+        self.pending_trades = {}
 
         self.user_id_label = QLabel("user_id: loading...")
         self.user_hash_label = QLabel("user_hash: loading...")
@@ -89,12 +104,15 @@ class MainWindow(QWidget):
             lambda: asyncio.create_task(self.on_change_currency_clicked())
         )
 
+        self.set_risk_button = QPushButton("Настроить риск-менеджмент", self)
+        self.set_risk_button.clicked.connect(self._open_risk_dialog)
+
         self.toggle_demo_button = QPushButton("Переключить Реал/Демо")
         self.toggle_demo_button.clicked.connect(
             lambda: asyncio.create_task(self.on_toggle_demo_clicked())
         )
 
-        self.add_bot_button = QPushButton("Новый бот")
+        self.add_bot_button = QPushButton("Создать бота")
         self.add_bot_button.clicked.connect(self.show_add_bot_dialog)
 
         self.bot_list = QListWidget()
@@ -104,16 +122,47 @@ class MainWindow(QWidget):
         self.signal_log = QTextEdit()
         self.signal_log.setReadOnly(True)
 
+        # === Таблица результатов сделок ===
+        self.trades_table = QTableWidget(self)
+        self.trades_table.setColumnCount(8)
+        self.trades_table.setHorizontalHeaderLabels(
+            [
+                "Время",
+                "Валютная пара",
+                "ТФ",
+                "Направление",
+                "Ставка",
+                "Процент",
+                "P/L",
+                "Счет",
+            ]
+        )
+        hdr = self.trades_table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)  # Пара
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)  # ТФ
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)  # Время
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)  # Напр.
+        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)  # Ставка
+        hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)  # %
+        hdr.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)  # P/L
+        hdr.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)  # Счет
+        self.trades_table.setAlternatingRowColors(True)
+        self.trades_table.setSortingEnabled(True)
+
         layout = QVBoxLayout()
         layout.addWidget(self.user_id_label)
         layout.addWidget(self.user_hash_label)
         layout.addWidget(self.balance_label)
         layout.addWidget(self.change_currency_button)
+        layout.addWidget(self.set_risk_button)
         layout.addWidget(self.toggle_demo_button)
         layout.addWidget(self.add_bot_button)
         layout.addWidget(QLabel("Список ботов:"))
         layout.addWidget(self.bot_list)
+        layout.addWidget(QLabel("Логи:"))
         layout.addWidget(self.signal_log)
+        layout.addWidget(QLabel("Сделки:"))
+        layout.addWidget(self.trades_table)
         self.setLayout(layout)
 
         QTimer.singleShot(0, self.start_async_tasks)
@@ -159,7 +208,7 @@ class MainWindow(QWidget):
 
                 self.balance_label.setText(f"Баланс: {display}")
             except Exception as e:
-                print(f"[!] Ошибка при получении баланса: {e}")
+                self.append_to_log(f"[!] Ошибка при получении баланса: {e}")
                 self.balance_label.setText("Баланс: ошибка")
             await asyncio.sleep(5)
 
@@ -179,7 +228,7 @@ class MainWindow(QWidget):
 
     def append_to_log(self, text: str):
         # self.signal_log.append(str(text))
-        s = str(text) + "\n"
+        s = ts(str(text)) + "\n"
         cur = self.signal_log.textCursor()
         cur.movePosition(QTextCursor.MoveOperation.Start)  # курсор в начало
         self.signal_log.setTextCursor(cur)
@@ -223,7 +272,9 @@ class MainWindow(QWidget):
                     "log_callback": None,  # временно
                     "timeframe": timeframe,
                     "params": {
-                        "account_currency": getattr(self, "account_currency", "RUB")
+                        "account_currency": getattr(self, "account_currency", "RUB"),
+                        "on_trade_result": self.add_trade_result,
+                        "on_trade_pending": self.add_trade_pending,
                     },
                 },
                 on_log=self.append_to_log,
@@ -281,6 +332,7 @@ class MainWindow(QWidget):
 
     def stop_bot(self, bot):
         bot.stop()
+        self.on_bot_finished(bot)
 
     def toggle_pause(self, bot, paused: bool):
         has_started = getattr(bot, "has_started", None)
@@ -329,6 +381,8 @@ class MainWindow(QWidget):
             if isinstance(bot.strategy_kwargs, dict):
                 base_params = dict(bot.strategy_kwargs.get("params", {}))
             live_params = base_params
+        live_params.setdefault("timeframe", bot.strategy_kwargs.get("timeframe", "M1"))
+        live_params.setdefault("symbol", bot.strategy_kwargs.get("symbol", ""))
 
         dlg = dlg_cls(live_params, parent=self)
         if not dlg.exec():
@@ -404,3 +458,223 @@ class MainWindow(QWidget):
             self.append_to_log(f"✅ Переключено. Текущий режим: {mode}.")
         except Exception as e:
             self.append_to_log(f"❌ Ошибка переключения Реал/Демо: {e}")
+
+    def _open_risk_dialog(self):
+        res = RiskDialog.get_values(self, min_default=1, max_default=100)
+        if res is None:
+            return
+        min_v, max_v = res
+        if max_v < min_v:
+            # не модально-блокирующий способ
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("Проверка")
+            box.setText("Максимум не может быть меньше минимума.")
+            box.open()
+            return
+        # ВАЖНО: запускаем корутину как задачу, а не через asyncSlot
+        asyncio.create_task(self._apply_risk_limits(min_v, max_v))
+
+    async def _apply_risk_limits(self, min_v: int, max_v: int):
+        # (по желанию) временно выключим кнопку, чтобы избежать дабл-кликов
+        if hasattr(self, "btnRisk"):
+            self.btnRisk.setEnabled(False)
+        try:
+            ok = await set_risk(
+                self.http_client,
+                self.user_id,
+                self.user_hash,
+                risk_min=min_v,
+                risk_max=max_v,
+            )
+            # НЕ вызываем статические QMessageBox.information/critical (они модальные)
+            box = QMessageBox(self)
+            box.setIcon(
+                QMessageBox.Icon.Information if ok else QMessageBox.Icon.Critical
+            )
+            box.setWindowTitle("Готово" if ok else "Ошибка")
+            box.setText(
+                f"Ежедневное ограничение установлено:\nМинимум: {min_v}%\nМаксимум: {max_v}%"
+                if ok
+                else "Не удалось установить лимит риска (сервер вернул ошибку)."
+            )
+            box.open()  # не блокирует цикл
+        except Exception as e:
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Critical)
+            box.setWindowTitle("Ошибка")
+            box.setText(f"Не удалось установить лимит риска:\n{e}")
+            box.open()
+        finally:
+            if hasattr(self, "btnRisk"):
+                self.btnRisk.setEnabled(True)
+
+    def add_trade_pending(
+        self,
+        *,
+        trade_id: str,
+        placed_at: str,
+        symbol: str,
+        timeframe: str,
+        direction: int,
+        stake: float,
+        percent: int,
+        wait_seconds: float,
+    ):
+        """
+        Добавляет строку «ожидание результата»:
+          P/L -> "Ожидание (чч:мм:сс/мм:сс/с)", строка жёлтая.
+        Таймер раз в секунду обновляет обратный отсчёт.
+        """
+        from time import time as _now
+
+        def _fmt_left(sec: float) -> str:
+            s = int(max(0, round(sec)))
+            h, r = divmod(s, 3600)
+            m, s = divmod(r, 60)
+            if h > 0:
+                return f"{h}:{m:02d}:{s:02d}"
+            if m > 0:
+                return f"{m}:{s:02d}"
+            return f"{s} с"
+
+        def _do():
+            was_sorting = self.trades_table.isSortingEnabled()
+            if was_sorting:
+                self.trades_table.setSortingEnabled(False)
+
+            row = 0
+            self.trades_table.insertRow(row)
+
+            dir_text = "ВВЕРХ" if int(direction) == 1 else "ВНИЗ"
+            remaining_txt = _fmt_left(wait_seconds)
+            account_txt = "ДЕМО" if getattr(self, "is_demo", False) else "РЕАЛ"
+
+            vals = [
+                placed_at,  # 0 Время
+                symbol,  # 1 Пара
+                timeframe,  # 2 ТФ
+                dir_text,  # 3 Направление
+                f"{stake:.2f}",  # 4 Ставка
+                f"{percent}%",  # 5 %
+                f"Ожидание ({remaining_txt})",  # 6 P/L
+                account_txt,  # 7 Счёт
+            ]
+            for col, v in enumerate(vals):
+                self.trades_table.setItem(row, col, QTableWidgetItem(str(v)))
+
+            yellow = QBrush(QColor("#fff4c2"))
+            for c in range(self.trades_table.columnCount()):
+                it = self.trades_table.item(row, c)
+                if it:
+                    it.setBackground(yellow)
+
+            deadline = _now() + float(wait_seconds)
+            timer = QTimer(self)
+            timer.setInterval(1000)
+
+            def _tick():
+                left = deadline - _now()
+                # если строка пропала — стоп
+                if row >= self.trades_table.rowCount():
+                    timer.stop()
+                    return
+                item = self.trades_table.item(row, 6)  # P/L
+                if item:
+                    item.setText(f"Ожидание ({_fmt_left(left)})")
+                if left <= 0:
+                    timer.stop()
+
+            timer.timeout.connect(_tick)
+            timer.start()
+
+            prev = self.pending_trades.get(trade_id)
+            if prev and isinstance(prev.get("timer"), QTimer):
+                try:
+                    prev["timer"].stop()
+                except Exception:
+                    pass
+            self.pending_trades[trade_id] = {"row": row, "timer": timer}
+
+            if was_sorting:
+                self.trades_table.setSortingEnabled(True)
+            self.trades_table.scrollToTop()
+
+        QTimer.singleShot(0, _do)
+
+    def add_trade_result(
+        self,
+        *,
+        trade_id: str | None = None,
+        placed_at: str,
+        symbol: str,
+        timeframe: str,
+        direction: int,
+        stake: float,
+        percent: int,
+        profit: float | None,
+    ):
+        """
+        Если есть pending с таким trade_id — обновляем его строку.
+        Иначе добавляем новую. Красим:
+          >0 — зелёный, <0 — красный, ==0 или None — серый.
+        """
+
+        def _fill_row(row: int):
+            dir_text = "ВВЕРХ" if int(direction) == 1 else "ВНИЗ"
+            account_txt = "ДЕМО" if getattr(self, "is_demo", False) else "РЕАЛ"
+
+            vals = [
+                placed_at,  # 0
+                symbol,  # 1
+                timeframe,  # 2
+                dir_text,  # 3
+                f"{stake:.2f}",  # 4
+                f"{percent}%",  # 5
+                f"{profit:.2f}" if profit is not None else "—",  # 6
+                account_txt,  # 7
+            ]
+            for col, v in enumerate(vals):
+                self.trades_table.setItem(row, col, QTableWidgetItem(str(v)))
+
+            if profit is None or abs(profit) < 1e-9:
+                color = QColor("#e0e0e0")  # серый (PUSH/неизвестно)
+            elif profit > 0:
+                color = QColor("#d1f7c4")  # зелёный
+            else:
+                color = QColor("#ffd6d6")  # красный
+            brush = QBrush(color)
+            for c in range(self.trades_table.columnCount()):
+                it = self.trades_table.item(row, c)
+                if it:
+                    it.setBackground(brush)
+
+        def _do():
+            was_sorting = self.trades_table.isSortingEnabled()
+            if was_sorting:
+                self.trades_table.setSortingEnabled(False)
+
+            row_to_update = None
+            if trade_id and trade_id in self.pending_trades:
+                info = self.pending_trades.pop(trade_id, {})
+                timer = info.get("timer")
+                if isinstance(timer, QTimer):
+                    try:
+                        timer.stop()
+                    except Exception:
+                        pass
+                row = info.get("row")
+                if isinstance(row, int) and 0 <= row < self.trades_table.rowCount():
+                    row_to_update = row
+
+            if row_to_update is None:
+                row_to_update = 0
+                self.trades_table.insertRow(row_to_update)
+
+            _fill_row(row_to_update)
+
+            if was_sorting:
+                self.trades_table.setSortingEnabled(True)
+            self.trades_table.scrollToTop()
+
+        QTimer.singleShot(0, _do)

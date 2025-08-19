@@ -157,7 +157,7 @@ async def place_trade(
     payload = {
         "user_id": user_id,
         "user_hash": user_hash,
-        "option": option,
+        "option": option.replace("/", ""),
         "investment": investment,
         "time": minutes,
         "date": "0",

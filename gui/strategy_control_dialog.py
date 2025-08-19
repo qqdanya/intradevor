@@ -11,8 +11,11 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QSpinBox,
     QDoubleSpinBox,
+    QMessageBox,
 )
 from PyQt6.QtCore import QTimer
+from strategies.martingale import _minutes_from_timeframe
+from core.policy import normalize_sprint
 
 
 class StrategyControlDialog(QDialog):
@@ -72,6 +75,15 @@ class StrategyControlDialog(QDialog):
         def getv(key, default):
             return params.get(key, default)
 
+        symbol = str(self.bot.strategy_kwargs.get("symbol", ""))
+        tf = str(getv("timeframe", self.bot.strategy_kwargs.get("timeframe", "M1")))
+        default_minutes = int(getv("minutes", _minutes_from_timeframe(tf)))
+
+        self.minutes = QSpinBox()
+        self.minutes.setRange(5 if symbol == "BTCUSDT" else 1, 500)
+        self.minutes.setValue(default_minutes)
+        self.minutes.setToolTip("1; 3-500 мин; BTCUSDT: 5-500 мин")
+
         self.base_investment = QSpinBox()
         self.base_investment.setRange(1, 50_000)
         self.base_investment.setValue(int(getv("base_investment", 100)))
@@ -99,6 +111,7 @@ class StrategyControlDialog(QDialog):
         self.signal_timeout_sec.setValue(int(getv("signal_timeout_sec", 3600)))
 
         form.addRow("Базовая ставка", self.base_investment)
+        form.addRow("Время сделки (мин)", self.minutes)
         form.addRow("Макс. шагов", self.max_steps)
         form.addRow("Повторов серии", self.repeat_count)
         form.addRow("Мин. баланс", self.min_balance)
@@ -236,6 +249,24 @@ class StrategyControlDialog(QDialog):
             self.log_edit.append(f"⚠ Ошибка остановки: {e}")
 
     def save_settings(self):
+        symbol = str(self.bot.strategy_kwargs.get("symbol", ""))
+        m = int(self.minutes.value())
+        norm = normalize_sprint(symbol, m)
+
+        if norm is None:
+            # Ничего не сохраняем — показываем предупреждение и выходим
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("Недопустимое время экспирации")
+            if symbol == "BTCUSDT":
+                box.setText("Для BTCUSDT время должно быть от 5 до 500 минут.")
+            else:
+                box.setText(
+                    "Для выбранной пары разрешено 1 или 3–500 минут (2 минуты — нельзя)."
+                )
+            box.open()
+            return
+
         new_params = {
             "base_investment": self.base_investment.value(),
             "max_steps": self.max_steps.value(),
@@ -245,12 +276,18 @@ class StrategyControlDialog(QDialog):
             "min_percent": self.min_percent.value(),
             "wait_on_low_percent": self.wait_on_low_percent.value(),
             "signal_timeout_sec": self.signal_timeout_sec.value(),
+            "minutes": int(norm),  # сохраняем уже валидное значение
         }
-        # 1) дефолты для будущих перезапусков
+
+        # 1) дефолты для этого бота
         self.bot.strategy_kwargs.setdefault("params", {}).update(new_params)
-        # 2) на лету — если уже запущено
+        # 2) на лету — если запущено
         if self.bot.strategy and hasattr(self.bot.strategy, "update_params"):
             self.bot.strategy.update_params(**new_params)
+
+        # синхронизируем спинбокс (если, например, пользователь поставил 2 → останется 3/5)
+        self.minutes.setValue(int(norm))
+
         self.log_edit.append(f"💾 Настройки сохранены: {new_params}")
 
     def closeEvent(self, e):

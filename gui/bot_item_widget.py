@@ -1,5 +1,6 @@
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLabel, QPushButton
 
+
 class BotItemWidget(QWidget):
     def __init__(self, title: str, on_settings, on_pause_resume, on_stop, parent=None):
         super().__init__(parent)
@@ -8,8 +9,7 @@ class BotItemWidget(QWidget):
         self.label = QLabel(title)
         self.btn_settings = QPushButton("⚙")
         self.btn_pause = QPushButton("▶")
-        self.btn_stop = QPushButton("⏹")
-        self.btn_stop.setEnabled(False)  # ⬅ сразу выключена
+        self.btn_stop = QPushButton("✖")
 
         self.btn_settings.clicked.connect(on_settings)
         self.btn_pause.clicked.connect(self._toggle)
@@ -37,4 +37,3 @@ class BotItemWidget(QWidget):
             self._paused = paused
             self.btn_pause.setText("▶" if self._paused else "⏸")
             self.btn_stop.setEnabled(not self._paused)
-

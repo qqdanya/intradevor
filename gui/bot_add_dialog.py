@@ -61,9 +61,14 @@ class AddBotDialog(QDialog):
 
         self.setLayout(layout)
 
-    def filter_symbols(self, text):
+    def filter_symbols(self, text: str):
         self.symbol_combo.clear()
-        filtered = [s for s in self.available_symbols if text.upper() in s.upper()]
+        t = text.upper().replace("/", "")  # убираем "/" у запроса, чтобы не мешал
+        filtered = []
+        for s in self.available_symbols:
+            s_no_slash = s.replace("/", "")
+            if t in s.upper() or t in s_no_slash:
+                filtered.append(s)
         self.symbol_combo.addItems(filtered)
 
     @property

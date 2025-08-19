@@ -1,10 +1,30 @@
-from PyQt6.QtWidgets import QDialog, QFormLayout, QSpinBox, QDoubleSpinBox, QDialogButtonBox
+from PyQt6.QtWidgets import (
+    QDialog,
+    QFormLayout,
+    QSpinBox,
+    QDoubleSpinBox,
+    QDialogButtonBox,
+)
+from strategies.martingale import _minutes_from_timeframe
+from core.policy import normalize_sprint
+
 
 class MartingaleSettingsDialog(QDialog):
     def __init__(self, params: dict, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Настройки: Martingale")
         self.params = params.copy()
+
+        # ---- НОВОЕ: минуты экспирации ----
+        tf = str(self.params.get("timeframe", "M1"))
+        symbol = str(self.params.get("symbol", ""))  # прокинут из MainWindow
+
+        default_minutes = int(self.params.get("minutes", _minutes_from_timeframe(tf)))
+
+        self.minutes = QSpinBox()
+        # Для BTC — минимум 5, для остальных — 1 (но 2 всё равно отфильтруем перед сохранением)
+        self.minutes.setRange(5 if symbol == "BTCUSDT" else 1, 500)
+        self.minutes.setValue(default_minutes)
 
         self.base_investment = QSpinBox()
         self.base_investment.setRange(1, 50000)
@@ -37,6 +57,7 @@ class MartingaleSettingsDialog(QDialog):
 
         form = QFormLayout()
         form.addRow("Базовая ставка", self.base_investment)
+        form.addRow("Время экспирации (мин)", self.minutes)
         form.addRow("Макс. шагов", self.max_steps)
         form.addRow("Повторов серии", self.repeat_count)
         form.addRow("Мин. баланс", self.min_balance)
@@ -54,7 +75,15 @@ class MartingaleSettingsDialog(QDialog):
         self.setLayout(form)
 
     def get_params(self) -> dict:
+        # Мягкая нормализация по policy: 2 → 3 (для не-BTC), <5 → 5 (для BTC), и т.д.
+        symbol = str(self.params.get("symbol", ""))
+        m = int(self.minutes.value())
+        norm = normalize_sprint(symbol, m)
+        if norm is None:
+            norm = 5 if symbol == "BTCUSDT" else (1 if m < 3 else max(3, min(500, m)))
+
         return {
+            "minutes": int(norm),  # ⬅️ НОВОЕ: вернули минуты
             "base_investment": self.base_investment.value(),
             "max_steps": self.max_steps.value(),
             "repeat_count": self.repeat_count.value(),
