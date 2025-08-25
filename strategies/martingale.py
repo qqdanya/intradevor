@@ -12,7 +12,7 @@ from core.intrade_api_async import (
     check_trade_result,
     is_demo_account,
 )
-from core.signal_waiter import wait_for_signal_versioned
+from core.signal_waiter import wait_for_signal_versioned, peek_signal_state
 from strategies.base import StrategyBase
 from core.policy import normalize_sprint
 
@@ -133,6 +133,7 @@ class MartingaleStrategy(StrategyBase):
 
         self._running = False
         self._last_signal_ver: Optional[int] = None
+        self._last_indicator: str = "-"
 
         # === «якорная» валюта счёта ===
         anchor = str(
@@ -177,6 +178,17 @@ class MartingaleStrategy(StrategyBase):
             self._running = False
             (self.log or (lambda s: None))(f"[{self.symbol}] Завершение стратегии.")
             return
+
+        try:
+            st = peek_signal_state(self.symbol, self.timeframe)
+            self._last_signal_ver = st.get("version", 0) or 0
+            # чтобы «первый же старый сигнал» не сработал
+            if self.log:
+                self.log(
+                    f"[{self.symbol}] Заякорена версия сигнала: v{self._last_signal_ver}"
+                )
+        except Exception:
+            self._last_signal_ver = 0
 
         while self._running and series_left > 0:
             await self._pause_point()
@@ -354,6 +366,7 @@ class MartingaleStrategy(StrategyBase):
                             percent=int(pct),
                             wait_seconds=float(result_wait_s),
                             account_mode=account_mode,
+                            indicator=self._last_indicator,
                         )
                     except Exception:
                         pass
@@ -385,6 +398,7 @@ class MartingaleStrategy(StrategyBase):
                             percent=int(pct),
                             profit=(None if profit is None else float(profit)),
                             account_mode=account_mode,
+                            indicator=self._last_indicator,
                         )
                     except Exception:
                         pass
@@ -499,10 +513,12 @@ class MartingaleStrategy(StrategyBase):
             raise_on_timeout=True,
             grace_delay_sec=grace,
             on_delay=_on_delay,
+            include_meta=True,
         )
 
-        direction, ver = await self.wait_cancellable(coro, timeout=timeout)
+        direction, ver, meta = await self.wait_cancellable(coro, timeout=timeout)
         self._last_signal_ver = ver
+        self._last_indicator = (meta or {}).get("indicator") or "-"
         return int(direction)
 
     # --- горячее обновление параметров ---

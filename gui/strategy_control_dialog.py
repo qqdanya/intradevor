@@ -12,15 +12,20 @@ from PyQt6.QtWidgets import (
     QSpinBox,
     QDoubleSpinBox,
     QMessageBox,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
 )
-from PyQt6.QtCore import QTimer
+from PyQt6.QtGui import QColor, QBrush
+from PyQt6.QtCore import QTimer, Qt
 from strategies.martingale import _minutes_from_timeframe
 from core.policy import normalize_sprint
 
 
 class StrategyControlDialog(QDialog):
     """
-    Единое окно: статус + пер-ботовый лог + ВСТРОЕННЫЕ НАСТРОЙКИ + управление (Старт/Пауза/Продолжить/Стоп).
+    Единое окно: статус + пер-ботовый лог + ВСТРОЕННЫЕ НАСТРОЙКИ + управление
+    + СПРАВА таблица сделок этого бота.
     """
 
     def __init__(self, main_window, bot, parent=None):
@@ -28,6 +33,9 @@ class StrategyControlDialog(QDialog):
         self.setWindowTitle("Управление стратегией")
         self.main = main_window
         self.bot = bot
+
+        # Локальный pending по этому диалогу (по trade_id)
+        self._pending_rows: dict[str, dict] = {}
 
         # ---------- Header ----------
         header = QWidget()
@@ -50,19 +58,53 @@ class StrategyControlDialog(QDialog):
         hh.addSpacing(12)
         hh.addWidget(self.lbl_ccy)
 
-        # ---------- Log ----------
+        # ---------- ЛОГ (слева) ----------
         self.log_edit = QTextEdit()
         self.log_edit.setReadOnly(True)
         self.log_edit.setPlaceholderText("Лог этой стратегии…")
 
-        # История
+        # История старых логов
         for line in self.main.bot_logs.get(self.bot, []):
             self.log_edit.append(line)
-        # Подписка
-        self._listener = lambda text: self.log_edit.append(text)
-        self.main.bot_log_listeners.setdefault(self.bot, []).append(self._listener)
+        # Подписка на новые логи
+        self._log_listener = lambda text: self.log_edit.append(text)
+        self.main.bot_log_listeners.setdefault(self.bot, []).append(self._log_listener)
 
-        # ---------- Settings (inline) ----------
+        # ---------- ТАБЛИЦА СДЕЛОК (справа) ----------
+        self.trades_table = QTableWidget(self)
+        self.trades_table.setColumnCount(9)
+        self.trades_table.setHorizontalHeaderLabels(
+            [
+                "Время",  # 0
+                "Пара",  # 1
+                "ТФ",  # 2
+                "Индикатор",  # 3  (если не прилетит — ставим "—")
+                "Направление",  # 4
+                "Ставка",  # 5
+                "Процент",  # 6
+                "P/L",  # 7
+                "Счёт",  # 8
+            ]
+        )
+        hdr = self.trades_table.horizontalHeader()
+        # PyQt6: используем QHeaderView.ResizeMode.*
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)  # Время
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)  # Пара
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)  # ТФ
+        hdr.setSectionResizeMode(
+            3, QHeaderView.ResizeMode.ResizeToContents
+        )  # Индикатор
+        hdr.setSectionResizeMode(
+            4, QHeaderView.ResizeMode.ResizeToContents
+        )  # Направление
+        hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)  # Ставка
+        hdr.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)  # %
+        hdr.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)  # P/L
+        hdr.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)  # Счёт
+        self.trades_table.setAlternatingRowColors(True)
+        self.trades_table.setSortingEnabled(True)
+
+        # ---------- Настройки (inline) ----------
         self.settings_box = QGroupBox("Настройки стратегии")
         form = QFormLayout(self.settings_box)
 
@@ -128,7 +170,7 @@ class StrategyControlDialog(QDialog):
         sh.addStretch(1)
         sh.addWidget(self.btn_save_settings)
 
-        # ---------- Controls: start/pause/resume/stop ----------
+        # ---------- Controls ----------
         controls = QWidget()
         ch = QHBoxLayout(controls)
         self.btn_start = QPushButton("🚀 Старт")
@@ -147,10 +189,18 @@ class StrategyControlDialog(QDialog):
         ch.addWidget(self.btn_resume)
         ch.addWidget(self.btn_stop)
 
+        # ---------- Верхний блок (лог слева + сделки справа) ----------
+        top_split = QWidget()
+        hs = QHBoxLayout(top_split)
+        hs.setContentsMargins(0, 0, 0, 0)
+        hs.setSpacing(8)
+        hs.addWidget(self.log_edit, 1)
+        hs.addWidget(self.trades_table, 1)
+
         # ---------- Layout ----------
         layout = QVBoxLayout(self)
         layout.addWidget(header)
-        layout.addWidget(self.log_edit, stretch=1)
+        layout.addWidget(top_split, stretch=1)
         layout.addWidget(self.settings_box)
         layout.addWidget(settings_row)
         layout.addWidget(controls)
@@ -162,9 +212,21 @@ class StrategyControlDialog(QDialog):
         self.timer.start()
         self._refresh_status_and_buttons()
 
-    # ---- actions ----
+        # === Подписка на сделки для КОНКРЕТНОГО бота ===
+        # MainWindow будет вызывать наш колбэк, когда у ЭТОГО бота есть pending/result.
+        self._trade_listener = self.handle_trade_event
+        self.main.bot_trade_listeners.setdefault(self.bot, []).append(
+            self._trade_listener
+        )
+        # ВОСПРОИЗВЕСТИ ИСТОРИЮ
+        for kind, payload in self.main.bot_trade_history.get(self.bot, []):
+            try:
+                self.handle_trade_event(kind, payload)
+            except Exception:
+                pass
+
+    # ---- обработка статуса/кнопок ----
     def _refresh_status_and_buttons(self):
-        # 1) проверяем, что бот ещё есть в менеджере
         bots_now = []
         try:
             bots_now = list(self.main.bot_manager.get_all_bots())
@@ -172,7 +234,6 @@ class StrategyControlDialog(QDialog):
             pass
         bot_exists = self.bot in bots_now
         if not bot_exists:
-            # fallback на старую логику, если она вдруг осталась
             bot_exists = self.bot in getattr(self.main, "bot_items", {})
 
         started = bool(getattr(self.bot, "has_started", lambda: False)())
@@ -188,7 +249,6 @@ class StrategyControlDialog(QDialog):
             self.btn_stop.setEnabled(False)
             return
 
-        # обычные состояния, пока бот жив
         if not started and not st:
             status = "Статус: не запущено"
         elif running and paused:
@@ -199,7 +259,6 @@ class StrategyControlDialog(QDialog):
             status = "Статус: остановлено"
         self.lbl_status.setText(status)
 
-        # валюта, если известна
         ccy = (
             st.params.get("account_currency")
             if (st and isinstance(getattr(st, "params", None), dict))
@@ -208,12 +267,12 @@ class StrategyControlDialog(QDialog):
         if ccy:
             self.lbl_ccy.setText(f"Валюта счёта: {ccy}")
 
-        # доступность кнопок:
         self.btn_start.setEnabled(bot_exists and not started)
         self.btn_pause.setEnabled(running and not paused)
         self.btn_resume.setEnabled(running and paused)
         self.btn_stop.setEnabled(running)
 
+    # ---- управление ----
     def _do_start(self):
         try:
             if not self.bot.has_started():
@@ -247,6 +306,7 @@ class StrategyControlDialog(QDialog):
         except Exception as e:
             self.log_edit.append(f"⚠ Ошибка остановки: {e}")
 
+    # ---- сохранение настроек ----
     def save_settings(self):
         symbol = str(self.bot.strategy_kwargs.get("symbol", ""))
         m = int(self.minutes.value())
@@ -284,8 +344,235 @@ class StrategyControlDialog(QDialog):
         self.minutes.setValue(int(norm))
         self.log_edit.append(f"💾 Настройки сохранены: {new_params}")
 
+    # ---- хелперы: локальная таблица сделок ----
+    def _fmt_money(self, value: float, ccy: str) -> str:
+        # простенький формат (знаки +/−/— handled снаружи)
+        try:
+            v = float(value)
+        except Exception:
+            v = 0.0
+        return f"{v:.2f} {ccy}"
+
+    def _add_trade_pending_local(
+        self,
+        *,
+        trade_id: str,
+        placed_at: str,
+        symbol: str,
+        timeframe: str,
+        direction: int,
+        stake: float,
+        percent: int,
+        wait_seconds: float,
+        account_mode: str | None = None,
+        indicator: str | None = None,
+    ):
+        """
+        Добавляем жёлтую строку с обратным отсчётом в ПРАВОЙ таблице диалога.
+        """
+        from time import time as _now
+
+        def _fmt_left(sec: float) -> str:
+            s = int(max(0, round(sec)))
+            h, r = divmod(s, 3600)
+            m, s = divmod(r, 60)
+            if h > 0:
+                return f"{h}:{m:02d}:{s:02d}"
+            if m > 0:
+                return f"{m}:{s:02d}"
+            return f"{s} с"
+
+        was_sort = self.trades_table.isSortingEnabled()
+        if was_sort:
+            self.trades_table.setSortingEnabled(False)
+
+        row = 0
+        self.trades_table.insertRow(row)
+
+        dir_text = "ВВЕРХ" if int(direction) == 1 else "ВНИЗ"
+        remaining_txt = _fmt_left(wait_seconds)
+        account_txt = account_mode or (
+            "ДЕМО" if getattr(self.main, "is_demo", False) else "РЕАЛ"
+        )
+        ccy = getattr(self.main, "account_currency", "RUB")
+        ind_txt = indicator or "—"
+
+        vals = [
+            placed_at,  # 0 Время
+            symbol,  # 1 Пара
+            timeframe,  # 2 ТФ
+            ind_txt,  # 3 Индикатор
+            dir_text,  # 4 Направление
+            self._fmt_money(stake, ccy),  # 5 Ставка
+            f"{percent}%",  # 6 %
+            f"Ожидание ({remaining_txt})",  # 7 P/L
+            account_txt,  # 8 Счёт
+        ]
+        for col, v in enumerate(vals):
+            self.trades_table.setItem(row, col, QTableWidgetItem(str(v)))
+
+        yellow = QBrush(QColor("#fff4c2"))
+        for c in range(self.trades_table.columnCount()):
+            it = self.trades_table.item(row, c)
+            if it:
+                it.setBackground(yellow)
+
+        deadline = _now() + float(wait_seconds)
+        timer = QTimer(self)
+        timer.setInterval(1000)
+
+        def _tick():
+            left = deadline - _now()
+            # строка могла уехать из‑за сортировки — трекать по индексу нельзя,
+            # здесь для простоты держим “как есть”: верхняя строка в ожидании
+            if row >= self.trades_table.rowCount():
+                timer.stop()
+                return
+            item = self.trades_table.item(row, 7)
+            if item:
+                item.setText(f"Ожидание ({_fmt_left(left)})")
+            if left <= 0:
+                timer.stop()
+
+        timer.timeout.connect(_tick)
+        timer.start()
+
+        # сохраним pending, чтобы обновить потом по trade_id
+        prev = self._pending_rows.get(trade_id)
+        if prev and isinstance(prev.get("timer"), QTimer):
+            try:
+                prev["timer"].stop()
+            except Exception:
+                pass
+        self._pending_rows[trade_id] = {"row": row, "timer": timer}
+
+        if was_sort:
+            self.trades_table.setSortingEnabled(True)
+
+    def _add_trade_result_local(
+        self,
+        *,
+        trade_id: str | None = None,
+        placed_at: str,
+        symbol: str,
+        timeframe: str,
+        direction: int,
+        stake: float,
+        percent: int,
+        profit: float | None,
+        account_mode: str | None = None,
+        indicator: str | None = None,
+    ):
+        """
+        Обновляем/добавляем зелёную/красную/серую строку по результату.
+        """
+
+        def fmt_pl(p, ccy):
+            if p is None:
+                return "—"
+            txt = self._fmt_money(p, ccy)
+            return "+" + txt if p > 0 else txt
+
+        # найти существующую строку по trade_id (если была pending)
+        row_to_update = None
+        if trade_id and trade_id in self._pending_rows:
+            info = self._pending_rows.pop(trade_id, {})
+            timer = info.get("timer")
+            if isinstance(timer, QTimer):
+                try:
+                    timer.stop()
+                except Exception:
+                    pass
+            row = info.get("row")
+            if isinstance(row, int) and 0 <= row < self.trades_table.rowCount():
+                row_to_update = row
+
+        was_sort = self.trades_table.isSortingEnabled()
+        if was_sort:
+            self.trades_table.setSortingEnabled(False)
+
+        if row_to_update is None:
+            row_to_update = 0
+            self.trades_table.insertRow(row_to_update)
+
+        dir_text = "ВВЕРХ" if int(direction) == 1 else "ВНИЗ"
+        account_txt = account_mode or (
+            "ДЕМО" if getattr(self.main, "is_demo", False) else "РЕАЛ"
+        )
+        ccy = getattr(self.main, "account_currency", "RUB")
+        ind_txt = indicator or "—"
+
+        vals = [
+            placed_at,  # 0
+            symbol,  # 1
+            timeframe,  # 2
+            ind_txt,  # 3
+            dir_text,  # 4
+            self._fmt_money(stake, ccy),  # 5
+            f"{percent}%",  # 6
+            fmt_pl(profit, ccy),  # 7
+            account_txt,  # 8
+        ]
+        for col, v in enumerate(vals):
+            self.trades_table.setItem(row_to_update, col, QTableWidgetItem(str(v)))
+
+        if profit is None or abs(profit) < 1e-9:
+            color = QColor("#e0e0e0")
+        elif profit > 0:
+            color = QColor("#d1f7c4")
+        else:
+            color = QColor("#ffd6d6")
+        brush = QBrush(color)
+        for c in range(self.trades_table.columnCount()):
+            it = self.trades_table.item(row_to_update, c)
+            if it:
+                it.setBackground(brush)
+
+        if was_sort:
+            self.trades_table.setSortingEnabled(True)
+
+    # ---- публичный колбэк для MainWindow ----
+    def handle_trade_event(self, kind: str, payload: dict):
+        """
+        kind: "pending" | "result"
+        payload: dict с полями, как у MainWindow.add_trade_pending/add_trade_result,
+                 расширенно допускаем 'indicator'
+        """
+        try:
+            if kind == "pending":
+                self._add_trade_pending_local(**payload)
+            else:
+                self._add_trade_result_local(**payload)
+        except Exception as e:
+            # пусть ошибка в UI не роняет окно
+            self.log_edit.append(f"⚠ Ошибка обновления таблицы сделок: {e}")
+
+    # ---- жизнь/смерть окна ----
     def closeEvent(self, e):
+        # убрать лог-листенер
         listeners = self.main.bot_log_listeners.get(self.bot, [])
-        if self._listener in listeners:
-            listeners.remove(self._listener)
+        if self._log_listener in listeners:
+            try:
+                listeners.remove(self._log_listener)
+            except Exception:
+                pass
+
+        # убрать подписку на сделки
+        tlst = self.main.bot_trade_listeners.get(self.bot, [])
+        if self._trade_listener in tlst:
+            try:
+                tlst.remove(self._trade_listener)
+            except Exception:
+                pass
+
+        # остановить локальные таймеры ожиданий
+        for info in list(self._pending_rows.values()):
+            t = info.get("timer")
+            if isinstance(t, QTimer):
+                try:
+                    t.stop()
+                except Exception:
+                    pass
+        self._pending_rows.clear()
+
         super().closeEvent(e)

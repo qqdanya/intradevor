@@ -87,6 +87,8 @@ class MainWindow(QWidget):
         self.bot_ever_started = defaultdict(bool)
         self.bot_logs = defaultdict(list)
         self.bot_log_listeners = defaultdict(list)
+        self.bot_trade_listeners = defaultdict(list)
+        self.bot_trade_history = defaultdict(list)
         self.pending_trades = {}
         self.bot_last_phase: dict[Bot, str] = {}
 
@@ -132,7 +134,7 @@ class MainWindow(QWidget):
 
         self.bot_manager = BotManager()
 
-        self.change_currency_button = QPushButton("Сменить валюту")
+        self.change_currency_button = QPushButton("Сменить валюту RUB/USD")
         self.change_currency_button.clicked.connect(
             lambda: asyncio.create_task(self.on_change_currency_clicked())
         )
@@ -196,10 +198,11 @@ class MainWindow(QWidget):
 
         # === Таблица результатов сделок ===
         self.trades_table = QTableWidget(self)
-        self.trades_table.setColumnCount(8)
+        self.trades_table.setColumnCount(9)
         self.trades_table.setHorizontalHeaderLabels(
             [
                 "Время",
+                "Индикатор",
                 "Валютная пара",
                 "ТФ",
                 "Направление",
@@ -218,8 +221,9 @@ class MainWindow(QWidget):
         hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)
         self.trades_table.setAlternatingRowColors(True)
-        self.trades_table.setSortingEnabled(True)
+        # self.trades_table.setSortingEnabled(True)
 
         layout = QVBoxLayout()
         layout.addLayout(top_layout)
@@ -356,7 +360,9 @@ class MainWindow(QWidget):
                     "on_trade_result": lambda **kw: self._on_bot_trade_result(
                         bot, **kw
                     ),
-                    "on_trade_pending": self.add_trade_pending,
+                    "on_trade_pending": lambda **kw: self._on_bot_trade_pending(
+                        bot, **kw
+                    ),  # 👈 теперь знаем bot
                     "on_status": lambda s, b=bot: self._set_bot_status(b, s),
                 }
             )
@@ -538,7 +544,7 @@ class MainWindow(QWidget):
             self.append_to_log(f"❌ Ошибка переключения Реал/Демо: {e}")
 
     def _open_risk_dialog(self):
-        res = RiskDialog.get_values(self, min_default=1, max_default=100)
+        res = RiskDialog.get_values(self, min_default=75, max_default=200)
         if res is None:
             return
         min_v, max_v = res
@@ -599,11 +605,12 @@ class MainWindow(QWidget):
         percent: int,
         wait_seconds: float,
         account_mode: str | None = None,
+        indicator: str | None = None,  # <= НОВОЕ
     ):
         """
-        Добавляет строку «ожидание результата»:
-          P/L -> "Ожидание (чч:мм:сс/мм:сс/с)", строка жёлтая.
-        Таймер раз в секунду обновляет обратный отсчёт.
+        Добавляет строку «ожидание результата».
+        Колонки: Время | Индикатор | Пара | ТФ | Направление | Ставка | % | P/L | Счет
+        В P/L показываем обратный отсчёт.
         """
         from time import time as _now
 
@@ -627,23 +634,25 @@ class MainWindow(QWidget):
 
             dir_text = "ВВЕРХ" if int(direction) == 1 else "ВНИЗ"
             remaining_txt = _fmt_left(wait_seconds)
-            account_txt = account_mode or (
-                "ДЕМО" if getattr(self, "is_demo", False) else "РЕАЛ"
-            )
-            ccy = getattr(self, "account_currency", "RUB")
+            account_txt = account_mode or ("ДЕМО" if self.is_demo else "РЕАЛ")
+            ccy = self.account_currency
 
             vals = [
                 placed_at,  # 0 Время
-                symbol,  # 1 Пара
-                timeframe,  # 2 ТФ
-                dir_text,  # 3 Направление
-                format_money(stake, ccy),  # 4 Ставка
-                f"{percent}%",  # 5 %
-                f"Ожидание ({remaining_txt})",  # 6 P/L
-                account_txt,  # 7 Счёт
+                indicator or "-",  # 1 Индикатор
+                symbol,  # 2 Пара
+                timeframe,  # 3 ТФ
+                dir_text,  # 4 Направление
+                format_money(stake, ccy),  # 5 Ставка
+                f"{percent}%",  # 6 %
+                f"Ожидание ({remaining_txt})",  # 7 P/L
+                account_txt,  # 8 Счёт
             ]
             for col, v in enumerate(vals):
-                self.trades_table.setItem(row, col, QTableWidgetItem(str(v)))
+                it = QTableWidgetItem(str(v))
+                if col in (4, 7):  # выравниваем Направление и P/L по центру
+                    it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.trades_table.setItem(row, col, it)
 
             yellow = QBrush(QColor("#fff4c2"))
             for c in range(self.trades_table.columnCount()):
@@ -661,7 +670,7 @@ class MainWindow(QWidget):
                 if row >= self.trades_table.rowCount():
                     timer.stop()
                     return
-                item = self.trades_table.item(row, 6)  # P/L
+                item = self.trades_table.item(row, 7)  # P/L
                 if item:
                     item.setText(f"Ожидание ({_fmt_left(left)})")
                 if left <= 0:
@@ -676,7 +685,12 @@ class MainWindow(QWidget):
                     prev["timer"].stop()
                 except Exception:
                     pass
-            self.pending_trades[trade_id] = {"row": row, "timer": timer}
+            # сохраним и индикатор, пригодится если результат придёт без pending
+            self.pending_trades[trade_id] = {
+                "row": row,
+                "timer": timer,
+                "indicator": (indicator or "-"),
+            }
 
             if was_sorting:
                 self.trades_table.setSortingEnabled(True)
@@ -696,21 +710,19 @@ class MainWindow(QWidget):
         percent: int,
         profit: float | None,
         account_mode: str | None = None,
+        indicator: str | None = None,  # <= НОВОЕ
     ):
         """
-        Если есть pending с таким trade_id — обновляем его строку.
-        Иначе добавляем новую. Красим:
-          >0 — зелёный, <0 — красный, ==0 или None — серый.
+        Если есть pending с таким trade_id — обновляем его строку (сохраняя индикатор).
+        Иначе добавляем новую строку и используем indicator (или "-").
+        Красим строку по результату.
         """
 
-        def _fill_row(row: int):
+        def _fill_row(row: int, indicator_value: str):
             dir_text = "ВВЕРХ" if int(direction) == 1 else "ВНИЗ"
-            account_txt = account_mode or (
-                "ДЕМО" if getattr(self, "is_demo", False) else "РЕАЛ"
-            )
-            ccy = getattr(self, "account_currency", "RUB")
+            account_txt = account_mode or ("ДЕМО" if self.is_demo else "РЕАЛ")
+            ccy = self.account_currency
 
-            # формат для профита с плюсом на положительных
             def fmt_pl(p):
                 if p is None:
                     return "—"
@@ -718,17 +730,21 @@ class MainWindow(QWidget):
                 return "+" + txt if p > 0 else txt
 
             vals = [
-                placed_at,  # 0
-                symbol,  # 1
-                timeframe,  # 2
-                dir_text,  # 3
-                format_money(stake, ccy),  # 4
-                f"{percent}%",  # 5
-                fmt_pl(profit),  # 6
-                account_txt,  # 7
+                placed_at,  # 0 Время
+                indicator_value,  # 1 Индикатор
+                symbol,  # 2 Пара
+                timeframe,  # 3 ТФ
+                dir_text,  # 4 Направление
+                format_money(stake, ccy),  # 5 Ставка
+                f"{percent}%",  # 6 %
+                fmt_pl(profit),  # 7 P/L
+                account_txt,  # 8 Счёт
             ]
             for col, v in enumerate(vals):
-                self.trades_table.setItem(row, col, QTableWidgetItem(str(v)))
+                it = QTableWidgetItem(str(v))
+                if col in (4, 7):
+                    it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.trades_table.setItem(row, col, it)
 
             if profit is None or abs(profit) < 1e-9:
                 color = QColor("#e0e0e0")  # серый (PUSH/неизвестно)
@@ -748,6 +764,8 @@ class MainWindow(QWidget):
                 self.trades_table.setSortingEnabled(False)
 
             row_to_update = None
+            indicator_value = indicator or "-"
+
             if trade_id and trade_id in self.pending_trades:
                 info = self.pending_trades.pop(trade_id, {})
                 timer = info.get("timer")
@@ -759,12 +777,14 @@ class MainWindow(QWidget):
                 row = info.get("row")
                 if isinstance(row, int) and 0 <= row < self.trades_table.rowCount():
                     row_to_update = row
+                    # если при pending уже знали индикатор — используем его
+                    indicator_value = info.get("indicator", indicator_value)
 
             if row_to_update is None:
                 row_to_update = 0
                 self.trades_table.insertRow(row_to_update)
 
-            _fill_row(row_to_update)
+            _fill_row(row_to_update, indicator_value)
 
             if was_sorting:
                 self.trades_table.setSortingEnabled(True)
@@ -889,6 +909,27 @@ class MainWindow(QWidget):
 
         # дальше — обычное добавление в таблицу сделок
         self.add_trade_result(**kw)
+        # кэшируем для истории
+        self.bot_trade_history[bot].append(("result", dict(kw)))
+        # 👇 уведомим всех подписчиков для этого бота (открытые StrategyControlDialog)
+        for cb in list(self.bot_trade_listeners.get(bot, [])):
+            try:
+                cb("result", kw)
+            except Exception:
+                pass
+
+    def _on_bot_trade_pending(self, bot, **kw):
+        """Сначала — в общую таблицу, затем — подписчикам этого бота (если открыто окно стратегии)."""
+        try:
+            self.add_trade_pending(**kw)
+        finally:
+            # кэшируем для истории
+            self.bot_trade_history[bot].append(("pending", dict(kw)))
+            for cb in list(self.bot_trade_listeners.get(bot, [])):
+                try:
+                    cb("pending", kw)
+                except Exception:
+                    pass
 
     def on_bot_finished(self, bot):
         # помечаем статус и время работы, затем удаляем строку
@@ -908,4 +949,61 @@ class MainWindow(QWidget):
         label = self.strategy_label(key)
         self.append_to_log(
             f"ℹ️ Бот завершил работу: {label} [{bot.strategy_kwargs.get('symbol')}]"
+        )
+
+    def _on_trade_pending_global(
+        self,
+        *,
+        trade_id,
+        symbol,
+        timeframe,
+        placed_at,
+        direction,
+        stake,
+        percent,
+        wait_seconds,
+        account_mode,
+        indicator: str = "-",
+        bot=None,
+    ):
+        self.add_trade_pending(
+            trade_id=trade_id,
+            placed_at=placed_at,
+            symbol=symbol,
+            timeframe=timeframe,
+            direction=direction,
+            stake=stake,
+            percent=percent,
+            wait_seconds=wait_seconds,
+            account_mode=account_mode,
+            indicator=indicator,
+        )
+        # (при желании: дублируем в локальные таблицы окон стратегий)
+
+    def _on_trade_result_global(
+        self,
+        *,
+        trade_id,
+        symbol,
+        timeframe,
+        placed_at,
+        direction,
+        stake,
+        percent,
+        profit,
+        account_mode,
+        indicator: str = "-",
+        bot=None,
+    ):
+        self.add_trade_result(
+            trade_id=trade_id,
+            placed_at=placed_at,
+            symbol=symbol,
+            timeframe=timeframe,
+            direction=direction,
+            stake=stake,
+            percent=percent,
+            profit=profit,
+            account_mode=account_mode,
+            indicator=indicator,
         )

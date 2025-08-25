@@ -43,6 +43,7 @@ class _State:
         None  # когда пришёл ПОСЛЕДНИЙ сигнал (loop.time())
     )
     tf_sec: Optional[int] = None  # длительность TF в секундах (если удалось распарсить)
+    last_indicator: Optional[str] = None  # ИМЯ индикатора источника последнего сигнала
 
 
 _states: Dict[tuple[str, str], _State] = defaultdict(_State)
@@ -55,12 +56,18 @@ def _key(symbol: str, timeframe: str) -> tuple[str, str]:
 # --- public api ------------------------------------------------------
 
 
-def push_signal(symbol: str, timeframe: str, direction: Optional[int]) -> None:
+def push_signal(
+    symbol: str,
+    timeframe: str,
+    direction: Optional[int],
+    indicator: Optional[str] = None,
+) -> None:
     """
     Положить НОВОЕ сообщение сигнала:
       direction: 1 (up), 2 (down), None (или 0) — очистка состояния (none).
+      indicator: строка-имя источника сигнала (например, "RSI(14)").
     Любой приход (включая None) повышает версию и будит всех ожидающих.
-    Также запоминаем момент прихода (monotonic) и длительность TF (если распознали).
+    Также запоминаем момент прихода (monotonic), длительность TF и имя индикатора.
     """
     st = _states[_key(symbol, timeframe)]
 
@@ -73,6 +80,9 @@ def push_signal(symbol: str, timeframe: str, direction: Optional[int]) -> None:
             sec = _tf_to_seconds(timeframe)
             if sec:
                 st.tf_sec = sec
+            # сохраняем индикатор, если пришёл
+            if indicator is not None:
+                st.last_indicator = indicator
             st.cond.notify_all()
 
     asyncio.get_running_loop().create_task(_update_and_notify())
@@ -99,13 +109,16 @@ async def wait_for_signal_versioned(
     # Детектор задержки следующего прогноза:
     grace_delay_sec: float = 5.0,
     on_delay: Optional[Callable[[float], None]] = None,  # callback(delay_seconds)
-) -> Tuple[int, int]:
+    # --- новое: вернуть вместе с direction/version ещё и meta (indicator, tf_sec) ---
+    include_meta: bool = False,
+) -> Tuple[int, int] | Tuple[int, int, Dict[str, Optional[str | int | float]]]:
     """
     Ждёт ПЕРВЫЙ up/down с версией > since_version.
     none (очистка) лишь повышает версию, но не возвращается.
-    Возвращает (direction, version), где direction ∈ {1,2}.
-    Дополнительно: если следующее сообщение «запаздывает» дольше grace_delay_sec,
-    вызываем on_delay(delay_seconds).
+    По умолчанию возвращает (direction, version), где direction ∈ {1,2}.
+
+    Если include_meta=True — вернёт (direction, version, meta),
+    где meta = {"indicator": str|None, "tf_sec": int|None}.
     """
     st = _states[_key(symbol, timeframe)]
 
@@ -160,6 +173,12 @@ async def wait_for_signal_versioned(
 
         # игнорируем очистки (None) и устаревшие версии
         if direction in (1, 2) and (since_version is None or ver > since_version):
+            if include_meta:
+                meta = {
+                    "indicator": st.last_indicator,
+                    "tf_sec": st.tf_sec,
+                }
+                return int(direction), int(ver), meta
             return int(direction), int(ver)
         # иначе ждём следующего уведомления
 
@@ -182,3 +201,20 @@ async def wait_for_signal(
         raise_on_timeout=raise_on_timeout,
     )
     return int(direction)
+
+
+def peek_signal_state(
+    symbol: str, timeframe: str
+) -> Dict[str, Optional[int | float | str]]:
+    """
+    Неблокирующий доступ к текущему состоянию: возвращает dict с полями:
+      version, value (1/2/None), indicator (str|None), tf_sec (int|None), last_monotonic (float|None)
+    """
+    st = _states[_key(symbol, timeframe)]
+    return {
+        "version": int(st.version),
+        "value": (int(st.value) if st.value in (1, 2) else None),
+        "indicator": st.last_indicator,
+        "tf_sec": st.tf_sec,
+        "last_monotonic": st.last_monotonic,
+    }

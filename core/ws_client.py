@@ -84,7 +84,7 @@ async def listen_to_signals():
                                 continue
 
                             # ВАЖНО: отправляем в ожидатель ВСЕ сообщения (включая none)
-                            push_signal(symbol, timeframe, direction)
+                            push_signal(symbol, timeframe, direction, indicator)
 
                             # просто лог (для наглядности)
                             dt = datetime.fromisoformat(date_time_str)
