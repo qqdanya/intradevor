@@ -20,7 +20,7 @@ from core.policy import normalize_sprint
 
 class StrategyControlDialog(QDialog):
     """
-    Единое окно: статус + пер‑ботовый лог + ВСТРОЕННЫЕ НАСТРОЙКИ + управление (Старт/Пауза/Продолжить/Стоп).
+    Единое окно: статус + пер-ботовый лог + ВСТРОЕННЫЕ НАСТРОЙКИ + управление (Старт/Пауза/Продолжить/Стоп).
     """
 
     def __init__(self, main_window, bot, parent=None):
@@ -164,10 +164,16 @@ class StrategyControlDialog(QDialog):
 
     # ---- actions ----
     def _refresh_status_and_buttons(self):
-        # Бот всё ещё существует в UI/менеджере?
-        bot_exists = self.bot in getattr(self.main, "bot_items", {})
-        # или так, если предпочитаешь менеджер:
-        # bot_exists = self.bot in self.main.bot_manager.get_all_bots()
+        # 1) проверяем, что бот ещё есть в менеджере
+        bots_now = []
+        try:
+            bots_now = list(self.main.bot_manager.get_all_bots())
+        except Exception:
+            pass
+        bot_exists = self.bot in bots_now
+        if not bot_exists:
+            # fallback на старую логику, если она вдруг осталась
+            bot_exists = self.bot in getattr(self.main, "bot_items", {})
 
         started = bool(getattr(self.bot, "has_started", lambda: False)())
         running = self.bot.is_running()
@@ -175,14 +181,11 @@ class StrategyControlDialog(QDialog):
         paused = bool(st and hasattr(st, "is_paused") and st.is_paused())
 
         if not bot_exists:
-            # Бота уже нет: показываем финальный статус и блокируем управление
             self.lbl_status.setText("Статус: завершён / удалён")
             self.btn_start.setEnabled(False)
             self.btn_pause.setEnabled(False)
             self.btn_resume.setEnabled(False)
             self.btn_stop.setEnabled(False)
-            # опционально: закрыть окно автоматически
-            # self.accept()
             return
 
         # обычные состояния, пока бот жив
@@ -206,7 +209,6 @@ class StrategyControlDialog(QDialog):
             self.lbl_ccy.setText(f"Валюта счёта: {ccy}")
 
         # доступность кнопок:
-        # «Старт» разрешаем только если бот ещё существует И ещё не запускался
         self.btn_start.setEnabled(bot_exists and not started)
         self.btn_pause.setEnabled(running and not paused)
         self.btn_resume.setEnabled(running and paused)
@@ -217,7 +219,6 @@ class StrategyControlDialog(QDialog):
             if not self.bot.has_started():
                 self.bot.start()
                 self.log_edit.append("🚀 Старт стратегии.")
-                # В MainWindow у тебя логируется запуск — тут добавим локально для наглядности
         except Exception as e:
             self.log_edit.append(f"⚠ Ошибка старта: {e}")
 
@@ -239,8 +240,6 @@ class StrategyControlDialog(QDialog):
         try:
             self.bot.stop()
             self.log_edit.append("⏹ Остановлено.")
-            # сразу выключим кнопки на всякий случай; on_finish удалит бота,
-            # и через таймер _refresh_status_and_buttons всё обновится окончательно
             self.btn_pause.setEnabled(False)
             self.btn_resume.setEnabled(False)
             self.btn_stop.setEnabled(False)
@@ -254,7 +253,6 @@ class StrategyControlDialog(QDialog):
         norm = normalize_sprint(symbol, m)
 
         if norm is None:
-            # Ничего не сохраняем — показываем предупреждение и выходим
             box = QMessageBox(self)
             box.setIcon(QMessageBox.Icon.Warning)
             box.setWindowTitle("Недопустимое время экспирации")
@@ -276,18 +274,14 @@ class StrategyControlDialog(QDialog):
             "min_percent": self.min_percent.value(),
             "wait_on_low_percent": self.wait_on_low_percent.value(),
             "signal_timeout_sec": self.signal_timeout_sec.value(),
-            "minutes": int(norm),  # сохраняем уже валидное значение
+            "minutes": int(norm),
         }
 
-        # 1) дефолты для этого бота
         self.bot.strategy_kwargs.setdefault("params", {}).update(new_params)
-        # 2) на лету — если запущено
         if self.bot.strategy and hasattr(self.bot.strategy, "update_params"):
             self.bot.strategy.update_params(**new_params)
 
-        # синхронизируем спинбокс (если, например, пользователь поставил 2 → останется 3/5)
         self.minutes.setValue(int(norm))
-
         self.log_edit.append(f"💾 Настройки сохранены: {new_params}")
 
     def closeEvent(self, e):

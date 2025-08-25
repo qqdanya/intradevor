@@ -16,6 +16,15 @@ class Bot:
         if self._started:
             return
         self._strategy = self.strategy_cls(**self.strategy_kwargs)
+
+        # Если у стратегии есть мягкая инициализация старта — дергаем
+        init_start = getattr(self._strategy, "start", None)
+        if callable(init_start):
+            try:
+                init_start()
+            except Exception:
+                pass
+
         self._task = asyncio.create_task(self._run())
         self._started = True
 
@@ -29,7 +38,7 @@ class Bot:
                 pass
             raise
         finally:
-            # NEW: аккуратно закрываем per-bot HttpClient, если он есть
+            # аккуратно закрываем per-bot HttpClient, если он есть
             try:
                 client = getattr(self._strategy, "http_client", None)
                 if client is not None:
@@ -41,8 +50,8 @@ class Bot:
             except Exception:
                 pass
 
-            self.on_finish()
             self._started = False
+            self.on_finish()
 
     def stop(self):
         if self._strategy:

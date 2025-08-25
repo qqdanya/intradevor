@@ -56,6 +56,7 @@ async def listen_to_signals():
 
                         # direction может быть 0/1/2 или строкой 'none' / 'up' / 'down'
                         raw_dir = data.get("direction", None)
+                        indicator = data.get("indicator", "")
 
                         # нормализуем в {1,2,None}
                         direction = None
@@ -91,7 +92,7 @@ async def listen_to_signals():
                             msg_dir = {1: "UP", 2: "DOWN", None: "none"}[direction]
                             if signal_log_callback:
                                 signal_log_callback(
-                                    f"[WS] {symbol} / {timeframe}. Прогноз: {msg_dir}. Время свечи: {dt_naive.strftime('%H:%M')}"
+                                    f"[WS] {symbol} / {timeframe}. Прогноз: {msg_dir} от {indicator}. Время свечи: {dt_naive.strftime('%H:%M')}"
                                 )
 
                     except json.JSONDecodeError:

@@ -3,14 +3,9 @@ from PyQt6.QtWidgets import (
     QWidget,
     QLabel,
     QVBoxLayout,
+    QHBoxLayout,
     QTextEdit,
     QPushButton,
-    QListWidget,
-    QListWidgetItem,
-    QDialog,
-    QFormLayout,
-    QSpinBox,
-    QDialogButtonBox,
     QTableWidget,
     QTableWidgetItem,
     QHeaderView,
@@ -50,6 +45,12 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
 
+        # === имя/версия приложения ===
+        try:
+            from core.config import APP_NAME as _APP_NAME, APP_VERSION as _APP_VERSION
+        except Exception:
+            _APP_NAME, _APP_VERSION = "Intradevor", "0.0.0"
+
         self.http_client = None
         self.user_id = None
         self.user_hash = None
@@ -80,22 +81,54 @@ class MainWindow(QWidget):
             "USD/JPY",
             "BTC/USDT",
         ]
-        self.available_strategies = {
-            "martingale": MartingaleStrategy,
-        }
-        self.strategy_labels = {
-            "martingale": "Мартингейл",
-        }
+        self.available_strategies = {"martingale": MartingaleStrategy}
+        self.strategy_labels = {"martingale": "Мартингейл"}
 
-        self.bot_items = {}
-        self.bot_widgets = {}
+        self.bot_ever_started = defaultdict(bool)
         self.bot_logs = defaultdict(list)
         self.bot_log_listeners = defaultdict(list)
         self.pending_trades = {}
+        self.bot_last_phase: dict[Bot, str] = {}
 
         self.user_id_label = QLabel("user_id: loading...")
         self.user_hash_label = QLabel("user_hash: loading...")
         self.balance_label = QLabel("Баланс: loading...")
+
+        # Сделаем лейблы фиксированными по вертикали, чтобы их не растягивало
+        from PyQt6.QtWidgets import QSizePolicy
+
+        for lbl in (self.user_id_label, self.user_hash_label, self.balance_label):
+            lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+
+        # === верхняя панель: слева инфо, справа название+версия сверху ===
+        info_box = QWidget()
+        info_layout = QVBoxLayout(info_box)
+        info_layout.setContentsMargins(0, 0, 0, 0)
+        info_layout.setSpacing(2)
+        info_layout.addWidget(self.user_id_label)
+        info_layout.addWidget(self.user_hash_label)
+        info_layout.addWidget(self.balance_label)
+
+        self.app_title = QLabel(_APP_NAME)
+        self.app_title.setStyleSheet("font-weight: 600; font-size: 18px;")
+        self.app_title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+
+        self.app_version = QLabel(f"v{_APP_VERSION}")
+        self.app_version.setStyleSheet("color: #666; font-size: 12px;")
+        self.app_version.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+
+        right_box = QWidget()
+        right_v = QVBoxLayout(right_box)
+        right_v.setContentsMargins(0, 0, 0, 0)
+        right_v.setSpacing(0)
+        # ⬇️ теперь без stretch — название и версия будут сверху
+        right_v.addWidget(self.app_title, alignment=Qt.AlignmentFlag.AlignHCenter)
+        right_v.addWidget(self.app_version, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        top_layout = QHBoxLayout()
+        top_layout.addWidget(info_box, 0, Qt.AlignmentFlag.AlignTop)
+        top_layout.addStretch(1)
+        top_layout.addWidget(right_box, 0, Qt.AlignmentFlag.AlignTop)
 
         self.bot_manager = BotManager()
 
@@ -115,9 +148,48 @@ class MainWindow(QWidget):
         self.add_bot_button = QPushButton("Создать бота")
         self.add_bot_button.clicked.connect(self.show_add_bot_dialog)
 
-        self.bot_list = QListWidget()
-        self.bot_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
-        self.bot_list.itemDoubleClicked.connect(self._on_item_double_clicked)
+        self.bot_table = QTableWidget(self)
+        self.bot_table.setColumnCount(8)
+        self.bot_table.setHorizontalHeaderLabels(
+            [
+                "Валютная пара",
+                "ТФ",
+                "Время работы",
+                "Статус",
+                "Стратегия",
+                "Профит",
+                "Счёт",
+                "Настройки",
+            ]
+        )
+        hdr = self.bot_table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
+        self.bot_table.setAlternatingRowColors(True)
+        self.bot_table.setSortingEnabled(False)
+        self.bot_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.bot_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self.bot_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+        # Маппинги по ботам
+        self.bot_rows: dict[Bot, int] = {}
+        self.bot_started_at: dict[Bot, float] = {}
+        self.bot_profit = defaultdict(float)
+        self.bot_status: dict[Bot, str] = {}
+        self.bot_runtime_sec: dict[Bot, float] = defaultdict(float)
+        self.bot_last_tick: dict[Bot, float] = {}
+
+        # Тикер для апдейта "Время работы"
+        self._bots_timer = QTimer(self)
+        self._bots_timer.setInterval(1000)
+        self._bots_timer.timeout.connect(self._refresh_bot_rows_runtime)
+        self._bots_timer.start()
 
         self.signal_log = QTextEdit()
         self.signal_log.setReadOnly(True)
@@ -138,27 +210,25 @@ class MainWindow(QWidget):
             ]
         )
         hdr = self.trades_table.horizontalHeader()
-        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)  # Пара
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)  # ТФ
-        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)  # Время
-        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)  # Напр.
-        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)  # Ставка
-        hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)  # %
-        hdr.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)  # P/L
-        hdr.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)  # Счет
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
         self.trades_table.setAlternatingRowColors(True)
         self.trades_table.setSortingEnabled(True)
 
         layout = QVBoxLayout()
-        layout.addWidget(self.user_id_label)
-        layout.addWidget(self.user_hash_label)
-        layout.addWidget(self.balance_label)
+        layout.addLayout(top_layout)
         layout.addWidget(self.change_currency_button)
         layout.addWidget(self.set_risk_button)
         layout.addWidget(self.toggle_demo_button)
         layout.addWidget(self.add_bot_button)
         layout.addWidget(QLabel("Список ботов:"))
-        layout.addWidget(self.bot_list)
+        layout.addWidget(self.bot_table)
         layout.addWidget(QLabel("Логи:"))
         layout.addWidget(self.signal_log)
         layout.addWidget(QLabel("Сделки:"))
@@ -257,10 +327,10 @@ class MainWindow(QWidget):
             self.append_to_log(f"❌ Стратегия '{strategy_key}' не найдена.")
             return
 
-        # ⬇️ ВАЖНО: форкаем клиента — бот работает на «замороженных» куках
         async def _spawn_bot():
             bot_client = await self.http_client.fork()
 
+            # 1) создаём бота БЕЗ колбэков, только с базовыми params
             bot = Bot(
                 strategy_cls=strategy_class,
                 strategy_kwargs={
@@ -269,40 +339,65 @@ class MainWindow(QWidget):
                     "user_hash": self.user_hash,
                     "symbol": symbol,
                     "strategy_key": strategy_key,
-                    "log_callback": None,  # временно
+                    "log_callback": None,  # выставим ниже через _make_bot_logger
                     "timeframe": timeframe,
                     "params": {
                         "account_currency": getattr(self, "account_currency", "RUB"),
-                        "on_trade_result": self.add_trade_result,
-                        "on_trade_pending": self.add_trade_pending,
                     },
                 },
                 on_log=self.append_to_log,
                 on_finish=lambda b=None: self.on_bot_finished(bot),
             )
+
+            # 2) теперь безопасно навесим колбэки, ссылающиеся на bot
+            params = bot.strategy_kwargs.setdefault("params", {})
+            params.update(
+                {
+                    "on_trade_result": lambda **kw: self._on_bot_trade_result(
+                        bot, **kw
+                    ),
+                    "on_trade_pending": self.add_trade_pending,
+                    "on_status": lambda s, b=bot: self._set_bot_status(b, s),
+                }
+            )
+
+            # 3) логгер уже можно привязать к конкретному боту
             bot.strategy_kwargs["log_callback"] = self._make_bot_logger(bot)
 
+            # 4) регистрируем бота в менеджере
             self.bot_manager.add_bot(bot)
 
-            from gui.bot_item_widget import BotItemWidget
+            # 5) добавляем строку в ТАБЛИЦУ ботов
+            row = self.bot_table.rowCount()
+            self.bot_table.insertRow(row)
+            self.bot_rows[bot] = row
+            self.bot_started_at[bot] = asyncio.get_running_loop().time()
+            self.bot_status[bot] = "выключен"  # до запуска
 
-            item = QListWidgetItem()
-            title = f"{self.strategy_label(strategy_key)} [{symbol} {timeframe}]"
-            widget = BotItemWidget(
-                title=title,
-                on_settings=partial(self.open_strategy_control_dialog, bot),
-                on_pause_resume=lambda paused, b=bot: self.toggle_pause(b, paused),
-                on_stop=partial(self.stop_bot, bot),
-            )
-            item.setSizeHint(widget.sizeHint())
-            self.bot_list.addItem(item)
-            self.bot_list.setItemWidget(item, widget)
+            strategy_label = self.strategy_label(strategy_key)
+            account_txt = "ДЕМО" if self.is_demo else "РЕАЛ"
 
-            self.bot_items[bot] = item
-            self.bot_widgets[bot] = widget
+            def _set(r, c, text):
+                self.bot_table.setItem(r, c, QTableWidgetItem(str(text)))
+
+            _set(row, 0, symbol)  # Пара
+            _set(row, 1, timeframe)  # ТФ
+            _set(row, 2, "0:00")  # Время работы
+            _set(row, 3, self.bot_status[bot])  # Статус
+            _set(row, 4, strategy_label)  # Стратегия
+            profit_item = QTableWidgetItem(format_money(0, self.account_currency))
+            self.bot_table.setItem(row, 5, profit_item)
+            _set(row, 6, account_txt)  # Счёт
+
+            btn = QPushButton("Открыть", self)
+            btn.clicked.connect(partial(self.open_strategy_control_dialog, bot))
+            self.bot_table.setCellWidget(row, 7, btn)
+
+            self.bot_runtime_sec[bot] = 0.0
+            self.bot_last_tick[bot] = asyncio.get_running_loop().time()
 
             self.append_to_log(
-                f"🤖 Создан бот: {self.strategy_label(strategy_key)} [{symbol}]. Нажмите ▶, чтобы запустить."
+                f"🤖 Создан бот: {strategy_label} [{symbol} {timeframe}]. Откройте настройки, чтобы запустить."
             )
 
         asyncio.create_task(_spawn_bot())
@@ -312,23 +407,6 @@ class MainWindow(QWidget):
 
         dlg = StrategyControlDialog(self, bot, parent=self)
         dlg.exec()
-
-    def on_bot_finished(self, bot):
-        item = self.bot_items.pop(bot, None)
-        self.bot_widgets.pop(bot, None)
-        if item is not None:
-            row = self.bot_list.row(item)
-            self.bot_list.takeItem(row)
-        try:
-            self.bot_manager.remove_bot(bot)
-        except Exception:
-            pass
-
-        key = bot.strategy_kwargs.get("strategy_key", "")
-        label = self.strategy_label(key)
-        self.append_to_log(
-            f"ℹ️ Бот завершил работу: {label} [{bot.strategy_kwargs.get('symbol')}]"
-        )
 
     def stop_bot(self, bot):
         bot.stop()
@@ -520,6 +598,7 @@ class MainWindow(QWidget):
         stake: float,
         percent: int,
         wait_seconds: float,
+        account_mode: str | None = None,
     ):
         """
         Добавляет строку «ожидание результата»:
@@ -548,14 +627,17 @@ class MainWindow(QWidget):
 
             dir_text = "ВВЕРХ" if int(direction) == 1 else "ВНИЗ"
             remaining_txt = _fmt_left(wait_seconds)
-            account_txt = "ДЕМО" if getattr(self, "is_demo", False) else "РЕАЛ"
+            account_txt = account_mode or (
+                "ДЕМО" if getattr(self, "is_demo", False) else "РЕАЛ"
+            )
+            ccy = getattr(self, "account_currency", "RUB")
 
             vals = [
                 placed_at,  # 0 Время
                 symbol,  # 1 Пара
                 timeframe,  # 2 ТФ
                 dir_text,  # 3 Направление
-                f"{stake:.2f}",  # 4 Ставка
+                format_money(stake, ccy),  # 4 Ставка
                 f"{percent}%",  # 5 %
                 f"Ожидание ({remaining_txt})",  # 6 P/L
                 account_txt,  # 7 Счёт
@@ -613,6 +695,7 @@ class MainWindow(QWidget):
         stake: float,
         percent: int,
         profit: float | None,
+        account_mode: str | None = None,
     ):
         """
         Если есть pending с таким trade_id — обновляем его строку.
@@ -622,16 +705,26 @@ class MainWindow(QWidget):
 
         def _fill_row(row: int):
             dir_text = "ВВЕРХ" if int(direction) == 1 else "ВНИЗ"
-            account_txt = "ДЕМО" if getattr(self, "is_demo", False) else "РЕАЛ"
+            account_txt = account_mode or (
+                "ДЕМО" if getattr(self, "is_demo", False) else "РЕАЛ"
+            )
+            ccy = getattr(self, "account_currency", "RUB")
+
+            # формат для профита с плюсом на положительных
+            def fmt_pl(p):
+                if p is None:
+                    return "—"
+                txt = format_money(p, ccy)
+                return "+" + txt if p > 0 else txt
 
             vals = [
                 placed_at,  # 0
                 symbol,  # 1
                 timeframe,  # 2
                 dir_text,  # 3
-                f"{stake:.2f}",  # 4
+                format_money(stake, ccy),  # 4
                 f"{percent}%",  # 5
-                f"{profit:.2f}" if profit is not None else "—",  # 6
+                fmt_pl(profit),  # 6
                 account_txt,  # 7
             ]
             for col, v in enumerate(vals):
@@ -678,3 +771,141 @@ class MainWindow(QWidget):
             self.trades_table.scrollToTop()
 
         QTimer.singleShot(0, _do)
+
+    def _fmt_runtime(self, seconds: float) -> str:
+        s = int(max(0, round(seconds)))
+        h, r = divmod(s, 3600)
+        m, s = divmod(r, 60)
+        if h > 0:
+            return f"{h}:{m:02d}:{s:02d}"
+        return f"{m}:{s:02d}"
+
+    def _fmt_profit(self, value: float) -> str:
+        try:
+            v = float(value)
+        except Exception:
+            v = 0.0
+        sign = "+" if v > 1e-12 else ""
+        ccy = getattr(self, "account_currency", "RUB")
+        return f"{sign}{v:.2f} {ccy}"
+
+    def _refresh_bot_rows_runtime(self):
+        now = asyncio.get_running_loop().time()
+
+        for bot, row in list(self.bot_rows.items()):
+            # строка могла уже быть удалена
+            if row is None or row >= self.bot_table.rowCount():
+                continue
+
+            # состояние бота/стратегии
+            has_started_fn = getattr(bot, "has_started", None)
+            started = bool(has_started_fn() if callable(has_started_fn) else False)
+            running = bool(getattr(bot, "is_running", lambda: False)())
+            st = bot.strategy
+            paused = bool(st and hasattr(st, "is_paused") and st.is_paused())
+
+            # === Время работы ===
+            last = self.bot_last_tick.get(bot, now)
+            # накапливаем только когда реально работает и не на паузе
+            if started and running and not paused:
+                self.bot_runtime_sec[bot] = self.bot_runtime_sec.get(bot, 0.0) + (
+                    now - last
+                )
+            # обновляем last_tick всегда, чтобы время не "капало" на паузе
+            self.bot_last_tick[bot] = now
+
+            # отрисовать время (колонка 2)
+            secs = self.bot_runtime_sec.get(bot, 0.0)
+            it_time = self.bot_table.item(row, 2)
+            if it_time is None:
+                it_time = QTableWidgetItem()
+                self.bot_table.setItem(row, 2, it_time)
+            it_time.setText(self._fmt_runtime(secs))
+
+            # === Статус ===
+            # Если пауза — показываем "пауза", иначе последнюю фазу от стратегии (или кэш)
+            last_phase = getattr(self, "bot_last_phase", {}).get(
+                bot, None
+            ) or self.bot_status.get(bot, "—")
+            ui_status = "пауза" if paused else last_phase
+
+            it_status = self.bot_table.item(row, 3)  # колонка «Статус»
+            if it_status is None:
+                it_status = QTableWidgetItem()
+                self.bot_table.setItem(row, 3, it_status)
+            it_status.setText(ui_status)
+
+    def _set_bot_status(self, bot, status: str):
+        """Колбэк от стратегии: 'ожидание сигнала' / 'делает ставку' / 'ожидание результата'.
+        Статус 'пауза' НЕ принимаем отсюда — его рисует UI по is_paused() (вариант Б)."""
+        # Кэшируем последнюю НЕ-паузную фазу
+        s = (status or "—").strip()
+        self.bot_last_phase[bot] = s
+
+        row = self.bot_rows.get(bot)
+        if row is None or row >= self.bot_table.rowCount():
+            return
+
+        # Если бот на паузе — показываем 'пауза', иначе последнюю фазу
+        st = bot.strategy
+        ui_status = (
+            "пауза" if (st and hasattr(st, "is_paused") and st.is_paused()) else s
+        )
+
+        it = self.bot_table.item(row, 3)  # колонка «Статус»
+        if it is None:
+            it = QTableWidgetItem()
+            self.bot_table.setItem(row, 3, it)
+        it.setText(ui_status)
+
+    def _on_bot_trade_result(self, bot, **kw):
+        try:
+            profit = kw.get("profit", None)
+            if profit is not None:
+                self.bot_profit[bot] += float(profit)
+
+            # обновим таблицу
+            row = self.bot_rows.get(bot)
+            if row is not None and row < self.bot_table.rowCount():
+                item = self.bot_table.item(row, 5)  # колонка "Профит"
+                if item is None:
+                    item = QTableWidgetItem()
+                    self.bot_table.setItem(row, 5, item)
+
+                total = self.bot_profit[bot]
+                cur = getattr(self, "account_currency", "RUB")
+                text = format_money(total, cur)
+                # если положительный — добавляем "+"
+                if total > 0:
+                    text = "+" + text
+                    item.setForeground(QColor("green"))
+                elif total < 0:
+                    item.setForeground(QColor("red"))
+                else:
+                    item.setForeground(QColor("black"))
+                item.setText(text)
+        except Exception as e:
+            self.append_to_log(f"[!] Ошибка обновления профита: {e}")
+
+        # дальше — обычное добавление в таблицу сделок
+        self.add_trade_result(**kw)
+
+    def on_bot_finished(self, bot):
+        # помечаем статус и время работы, затем удаляем строку
+        row = self.bot_rows.pop(bot, None)
+        self.bot_started_at.pop(bot, None)
+        self.bot_status.pop(bot, None)
+        self.bot_profit.pop(bot, None)
+
+        # удалить из таблицы
+        if row is not None and 0 <= row < self.bot_table.rowCount():
+            self.bot_table.removeRow(row)
+        try:
+            self.bot_manager.remove_bot(bot)
+        except Exception:
+            pass
+        key = bot.strategy_kwargs.get("strategy_key", "")
+        label = self.strategy_label(key)
+        self.append_to_log(
+            f"ℹ️ Бот завершил работу: {label} [{bot.strategy_kwargs.get('symbol')}]"
+        )

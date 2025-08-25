@@ -10,6 +10,7 @@ from core.intrade_api_async import (
     get_current_percent,
     place_trade,
     check_trade_result,
+    is_demo_account,
 )
 from core.signal_waiter import wait_for_signal_versioned
 from strategies.base import StrategyBase
@@ -25,9 +26,9 @@ DEFAULTS = {
     "min_percent": 70,  # минимальный % выплаты
     "wait_on_low_percent": 1,  # пауза если % низкий (сек)
     "signal_timeout_sec": 3600,  # таймаут ожидания сигнала (сек)
-    "account_currency": "RUB",  # валюта счёта
+    "account_currency": "RUB",  # ВАЛЮТА-ЯКОРЬ (фиксируется при создании бота)
     "result_wait_s": 60.0,  # сколько ждать результата сделки (сек)
-    "grace_delay_sec": 30.0,  # сколько секунд терпим задержку следующего прогноза
+    "grace_delay_sec": 30.0,  # терпимая задержка следующего прогноза (сек)
 }
 
 
@@ -53,9 +54,18 @@ def _minutes_from_timeframe(tf: str) -> int:
 
 class MartingaleStrategy(StrategyBase):
     """
-    Совместима с Bot/MainWindow.
-    Ожидание сигнала — версионное: каждый бот хранит self._last_signal_ver,
-    'none' очищает состояние и не возвращается из ожидателя.
+    Мартингейл с фиксированными «якорями»:
+      • валютой счёта (RUB/USD/…)
+      • типом счёта (ДЕМО/РЕАЛ)
+
+    Логика:
+      - При старте стратегия определяет якорь режима счёта (is_demo) и сверяет валюту
+        с params["account_currency"] (по-умолчанию RUB).
+      - Перед каждым действием проверяем совпадение с «якорями». Если не совпадает —
+        выставляем статус «ожидание смены валюты на XXX» или «ожидание смены счёта на ДЕМО/РЕАЛ»
+        и ждём короткими интервалами.
+      - Payout проверяется перед сделкой; min_balance защищает от ухода ниже порога.
+      - PUSH (profit == 0) не повышает шаг серии.
     """
 
     def __init__(
@@ -84,20 +94,19 @@ class MartingaleStrategy(StrategyBase):
             **p,
         )
 
-        # для Bot.cleanup()
+        # чтобы Bot._run мог корректно закрыть клиента при остановке
         self.http_client = http_client
 
-        # таймфрейм сигнала (может отличаться от минут спринта)
+        # таймфрейм для сигналов
         self.timeframe = timeframe or self.params.get("timeframe", "M1")
         self.params["timeframe"] = self.timeframe
 
-        # минуты для сделки — нормализуем под политику
+        # минуты сделки (нормализация по политике)
         raw_minutes = int(
             self.params.get("minutes", _minutes_from_timeframe(self.timeframe))
         )
         norm = normalize_sprint(self.symbol, raw_minutes)
         if norm is None:
-            # fallback: из таймфрейма
             fallback = _minutes_from_timeframe(self.timeframe)
             norm = normalize_sprint(self.symbol, fallback) or fallback
             if self.log:
@@ -107,28 +116,55 @@ class MartingaleStrategy(StrategyBase):
         self._trade_minutes = int(norm)
         self.params["minutes"] = self._trade_minutes
 
+        # колбэки в GUI
         self._on_trade_result = self.params.get("on_trade_result")
         self._on_trade_pending = self.params.get("on_trade_pending")
-        self._running = False
+        self._on_status = self.params.get("on_status")
 
-        # последняя увиденная версия сигнала (для исключения повторов)
+        def _status(msg: str):
+            cb = self._on_status
+            if callable(cb):
+                try:
+                    cb(msg)
+                except Exception:
+                    pass
+
+        self._status = _status
+
+        self._running = False
         self._last_signal_ver: Optional[int] = None
 
+        # === «якорная» валюта счёта ===
+        anchor = str(
+            self.params.get("account_currency", DEFAULTS["account_currency"])
+        ).upper()
+        self._anchor_ccy = anchor
+        self.params["account_currency"] = anchor  # фиксируем в params
+
+        # === «якорный» режим счёта (True = DEMO, False = REAL) — определим при старте run() ===
+        self._anchor_is_demo: Optional[bool] = None
+
     # ---- основной сценарий ----
-    async def run(self):
+    async def run(self) -> None:
         self._running = True
         log = self.log or (lambda s: None)
 
-        # sanity: баланс и валюта
+        # Зафиксируем якорный режим счёта при старте
         try:
-            amount, ccy, display = await get_balance_info(
+            self._anchor_is_demo = await is_demo_account(self.http_client)
+            mode_txt = "ДЕМО" if self._anchor_is_demo else "РЕАЛ"
+            log(f"[{self.symbol}] Якорный режим счёта: {mode_txt}")
+        except Exception as e:
+            log(f"[{self.symbol}] ⚠ Не удалось определить режим счёта при старте: {e}")
+            self._anchor_is_demo = False  # консервативно считаем РЕАЛ
+
+        # sanity‑лог по балансу
+        try:
+            amount, cur_ccy, display = await get_balance_info(
                 self.http_client, self.user_id, self.user_hash
             )
             log(
-                f"[{self.symbol}] Баланс: {display} ({amount:.2f}), валюта счёта: {ccy}"
-            )
-            self.params.setdefault(
-                "account_currency", ccy or self.params.get("account_currency")
+                f"[{self.symbol}] Баланс: {display} ({amount:.2f}), текущая валюта: {cur_ccy}, якорь: {self._anchor_ccy}"
             )
         except Exception as e:
             log(f"[{self.symbol}] ⚠ Не удалось получить баланс при старте: {e}")
@@ -145,23 +181,29 @@ class MartingaleStrategy(StrategyBase):
         while self._running and series_left > 0:
             await self._pause_point()
 
-            # грубая проверка баланса на входе в серию
+            # --- 1) проверка «якорей» перед началом серии ---
+            if not await self._ensure_anchor_currency():
+                continue
+            if not await self._ensure_anchor_account_mode():
+                continue
+
+            # --- 2) лимит баланса на входе в серию ---
             try:
                 bal, _, _ = await get_balance_info(
                     self.http_client, self.user_id, self.user_hash
                 )
             except Exception:
                 bal = 0.0
-            if bal < float(self.params.get("min_balance", DEFAULTS["min_balance"])):
-                log(f"[{self.symbol}] ⛔ Баланс ниже минимума. Ожидание...")
+
+            min_balance = float(self.params.get("min_balance", DEFAULTS["min_balance"]))
+            if bal < min_balance:
+                log(
+                    f"[{self.symbol}] ⛔ Баланс ниже минимума ({bal:.2f} < {min_balance:.2f}). Ожидание..."
+                )
                 await self.sleep(2.0)
                 continue
 
-            # серия мартингейла до WIN или исчерпания шагов
-            step = 0
-            did_place_any_trade = False
-
-            # начальная ставка для серии
+            # Параметры серии
             stake = float(
                 self.params.get("base_investment", DEFAULTS["base_investment"])
             )
@@ -171,44 +213,48 @@ class MartingaleStrategy(StrategyBase):
             wait_low = float(
                 self.params.get("wait_on_low_percent", DEFAULTS["wait_on_low_percent"])
             )
-            account_ccy = str(
-                self.params.get("account_currency", DEFAULTS["account_currency"])
-            )
             result_wait_s = float(
                 self.params.get("result_wait_s", DEFAULTS["result_wait_s"])
             )
+            sig_timeout = float(
+                self.params.get("signal_timeout_sec", DEFAULTS["signal_timeout_sec"])
+            )
+            account_ccy = self._anchor_ccy
 
             if max_steps <= 0:
                 log(
-                    f"[{self.symbol}] ⚠ max_steps={max_steps} — серия не может стартовать. Жду следующий сигнал."
+                    f"[{self.symbol}] ⚠ max_steps={max_steps} — серию не стартуем. Жду следующий сигнал."
                 )
                 await self.sleep(1.0)
                 continue
 
+            step = 0
+            did_place_any_trade = False
+
             while self._running and step < max_steps:
                 await self._pause_point()
 
-                # ✅ ждём НОВЫЙ сигнал КАЖДЫЙ РАЗ перед коленом
+                # --- 2.0 проверка «якорей» перед каждым действием ---
+                if not await self._ensure_anchor_currency():
+                    continue
+                if not await self._ensure_anchor_account_mode():
+                    continue
+
+                # --- 2.1 ждём новый сигнал ---
+                self._status("ожидание сигнала")
                 log(
                     f"[{self.symbol}] ⏳ Ожидание сигнала на {self.timeframe} (шаг {step})..."
                 )
                 try:
-                    direction = await self.wait_signal(
-                        timeout=float(
-                            self.params.get(
-                                "signal_timeout_sec", DEFAULTS["signal_timeout_sec"]
-                            )
-                        )
-                    )
+                    direction = await self.wait_signal(timeout=sig_timeout)
                 except asyncio.TimeoutError:
                     log(
                         f"[{self.symbol}] ⌛ Таймаут ожидания сигнала внутри серии — выхожу из серии."
                     )
-                    break  # из серии; внешняя петля попробует начать новую позже
+                    break
+                status = 1 if int(direction) == 1 else 2  # 1=up/buy, 2=down/sell
 
-                status = 1 if direction == 1 else 2  # 1=up/buy, 2=down/sell
-
-                # текущий % выплаты
+                # --- 2.2 payout ---
                 pct = await get_current_percent(
                     self.http_client,
                     investment=stake,
@@ -217,31 +263,32 @@ class MartingaleStrategy(StrategyBase):
                     account_ccy=account_ccy,
                 )
                 if pct is None:
+                    self._status("ожидание процента")
                     log(f"[{self.symbol}] ⚠ Не получили % выплаты. Пауза и повтор.")
                     await self.sleep(1.0)
                     continue
                 if pct < min_pct:
+                    self._status("ожидание высокого процента")
                     log(
                         f"[{self.symbol}] ℹ Низкий payout {pct}% < {min_pct}% — ждём {wait_low}s"
                     )
                     await self.sleep(wait_low)
                     continue
 
-                # ⛔ страховка дна: если проиграем, остаток не должен упасть ниже min_balance
+                # --- 2.3 защита min_balance на случай LOSS ---
                 try:
                     cur_balance, _, _ = await get_balance_info(
                         self.http_client, self.user_id, self.user_hash
                     )
                 except Exception:
                     cur_balance = None
-
                 min_floor = float(
                     self.params.get("min_balance", DEFAULTS["min_balance"])
                 )
                 if cur_balance is None or (cur_balance - stake) < min_floor:
                     log(
-                        f"[{self.symbol}] 🛑 Сделка {stake:.2f} {account_ccy} может опустить баланс "
-                        f"ниже минимума {min_floor:.2f} {account_ccy}"
+                        f"[{self.symbol}] 🛑 Сделка {stake:.2f} {account_ccy} может опустить баланс ниже "
+                        f"{min_floor:.2f} {account_ccy}"
                         + (
                             ""
                             if cur_balance is None
@@ -250,14 +297,28 @@ class MartingaleStrategy(StrategyBase):
                         + ". Останавливаю стратегию."
                     )
                     self._running = False
-                    break  # выйти из серии немедленно
+                    break
+
+                # --- 2.4 финальная проверка «якорей» прямо перед сделкой ---
+                if not await self._ensure_anchor_currency():
+                    continue
+                if not await self._ensure_anchor_account_mode():
+                    continue
 
                 log(
                     f"[{self.symbol}] step={step} stake={stake:.2f} min={self._trade_minutes} "
                     f"side={'UP' if status == 1 else 'DOWN'} payout={pct}%"
                 )
 
-                # сделка
+                # режим счёта для GUI
+                try:
+                    demo_now = await is_demo_account(self.http_client)
+                except Exception:
+                    demo_now = False
+                account_mode = "ДЕМО" if demo_now else "РЕАЛ"
+
+                # --- 2.5 размещаем сделку ---
+                self._status("делает ставку")
                 trade_id = await place_trade(
                     self.http_client,
                     user_id=self.user_id,
@@ -275,7 +336,9 @@ class MartingaleStrategy(StrategyBase):
                     await self.sleep(1.0)
                     continue
 
-                # сообщаем в UI, что сделка размещена и ждём результата
+                did_place_any_trade = True
+
+                # Сигнал в GUI: «ожидание результата»
                 if callable(self._on_trade_pending):
                     from datetime import datetime
 
@@ -286,17 +349,18 @@ class MartingaleStrategy(StrategyBase):
                             symbol=self.symbol,
                             timeframe=self.timeframe,
                             placed_at=placed_at_str,
-                            direction=status,  # 1/2
+                            direction=status,
                             stake=float(stake),
                             percent=int(pct),
                             wait_seconds=float(result_wait_s),
+                            account_mode=account_mode,
                         )
                     except Exception:
                         pass
 
-                did_place_any_trade = True
+                self._status("ожидание результата")
 
-                # ждём результат
+                # --- 2.6 ждём результат ---
                 profit = await check_trade_result(
                     self.http_client,
                     user_id=self.user_id,
@@ -305,7 +369,7 @@ class MartingaleStrategy(StrategyBase):
                     wait_time=result_wait_s,
                 )
 
-                # коллбек в GUI (если задан)
+                # репорт в GUI
                 if callable(self._on_trade_result):
                     from datetime import datetime
 
@@ -316,15 +380,16 @@ class MartingaleStrategy(StrategyBase):
                             symbol=self.symbol,
                             timeframe=self.timeframe,
                             placed_at=placed_at_str,
-                            direction=status,  # 1/2
+                            direction=status,
                             stake=float(stake),
                             percent=int(pct),
                             profit=(None if profit is None else float(profit)),
+                            account_mode=account_mode,
                         )
                     except Exception:
                         pass
 
-                # ---- интерпретация результата: WIN / LOSS / PUSH / UNKNOWN ----
+                # --- 2.7 интерпретация результата ---
                 if profit is None:
                     log(f"[{self.symbol}] ⚠ Результат неизвестен — считаем как LOSS.")
                     step += 1
@@ -334,11 +399,11 @@ class MartingaleStrategy(StrategyBase):
                         f"[{self.symbol}] ✅ WIN: profit={profit:.2f}. Серия завершена, откат к базе."
                     )
                     break
-                elif abs(profit) < 1e-9:  # == 0: PUSH
+                elif abs(profit) < 1e-9:
                     log(
                         f"[{self.symbol}] 🤝 PUSH: возврат ставки. Повтор шага без увеличения."
                     )
-                    # step/stake не меняем — повторим попытку на том же колене
+                    # повторяем то же колено без увеличения
                 else:  # profit < 0
                     log(
                         f"[{self.symbol}] ❌ LOSS: profit={profit:.2f}. Увеличиваем ставку."
@@ -348,14 +413,14 @@ class MartingaleStrategy(StrategyBase):
 
                 await self.sleep(0.2)
 
-            # если стратегию попросили остановить внутри серии — выходим немедленно
+            # прерывание по stop()
             if not self._running:
                 break
 
             if not did_place_any_trade:
                 log(
                     f"[{self.symbol}] ℹ Серия завершена без сделок (max_steps={max_steps} или условия не выполнились). "
-                    f"Серии осталось: {series_left}."
+                    f"Серий осталось: {series_left}."
                 )
             else:
                 if step >= max_steps:
@@ -367,6 +432,50 @@ class MartingaleStrategy(StrategyBase):
 
         self._running = False
         (self.log or (lambda s: None))(f"[{self.symbol}] Завершение стратегии.")
+
+    # ---- вспомогательные ----
+
+    async def _ensure_anchor_currency(self) -> bool:
+        """
+        Проверяем, что текущая валюта кабинета совпадает с «якорной».
+        Если нет — выставляем статус и ждём; возвращаем False, чтобы внешний код сделал continue.
+        """
+        try:
+            _, ccy_now, _ = await get_balance_info(
+                self.http_client, self.user_id, self.user_hash
+            )
+        except Exception:
+            ccy_now = None
+
+        if ccy_now != self._anchor_ccy:
+            self._status(f"ожидание смены валюты на {self._anchor_ccy}")
+            await self.sleep(1.0)
+            return False
+        return True
+
+    async def _ensure_anchor_account_mode(self) -> bool:
+        """
+        Проверяем, что текущий режим счёта (РЕАЛ/ДЕМО) совпадает с якорным.
+        Если нет — выставляем статус и ждём; возвращаем False, чтобы внешний код сделал continue.
+        """
+        try:
+            demo_now = await is_demo_account(self.http_client)
+        except Exception:
+            # если не смогли проверить — лучше переждать
+            self._status("ожидание проверки режима счёта")
+            await self.sleep(1.0)
+            return False
+
+        if self._anchor_is_demo is None:
+            # если по какой-то причине ещё не заякорили — заякорим сейчас
+            self._anchor_is_demo = bool(demo_now)
+
+        if bool(demo_now) != bool(self._anchor_is_demo):
+            need = "ДЕМО" if self._anchor_is_demo else "РЕАЛ"
+            self._status(f"ожидание смены счёта на {need}")
+            await self.sleep(1.0)
+            return False
+        return True
 
     async def wait_signal(self, *, timeout: float) -> int:
         """
@@ -407,7 +516,7 @@ class MartingaleStrategy(StrategyBase):
                 return
             norm = normalize_sprint(self.symbol, requested)
             if norm is None:
-                # мягкая коррекция к допустимому
+                # мягко правим к допустимому
                 if self.symbol == "BTCUSDT":
                     norm = 5 if requested < 5 else 500
                 else:
@@ -423,3 +532,13 @@ class MartingaleStrategy(StrategyBase):
             self.timeframe = str(params["timeframe"]) or self.timeframe
             if "minutes" not in params:
                 self._trade_minutes = _minutes_from_timeframe(self.timeframe)
+
+        # не даём сменить «якорную» валюту на лету
+        if "account_currency" in params:
+            want = str(params["account_currency"]).upper()
+            if want != self._anchor_ccy and self.log:
+                self.log(
+                    f"[{self.symbol}] ⚠ Игнорирую попытку сменить валюту на лету "
+                    f"{self._anchor_ccy} → {want}. Валюта зафиксирована при создании."
+                )
+            self.params["account_currency"] = self._anchor_ccy
