@@ -1,9 +1,7 @@
 # strategies/base.py
 from __future__ import annotations
 import asyncio
-from typing import Any, Awaitable, Optional, Callable
-
-from core.intrade_api_async import get_balance_info, is_demo_account
+from typing import Any, Awaitable, Optional
 
 
 class StrategyBase:

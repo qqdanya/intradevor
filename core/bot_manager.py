@@ -43,4 +43,3 @@ class BotManager:
             ):
                 return bot
         return None
-

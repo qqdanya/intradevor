@@ -336,7 +336,9 @@ class StrategyControlDialog(QDialog):
                 formatted.append(f"'{k}': {v:.2f}")
             else:
                 formatted.append(f"'{k}': {v}")
-        self.log_edit.append(ts("💾 Настройки сохранены: {" + ", ".join(formatted) + "}"))
+        self.log_edit.append(
+            ts("💾 Настройки сохранены: {" + ", ".join(formatted) + "}")
+        )
 
     # ---- хелперы: локальная таблица сделок ----
     def _fmt_money(self, value: float, ccy: str) -> str:

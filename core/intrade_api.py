@@ -1,8 +1,6 @@
 import asyncio
 import re
-import requests
 from bs4 import BeautifulSoup
-from PyQt6.QtCore import qDebug
 from core import config
 from core.policy import (
     DEFAULT_ACCOUNT_CCY,
@@ -148,7 +146,7 @@ def get_current_percent(session, investment, option, minutes=1, account_ccy="RUB
     r = session.post(PERCENT_URL, data=payload)
     try:
         return int(r.text.strip())
-    except:
+    except Exception:
         return None
 
 

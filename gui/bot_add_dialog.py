@@ -119,12 +119,9 @@ class AddBotDialog(QDialog):
         return self.selected_symbol, self.selected_strategy
 
     def accept(self):
-        if (
-            self.selected_strategy == "martingale"
-            and (
-                self.selected_symbol == ALL_SYMBOLS_LABEL
-                or self.selected_timeframe == ALL_TF_LABEL
-            )
+        if self.selected_strategy == "martingale" and (
+            self.selected_symbol == ALL_SYMBOLS_LABEL
+            or self.selected_timeframe == ALL_TF_LABEL
         ):
             QMessageBox.warning(
                 self,

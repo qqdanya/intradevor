@@ -8,5 +8,6 @@ _registry: Dict[Type, Type[QDialog]] = {
     # позже добавишь: OscarGrindStrategy: OscarGrindSettingsDialog
 }
 
+
 def get_settings_dialog_cls(strategy_cls: Type) -> Type[QDialog] | None:
     return _registry.get(strategy_cls)
