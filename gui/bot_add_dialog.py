@@ -29,6 +29,15 @@ class AddBotDialog(QDialog):
 
         layout = QVBoxLayout()
 
+        # Сначала выбор алгоритма
+        layout.addWidget(QLabel("Алгоритм:"))
+        self.strategy_combo = QComboBox()
+        for key in self.available_strategies.keys():
+            label = self.strategy_labels.get(key, key)
+            self.strategy_combo.addItem(label, userData=key)
+        layout.addWidget(self.strategy_combo)
+        self.strategy_combo.currentIndexChanged.connect(self.on_strategy_change)
+
         # Поиск валют
         layout.addWidget(QLabel("Поиск валютной пары:"))
         self.search_edit = QLineEdit()
@@ -47,15 +56,6 @@ class AddBotDialog(QDialog):
         self.tf_combo.addItems(TIMEFRAMES)
         self.tf_combo.setCurrentText("M1")
         layout.addWidget(self.tf_combo)
-
-        # Стратегии
-        layout.addWidget(QLabel("Алгоритм:"))
-        self.strategy_combo = QComboBox()
-        for key in self.available_strategies.keys():
-            label = self.strategy_labels.get(key, key)
-            self.strategy_combo.addItem(label, userData=key)
-        layout.addWidget(self.strategy_combo)
-        self.strategy_combo.currentIndexChanged.connect(self.on_strategy_change)
 
         # Кнопки
         buttons = QDialogButtonBox(

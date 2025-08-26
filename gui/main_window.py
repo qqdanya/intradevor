@@ -198,7 +198,7 @@ class MainWindow(QWidget):
 
         # === Таблица результатов сделок ===
         self.trades_table = QTableWidget(self)
-        self.trades_table.setColumnCount(10)
+        self.trades_table.setColumnCount(11)
         self.trades_table.setHorizontalHeaderLabels(
             [
                 "Время сигнала",
@@ -208,6 +208,7 @@ class MainWindow(QWidget):
                 "ТФ",
                 "Направление",
                 "Ставка",
+                "Время",
                 "Процент",
                 "P/L",
                 "Счет",
@@ -224,6 +225,7 @@ class MainWindow(QWidget):
         hdr.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(9, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(10, QHeaderView.ResizeMode.ResizeToContents)
         self.trades_table.setAlternatingRowColors(True)
         # self.trades_table.setSortingEnabled(True)
 
@@ -615,7 +617,7 @@ class MainWindow(QWidget):
         """
         Добавляет строку «ожидание результата».
         Колонки: Время сигнала | Время ставки | Индикатор | Пара | ТФ |
-                  Направление | Ставка | % | P/L | Счет
+                  Направление | Ставка | Время | % | P/L | Счет
         В P/L показываем обратный отсчёт, синхронизированный по expected_end_ts.
         """
         from time import time as _now
@@ -646,6 +648,7 @@ class MainWindow(QWidget):
             left_now = max(0.0, expected_end_ts - _now())
             account_txt = account_mode or ("ДЕМО" if self.is_demo else "РЕАЛ")
             ccy = self.account_currency
+            duration_txt = f"{int(round(float(wait_seconds) / 60))} мин"
 
             vals = [
                 signal_at,  # 0 Время сигнала
@@ -655,13 +658,14 @@ class MainWindow(QWidget):
                 timeframe,  # 4 ТФ
                 dir_text,  # 5 Направление
                 format_money(stake, ccy),  # 6 Ставка
-                f"{percent}%",  # 7 %
-                f"Ожидание ({_fmt_left(left_now)})",  # 8 P/L
-                account_txt,  # 9 Счёт
+                duration_txt,  # 7 Время
+                f"{percent}%",  # 8 %
+                f"Ожидание ({_fmt_left(left_now)})",  # 9 P/L
+                account_txt,  # 10 Счёт
             ]
             for col, v in enumerate(vals):
                 it = QTableWidgetItem(str(v))
-                if col in (5, 8):  # выравниваем Направление и P/L по центру
+                if col in (5, 9):  # выравниваем Направление и P/L по центру
                     it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.trades_table.setItem(row, col, it)
 
@@ -680,7 +684,7 @@ class MainWindow(QWidget):
                 if row >= self.trades_table.rowCount():
                     timer.stop()
                     return
-                item = self.trades_table.item(row, 8)  # P/L
+                item = self.trades_table.item(row, 9)  # P/L
                 if item:
                     item.setText(f"Ожидание ({_fmt_left(left)})")
                 if left <= 0:
@@ -711,6 +715,7 @@ class MainWindow(QWidget):
                 "signal_at": signal_at,
                 "placed_at": placed_at,
                 "account_mode": account_mode or ("ДЕМО" if self.is_demo else "РЕАЛ"),
+                "wait_seconds": float(wait_seconds),
             }
 
             if was_sorting:
@@ -740,7 +745,7 @@ class MainWindow(QWidget):
         Красим строку по результату.
         """
 
-        def _fill_row(row: int, indicator_value: str, sig_time: str):
+        def _fill_row(row: int, indicator_value: str, sig_time: str, place_time: str, duration_txt: str):
             dir_text = "ВВЕРХ" if int(direction) == 1 else "ВНИЗ"
             account_txt = account_mode or ("ДЕМО" if self.is_demo else "РЕАЛ")
             ccy = self.account_currency
@@ -753,19 +758,20 @@ class MainWindow(QWidget):
 
             vals = [
                 sig_time,  # 0 Время сигнала
-                placed_at,  # 1 Время ставки
+                place_time,  # 1 Время ставки
                 indicator_value,  # 2 Индикатор
                 symbol,  # 3 Пара
                 timeframe,  # 4 ТФ
                 dir_text,  # 5 Направление
                 format_money(stake, ccy),  # 6 Ставка
-                f"{percent}%",  # 7 %
-                fmt_pl(profit),  # 8 P/L
-                account_txt,  # 9 Счёт
+                duration_txt,  # 7 Время
+                f"{percent}%",  # 8 %
+                fmt_pl(profit),  # 9 P/L
+                account_txt,  # 10 Счёт
             ]
             for col, v in enumerate(vals):
                 it = QTableWidgetItem(str(v))
-                if col in (5, 8):
+                if col in (5, 9):
                     it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.trades_table.setItem(row, col, it)
 
@@ -789,6 +795,8 @@ class MainWindow(QWidget):
             row_to_update = None
             indicator_value = indicator or "-"
             sig_time = signal_at
+            place_time = placed_at
+            duration_txt = ""
 
             if trade_id and trade_id in self.pending_trades:
                 info = self.pending_trades.pop(trade_id, {})
@@ -804,12 +812,14 @@ class MainWindow(QWidget):
                     # если при pending уже знали индикатор — используем его
                     indicator_value = info.get("indicator", indicator_value)
                     sig_time = info.get("signal_at", sig_time)
+                    place_time = info.get("placed_at", place_time)
+                    duration_txt = f"{int(round(info.get('wait_seconds', 0.0) / 60))} мин"
 
             if row_to_update is None:
                 row_to_update = 0
                 self.trades_table.insertRow(row_to_update)
 
-            _fill_row(row_to_update, indicator_value, sig_time)
+            _fill_row(row_to_update, indicator_value, sig_time, place_time, duration_txt)
 
             if was_sorting:
                 self.trades_table.setSortingEnabled(True)

@@ -16,9 +16,10 @@ class TradesTableWidget(QTableWidget):
       [4] ТФ
       [5] Направление
       [6] Ставка
-      [7] Процент
-      [8] P/L
-      [9] Счёт
+      [7] Время
+      [8] Процент
+      [9] P/L
+      [10] Счёт
     """
 
     COLS = [
@@ -29,6 +30,7 @@ class TradesTableWidget(QTableWidget):
         "ТФ",
         "Направление",
         "Ставка",
+        "Время",
         "Процент",
         "P/L",
         "Счет",
@@ -59,6 +61,7 @@ class TradesTableWidget(QTableWidget):
         timeframe: str,
         direction: int,  # 1=UP, 2=DOWN
         stake: float,
+        duration: float,
         percent: int,
         account_mode: str,  # "ДЕМО"/"РЕАЛ"
         indicator: str = "-",  # НАЗВАНИЕ ИНДИКАТОРА
@@ -75,13 +78,14 @@ class TradesTableWidget(QTableWidget):
             timeframe,
             dir_text,
             f"{stake:.2f}",
+            f"{int(round(duration / 60))} мин",
             f"{percent}%",
             "ожидание…",
             account_mode,
         ]
         for col, val in enumerate(values):
             it = QTableWidgetItem(str(val))
-            if col in (5, 8):  # выравнивание Направление, P/L по центру
+            if col in (5, 9):  # выравнивание Направление, P/L по центру
                 it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.setItem(row, col, it)
 
@@ -98,11 +102,11 @@ class TradesTableWidget(QTableWidget):
             return
         row = self._row_by_trade[trade_id]
 
-        pl_item = self.item(row, 8)
+        pl_item = self.item(row, 9)
         if pl_item is None:
             pl_item = QTableWidgetItem()
             pl_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.setItem(row, 8, pl_item)
+            self.setItem(row, 9, pl_item)
 
         if profit is None:
             pl_item.setText("неизв.")

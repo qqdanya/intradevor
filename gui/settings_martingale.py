@@ -51,10 +51,6 @@ class MartingaleSettingsDialog(QDialog):
         self.min_percent.setRange(0, 100)
         self.min_percent.setValue(self.params.get("min_percent", 70))
 
-        self.wait_on_low_percent = QSpinBox()
-        self.wait_on_low_percent.setRange(0, 60)
-        self.wait_on_low_percent.setValue(self.params.get("wait_on_low_percent", 1))
-
         form = QFormLayout()
         form.addRow("Базовая ставка", self.base_investment)
         form.addRow("Время экспирации (мин)", self.minutes)
@@ -63,7 +59,6 @@ class MartingaleSettingsDialog(QDialog):
         form.addRow("Мин. баланс", self.min_balance)
         form.addRow("Коэффициент", self.coefficient)
         form.addRow("Мин. процент", self.min_percent)
-        form.addRow("Ожид. при низком % (с)", self.wait_on_low_percent)
 
         btns = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -90,5 +85,4 @@ class MartingaleSettingsDialog(QDialog):
             "min_balance": self.min_balance.value(),
             "coefficient": self.coefficient.value(),
             "min_percent": self.min_percent.value(),
-            "wait_on_low_percent": self.wait_on_low_percent.value(),
         }

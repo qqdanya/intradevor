@@ -44,19 +44,18 @@ class StrategyControlDialog(QDialog):
             self.main.strategy_label(bot.strategy_kwargs.get("strategy_key", ""))
         )
         self.lbl_symbol = QLabel(bot.strategy_kwargs.get("symbol", ""))
-        self.lbl_status = QLabel("Статус: —")
-        self.lbl_ccy = QLabel("Валюта счёта: —")
-        for w in (self.lbl_strategy, self.lbl_symbol, self.lbl_status, self.lbl_ccy):
+        self.lbl_timeframe = QLabel(bot.strategy_kwargs.get("timeframe", ""))
+        for w in (self.lbl_strategy, self.lbl_symbol, self.lbl_timeframe):
             w.setStyleSheet("font-weight: 600;")
         hh.addWidget(QLabel("Стратегия:"))
         hh.addWidget(self.lbl_strategy)
         hh.addSpacing(12)
         hh.addWidget(QLabel("Символ:"))
         hh.addWidget(self.lbl_symbol)
-        hh.addStretch(1)
-        hh.addWidget(self.lbl_status)
         hh.addSpacing(12)
-        hh.addWidget(self.lbl_ccy)
+        hh.addWidget(QLabel("ТФ:"))
+        hh.addWidget(self.lbl_timeframe)
+        hh.addStretch(1)
 
         # ---------- ЛОГ (слева) ----------
         self.log_edit = QTextEdit()
@@ -72,7 +71,7 @@ class StrategyControlDialog(QDialog):
 
         # ---------- ТАБЛИЦА СДЕЛОК (справа) ----------
         self.trades_table = QTableWidget(self)
-        self.trades_table.setColumnCount(10)
+        self.trades_table.setColumnCount(11)
         self.trades_table.setHorizontalHeaderLabels(
             [
                 "Время сигнала",  # 0
@@ -82,9 +81,10 @@ class StrategyControlDialog(QDialog):
                 "Индикатор",  # 4  (если не прилетит — ставим "—")
                 "Направление",  # 5
                 "Ставка",  # 6
-                "Процент",  # 7
-                "P/L",  # 8
-                "Счёт",  # 9
+                "Время",  # 7
+                "Процент",  # 8
+                "P/L",  # 9
+                "Счёт",  # 10
             ]
         )
         hdr = self.trades_table.horizontalHeader()
@@ -96,9 +96,10 @@ class StrategyControlDialog(QDialog):
         hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)  # Индикатор
         hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)  # Направление
         hdr.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)  # Ставка
-        hdr.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)  # %
-        hdr.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)  # P/L
-        hdr.setSectionResizeMode(9, QHeaderView.ResizeMode.ResizeToContents)  # Счёт
+        hdr.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)  # Время
+        hdr.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)  # %
+        hdr.setSectionResizeMode(9, QHeaderView.ResizeMode.ResizeToContents)  # P/L
+        hdr.setSectionResizeMode(10, QHeaderView.ResizeMode.ResizeToContents)  # Счёт
         self.trades_table.setAlternatingRowColors(True)
         self.trades_table.setSortingEnabled(True)
 
@@ -143,12 +144,6 @@ class StrategyControlDialog(QDialog):
         self.min_percent = QSpinBox()
         self.min_percent.setRange(0, 100)
         self.min_percent.setValue(int(getv("min_percent", 70)))
-        self.wait_on_low_percent = QSpinBox()
-        self.wait_on_low_percent.setRange(0, 60)
-        self.wait_on_low_percent.setValue(int(getv("wait_on_low_percent", 1)))
-        self.signal_timeout_sec = QSpinBox()
-        self.signal_timeout_sec.setRange(1, 24 * 3600)
-        self.signal_timeout_sec.setValue(int(getv("signal_timeout_sec", 3600)))
 
         form.addRow("Базовая ставка", self.base_investment)
         form.addRow("Время сделки (мин)", self.minutes)
@@ -157,8 +152,6 @@ class StrategyControlDialog(QDialog):
         form.addRow("Мин. баланс", self.min_balance)
         form.addRow("Коэффициент", self.coefficient)
         form.addRow("Мин. процент", self.min_percent)
-        form.addRow("Ожидание при низком % (с)", self.wait_on_low_percent)
-        form.addRow("Таймаут ожидания сигнала (с)", self.signal_timeout_sec)
 
         # Кнопка «Сохранить настройки»
         settings_row = QWidget()
@@ -240,30 +233,11 @@ class StrategyControlDialog(QDialog):
         paused = bool(st and hasattr(st, "is_paused") and st.is_paused())
 
         if not bot_exists:
-            self.lbl_status.setText("Статус: завершён / удалён")
             self.btn_start.setEnabled(False)
             self.btn_pause.setEnabled(False)
             self.btn_resume.setEnabled(False)
             self.btn_stop.setEnabled(False)
             return
-
-        if not started and not st:
-            status = "Статус: не запущено"
-        elif running and paused:
-            status = "Статус: пауза"
-        elif running:
-            status = "Статус: работает"
-        else:
-            status = "Статус: остановлено"
-        self.lbl_status.setText(status)
-
-        ccy = (
-            st.params.get("account_currency")
-            if (st and isinstance(getattr(st, "params", None), dict))
-            else None
-        )
-        if ccy:
-            self.lbl_ccy.setText(f"Валюта счёта: {ccy}")
 
         self.btn_start.setEnabled(bot_exists and not started)
         self.btn_pause.setEnabled(running and not paused)
@@ -330,8 +304,6 @@ class StrategyControlDialog(QDialog):
             "min_balance": self.min_balance.value(),
             "coefficient": self.coefficient.value(),
             "min_percent": self.min_percent.value(),
-            "wait_on_low_percent": self.wait_on_low_percent.value(),
-            "signal_timeout_sec": self.signal_timeout_sec.value(),
             "minutes": int(norm),
         }
 
@@ -400,6 +372,7 @@ class StrategyControlDialog(QDialog):
         )
         ccy = getattr(self.main, "account_currency", "RUB")
         ind_txt = indicator or "—"
+        duration_txt = f"{int(round(float(wait_seconds) / 60))} мин"
 
         vals = [
             signal_at,  # 0 Время сигнала
@@ -409,13 +382,14 @@ class StrategyControlDialog(QDialog):
             ind_txt,  # 4 Индикатор
             dir_text,  # 5 Направление
             self._fmt_money(stake, ccy),  # 6 Ставка
-            f"{percent}%",  # 7 %
-            f"Ожидание ({_fmt_left(left_now)})",  # 8 P/L
-            account_txt,  # 9 Счёт
+            duration_txt,  # 7 Время
+            f"{percent}%",  # 8 %
+            f"Ожидание ({_fmt_left(left_now)})",  # 9 P/L
+            account_txt,  # 10 Счёт
         ]
         for col, v in enumerate(vals):
             it = QTableWidgetItem(str(v))
-            if col in (5, 8):
+            if col in (5, 9):
                 it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.trades_table.setItem(row, col, it)
 
@@ -433,7 +407,7 @@ class StrategyControlDialog(QDialog):
             if row >= self.trades_table.rowCount():
                 timer.stop()
                 return
-            item = self.trades_table.item(row, 8)
+            item = self.trades_table.item(row, 9)
             if item:
                 item.setText(f"Ожидание ({_fmt_left(left)})")
             if left <= 0:
@@ -455,6 +429,8 @@ class StrategyControlDialog(QDialog):
             "expected_end_ts": float(expected_end_ts),
             "indicator": ind_txt,
             "signal_at": signal_at,
+            "placed_at": placed_at,
+            "wait_seconds": float(wait_seconds),
         }
 
         if was_sort:
@@ -489,6 +465,8 @@ class StrategyControlDialog(QDialog):
         row_to_update = None
         ind_txt = indicator or "—"
         sig_time = signal_at
+        place_time = placed_at
+        duration_txt = ""
         if trade_id and trade_id in self._pending_rows:
             info = self._pending_rows.pop(trade_id, {})
             timer = info.get("timer")
@@ -502,6 +480,8 @@ class StrategyControlDialog(QDialog):
                 row_to_update = row
                 ind_txt = info.get("indicator", ind_txt)
                 sig_time = info.get("signal_at", sig_time)
+                place_time = info.get("placed_at", place_time)
+                duration_txt = f"{int(round(info.get('wait_seconds', 0.0) / 60))} мин"
 
         was_sort = self.trades_table.isSortingEnabled()
         if was_sort:
@@ -519,19 +499,20 @@ class StrategyControlDialog(QDialog):
 
         vals = [
             sig_time,  # 0
-            placed_at,  # 1
+            place_time,  # 1
             symbol,  # 2
             timeframe,  # 3
             ind_txt,  # 4
             dir_text,  # 5
             self._fmt_money(stake, ccy),  # 6
-            f"{percent}%",  # 7
-            fmt_pl(profit, ccy),  # 8
-            account_txt,  # 9
+            duration_txt,  # 7
+            f"{percent}%",  # 8
+            fmt_pl(profit, ccy),  # 9
+            account_txt,  # 10
         ]
         for col, v in enumerate(vals):
             item = QTableWidgetItem(str(v))
-            if col in (5, 8):
+            if col in (5, 9):
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.trades_table.setItem(row_to_update, col, item)
 
