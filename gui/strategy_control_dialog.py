@@ -107,6 +107,9 @@ class StrategyControlDialog(QDialog):
         hdr.setSectionResizeMode(10, QHeaderView.ResizeMode.ResizeToContents)  # Счёт
         self.trades_table.setAlternatingRowColors(True)
         self.trades_table.setSortingEnabled(False)
+        self.trades_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.trades_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self.trades_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         # ---------- Настройки (inline) ----------
         self.settings_box = QGroupBox("Настройки стратегии")
