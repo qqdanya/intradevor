@@ -20,6 +20,7 @@ from PyQt6.QtGui import QColor, QBrush
 from PyQt6.QtCore import QTimer, Qt
 from strategies.martingale import _minutes_from_timeframe
 from core.policy import normalize_sprint
+from core.money import format_money
 
 
 class StrategyControlDialog(QDialog):
@@ -327,7 +328,7 @@ class StrategyControlDialog(QDialog):
             v = float(value)
         except Exception:
             v = 0.0
-        return f"{v:.2f} {ccy}"
+        return format_money(v, ccy)
 
     def _add_trade_pending_local(
         self,

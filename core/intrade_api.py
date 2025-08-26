@@ -231,15 +231,45 @@ def place_trade(
     return None
 
 
-async def check_trade_result(session, user_id, user_hash, trade_id, wait_time):
-    await asyncio.sleep(wait_time)
+async def check_trade_result(
+    session,
+    user_id,
+    user_hash,
+    trade_id,
+    wait_time: float = 60.0,
+    poll_interval: float = 1.0,
+    initial_wait: float | None = None,
+):
+    """Опрашивает результат сделки до wait_time секунд.
+
+    Возвращает profit (result - investment) или None, если результат не получен.
+
+    initial_wait — сколько секунд подождать перед первым запросом
+                   (по умолчанию poll_interval).
+    """
+    deadline = asyncio.get_running_loop().time() + float(wait_time)
     payload = {"user_id": user_id, "user_hash": user_hash, "trade_id": trade_id}
-    r = session.post(TRADE_CHECK_URL, data=payload)
-    parts = r.text.strip().split(";")
-    if len(parts) >= 3:
+
+    if wait_time > 0:
+        delay = poll_interval if initial_wait is None else float(initial_wait)
+        await asyncio.sleep(min(delay, wait_time))
+
+    while True:
         try:
-            rate, result, investment = parts
-            return float(result) - float(investment)
-        except:
-            return None
+            r = session.post(TRADE_CHECK_URL, data=payload)
+            parts = r.text.strip().split(";")
+        except Exception:
+            parts = []
+        if len(parts) >= 3:
+            try:
+                rate, result, investment = parts[:3]
+                return float(result) - float(investment)
+            except Exception:
+                pass
+
+        left = deadline - asyncio.get_running_loop().time()
+        if left <= 0:
+            break
+        await asyncio.sleep(min(poll_interval, left))
+
     return None
