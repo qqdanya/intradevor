@@ -38,6 +38,7 @@ from core.ws_client import listen_to_signals
 from core.bot_manager import BotManager
 from core.bot import Bot
 from strategies.martingale import MartingaleStrategy
+from strategies.oscar_grind import OscarGrindStrategy
 
 
 class MainWindow(QWidget):
@@ -80,8 +81,14 @@ class MainWindow(QWidget):
             "USD/JPY",
             "BTC/USDT",
         ]
-        self.available_strategies = {"martingale": MartingaleStrategy}
-        self.strategy_labels = {"martingale": "Мартингейл"}
+        self.available_strategies = {
+            "martingale": MartingaleStrategy,
+            "oscar_grind": OscarGrindStrategy,
+        }
+        self.strategy_labels = {
+            "martingale": "Мартингейл",
+            "oscar_grind": "Оскар Грайнд",
+        }
 
         self.bot_ever_started = defaultdict(bool)
         self.bot_logs = defaultdict(list)
