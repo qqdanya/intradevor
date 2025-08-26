@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, Optional, Tuple
+from typing import Optional, Tuple
 
 from bs4 import BeautifulSoup
 

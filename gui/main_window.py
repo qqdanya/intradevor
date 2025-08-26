@@ -17,7 +17,6 @@ from collections import defaultdict
 from functools import partial
 import asyncio
 
-from core.symbols import ui_symbol
 from core.money import format_money
 from core.logger import ts
 
@@ -614,8 +613,9 @@ class MainWindow(QWidget):
         wait_seconds: float,
         account_mode: str | None = None,
         indicator: str | None = None,
-        expected_end_ts: float
-        | None = None,  # ⬅️ НОВОЕ: абсолютный дедлайн (epoch seconds)
+        expected_end_ts: (
+            float | None
+        ) = None,  # ⬅️ НОВОЕ: абсолютный дедлайн (epoch seconds)
     ):
         """
         Добавляет строку «ожидание результата».
@@ -748,7 +748,13 @@ class MainWindow(QWidget):
         Красим строку по результату.
         """
 
-        def _fill_row(row: int, indicator_value: str, sig_time: str, place_time: str, duration_txt: str):
+        def _fill_row(
+            row: int,
+            indicator_value: str,
+            sig_time: str,
+            place_time: str,
+            duration_txt: str,
+        ):
             dir_text = "ВВЕРХ" if int(direction) == 1 else "ВНИЗ"
             account_txt = account_mode or ("ДЕМО" if self.is_demo else "РЕАЛ")
             ccy = self.account_currency
@@ -816,13 +822,17 @@ class MainWindow(QWidget):
                     indicator_value = info.get("indicator", indicator_value)
                     sig_time = info.get("signal_at", sig_time)
                     place_time = info.get("placed_at", place_time)
-                    duration_txt = f"{int(round(info.get('wait_seconds', 0.0) / 60))} мин"
+                    duration_txt = (
+                        f"{int(round(info.get('wait_seconds', 0.0) / 60))} мин"
+                    )
 
             if row_to_update is None:
                 row_to_update = 0
                 self.trades_table.insertRow(row_to_update)
 
-            _fill_row(row_to_update, indicator_value, sig_time, place_time, duration_txt)
+            _fill_row(
+                row_to_update, indicator_value, sig_time, place_time, duration_txt
+            )
 
             if was_sorting:
                 self.trades_table.setSortingEnabled(True)
@@ -895,7 +905,8 @@ class MainWindow(QWidget):
 
     def _set_bot_status(self, bot, status: str):
         """Колбэк от стратегии: 'ожидание сигнала' / 'делает ставку' / 'ожидание результата'.
-        Статус 'пауза' НЕ принимаем отсюда — его рисует UI по is_paused() (вариант Б)."""
+        Статус 'пауза' НЕ принимаем отсюда — его рисует UI по is_paused() (вариант Б).
+        """
         # Кэшируем последнюю НЕ-паузную фазу
         s = (status or "—").strip()
         self.bot_last_phase[bot] = s

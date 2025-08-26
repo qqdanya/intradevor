@@ -4,7 +4,6 @@ from __future__ import annotations
 import sys
 from typing import Dict, Tuple
 
-import browser_cookie3
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from core.config import get_base_url, get_domain

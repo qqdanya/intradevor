@@ -1,7 +1,10 @@
 from core.intrade_api import get_current_percent, place_trade, check_trade_result
 from core.signal_waiter import wait_for_signal
 
-async def oscar_grind_strategy(session, user_id, user_hash, base_investment=100, symbol="EURUSD"):
+
+async def oscar_grind_strategy(
+    session, user_id, user_hash, base_investment=100, symbol="EURUSD"
+):
     total_profit = 0.0
     investment = base_investment
     trade_number = 1
@@ -20,7 +23,9 @@ async def oscar_grind_strategy(session, user_id, user_hash, base_investment=100,
         if profit is None:
             continue
 
-        print(f"[{symbol}] Сделка {trade_number}: {'ПРИБЫЛЬ' if profit > 0 else 'УБЫТОК'} {profit:.2f}")
+        print(
+            f"[{symbol}] Сделка {trade_number}: {'ПРИБЫЛЬ' if profit > 0 else 'УБЫТОК'} {profit:.2f}"
+        )
         trade_number += 1
         total_profit += profit
 
@@ -29,4 +34,3 @@ async def oscar_grind_strategy(session, user_id, user_hash, base_investment=100,
             investment = max(100, remaining / (percent / 100.0))
         else:
             investment = min(investment + 100, 50000)
-
