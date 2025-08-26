@@ -189,6 +189,7 @@ class MartingaleStrategy(StrategyBase):
             self._last_signal_ver = 0
 
         while self._running and series_left > 0:
+            self._last_signal_at_str = None
             await self._pause_point()
 
             if not await self._ensure_anchor_currency():
@@ -355,7 +356,7 @@ class MartingaleStrategy(StrategyBase):
                             trade_id=trade_id,
                             symbol=self.symbol,
                             timeframe=self.timeframe,
-                            signal_at=(self._last_signal_at_str or placed_at_str),
+                            signal_at=self._last_signal_at_str,
                             placed_at=placed_at_str,
                             direction=status,
                             stake=float(stake),
@@ -386,7 +387,7 @@ class MartingaleStrategy(StrategyBase):
                             trade_id=trade_id,
                             symbol=self.symbol,
                             timeframe=self.timeframe,
-                            signal_at=(self._last_signal_at_str or placed_at_str),
+                            signal_at=self._last_signal_at_str,
                             placed_at=placed_at_str,
                             direction=status,
                             stake=float(stake),
