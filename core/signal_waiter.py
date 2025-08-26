@@ -192,10 +192,12 @@ async def wait_for_signal(
     timeout: Optional[float] = None,
     raise_on_timeout: bool = True,
 ) -> int:
+    st = peek_signal_state(symbol, timeframe)
+    since_ver = st.get("version", 0) if isinstance(st, dict) else 0
     direction, _ = await wait_for_signal_versioned(
         symbol,
         timeframe,
-        since_version=None,  # NB: стратегия, желающая избегать повторов, должна хранить версию сама
+        since_version=since_ver,
         check_pause=check_pause,
         timeout=timeout,
         raise_on_timeout=raise_on_timeout,
