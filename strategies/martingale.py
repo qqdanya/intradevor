@@ -131,6 +131,7 @@ class MartingaleStrategy(StrategyBase):
         self._last_signal_at_str: Optional[str] = (
             None  # <=== НОВОЕ: время прихода сигнала
         )
+        self._last_signal_mono: Optional[float] = None  # loop.time() прихода сигнала
 
         anchor = str(
             self.params.get("account_currency", DEFAULTS["account_currency"])
@@ -369,12 +370,21 @@ class MartingaleStrategy(StrategyBase):
 
                 self._status("ожидание результата")
 
+                # подсчитываем, сколько времени прошло с момента прихода сигнала
+                delay = 0.0
+                if self._last_signal_mono is not None:
+                    delay = asyncio.get_running_loop().time() - self._last_signal_mono
+
+                remaining = max(float(result_wait_s) - delay, 0.0)
+                pre_wait = max(remaining - 5.0, 0.0)
+
                 profit = await check_trade_result(
                     self.http_client,
                     user_id=self.user_id,
                     user_hash=self.user_hash,
                     trade_id=trade_id,
-                    wait_time=result_wait_s,
+                    wait_time=remaining,
+                    initial_wait=pre_wait,
                 )
 
                 if callable(self._on_trade_result):
@@ -497,6 +507,7 @@ class MartingaleStrategy(StrategyBase):
         from datetime import datetime
 
         self._last_signal_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+        self._last_signal_mono = asyncio.get_running_loop().time()
         return int(direction)
 
     def update_params(self, **params):
