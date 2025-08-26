@@ -44,6 +44,9 @@ class _State:
     )
     tf_sec: Optional[int] = None  # длительность TF в секундах (если удалось распарсить)
     last_indicator: Optional[str] = None  # ИМЯ индикатора источника последнего сигнала
+    # для wildcard-ожидателей запоминаем исходный символ/таймфрейм
+    last_symbol: Optional[str] = None
+    last_timeframe: Optional[str] = None
 
 
 _states: Dict[tuple[str, str], _State] = defaultdict(_State)
@@ -51,6 +54,10 @@ _states: Dict[tuple[str, str], _State] = defaultdict(_State)
 
 def _key(symbol: str, timeframe: str) -> tuple[str, str]:
     return (str(symbol).upper(), str(timeframe).upper())
+
+
+ANY_SYMBOL = "*"
+ANY_TIMEFRAME = "*"
 
 
 # --- public api ------------------------------------------------------
@@ -69,23 +76,30 @@ def push_signal(
     Любой приход (включая None) повышает версию и будит всех ожидающих.
     Также запоминаем момент прихода (monotonic), длительность TF и имя индикатора.
     """
-    st = _states[_key(symbol, timeframe)]
+    keys = {
+        _key(symbol, timeframe),
+        _key(ANY_SYMBOL, timeframe),
+        _key(symbol, ANY_TIMEFRAME),
+        _key(ANY_SYMBOL, ANY_TIMEFRAME),
+    }
 
-    async def _update_and_notify():
+    async def _update_and_notify(st: _State):
         async with st.cond:
             st.version += 1
             st.value = direction if direction in (1, 2) else None
             st.last_monotonic = asyncio.get_running_loop().time()
-            # запомним tf_sec один раз (или обновим, если распознали)
             sec = _tf_to_seconds(timeframe)
             if sec:
                 st.tf_sec = sec
-            # сохраняем индикатор, если пришёл
             if indicator is not None:
                 st.last_indicator = indicator
+            st.last_symbol = symbol
+            st.last_timeframe = timeframe
             st.cond.notify_all()
 
-    asyncio.get_running_loop().create_task(_update_and_notify())
+    loop = asyncio.get_running_loop()
+    for k in keys:
+        loop.create_task(_update_and_notify(_states[k]))
 
 
 async def _maybe_await(func: Callable[[], Awaitable[None] | None]) -> None:
@@ -109,7 +123,7 @@ async def wait_for_signal_versioned(
     # Детектор задержки следующего прогноза:
     grace_delay_sec: float = 5.0,
     on_delay: Optional[Callable[[float], None]] = None,  # callback(delay_seconds)
-    # --- новое: вернуть вместе с direction/version ещё и meta (indicator, tf_sec) ---
+    # --- новое: вернуть вместе с direction/version ещё и meta (indicator, tf_sec, symbol, timeframe) ---
     include_meta: bool = False,
 ) -> Tuple[int, int] | Tuple[int, int, Dict[str, Optional[str | int | float]]]:
     """
@@ -118,7 +132,7 @@ async def wait_for_signal_versioned(
     По умолчанию возвращает (direction, version), где direction ∈ {1,2}.
 
     Если include_meta=True — вернёт (direction, version, meta),
-    где meta = {"indicator": str|None, "tf_sec": int|None}.
+    где meta = {"indicator": str|None, "tf_sec": int|None, "symbol": str|None, "timeframe": str|None}.
     """
     st = _states[_key(symbol, timeframe)]
     start = asyncio.get_running_loop().time()
@@ -183,6 +197,8 @@ async def wait_for_signal_versioned(
                 meta = {
                     "indicator": st.last_indicator,
                     "tf_sec": st.tf_sec,
+                    "symbol": st.last_symbol,
+                    "timeframe": st.last_timeframe,
                 }
                 st.value = None  # сигнал больше не хранится
                 return int(direction), int(ver), meta
