@@ -134,7 +134,11 @@ class StrategyBase:
     def update_params(self, **params):
         self.params.update(params)
         if hasattr(self, "log") and self.log:
-            self.log(f"[{self.symbol}] ⚙ Параметры обновлены: {params}")
+            pretty = {
+                k: (round(v, 8) if isinstance(v, float) else v)
+                for k, v in params.items()
+            }
+            self.log(f"[{self.symbol}] ⚙ Параметры обновлены: {pretty}")
 
     def get_param(self, key, default=None):
         return self.params.get(key, default)
