@@ -198,15 +198,17 @@ class MainWindow(QWidget):
 
         # === Таблица результатов сделок ===
         self.trades_table = QTableWidget(self)
-        self.trades_table.setColumnCount(9)
+        self.trades_table.setColumnCount(11)
         self.trades_table.setHorizontalHeaderLabels(
             [
-                "Время",
+                "Время сигнала",
+                "Время ставки",
                 "Индикатор",
                 "Валютная пара",
                 "ТФ",
                 "Направление",
                 "Ставка",
+                "Время",
                 "Процент",
                 "P/L",
                 "Счет",
@@ -214,7 +216,7 @@ class MainWindow(QWidget):
         )
         hdr = self.trades_table.horizontalHeader()
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
@@ -222,6 +224,8 @@ class MainWindow(QWidget):
         hdr.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(9, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(10, QHeaderView.ResizeMode.ResizeToContents)
         self.trades_table.setAlternatingRowColors(True)
         # self.trades_table.setSortingEnabled(True)
 
@@ -597,6 +601,7 @@ class MainWindow(QWidget):
         self,
         *,
         trade_id: str,
+        signal_at: str,
         placed_at: str,
         symbol: str,
         timeframe: str,
@@ -611,7 +616,8 @@ class MainWindow(QWidget):
     ):
         """
         Добавляет строку «ожидание результата».
-        Колонки: Время | Индикатор | Пара | ТФ | Направление | Ставка | % | P/L | Счет
+        Колонки: Время сигнала | Время ставки | Индикатор | Пара | ТФ |
+                  Направление | Ставка | Время | % | P/L | Счет
         В P/L показываем обратный отсчёт, синхронизированный по expected_end_ts.
         """
         from time import time as _now
@@ -642,21 +648,24 @@ class MainWindow(QWidget):
             left_now = max(0.0, expected_end_ts - _now())
             account_txt = account_mode or ("ДЕМО" if self.is_demo else "РЕАЛ")
             ccy = self.account_currency
+            duration_txt = f"{int(round(float(wait_seconds) / 60))} мин"
 
             vals = [
-                placed_at,  # 0 Время
-                (indicator or "-"),  # 1 Индикатор
-                symbol,  # 2 Пара
-                timeframe,  # 3 ТФ
-                dir_text,  # 4 Направление
-                format_money(stake, ccy),  # 5 Ставка
-                f"{percent}%",  # 6 %
-                f"Ожидание ({_fmt_left(left_now)})",  # 7 P/L
-                account_txt,  # 8 Счёт
+                signal_at,  # 0 Время сигнала
+                placed_at,  # 1 Время ставки
+                (indicator or "-"),  # 2 Индикатор
+                symbol,  # 3 Пара
+                timeframe,  # 4 ТФ
+                dir_text,  # 5 Направление
+                format_money(stake, ccy),  # 6 Ставка
+                duration_txt,  # 7 Время
+                f"{percent}%",  # 8 %
+                f"Ожидание ({_fmt_left(left_now)})",  # 9 P/L
+                account_txt,  # 10 Счёт
             ]
             for col, v in enumerate(vals):
                 it = QTableWidgetItem(str(v))
-                if col in (4, 7):  # выравниваем Направление и P/L по центру
+                if col in (5, 9):  # выравниваем Направление и P/L по центру
                     it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.trades_table.setItem(row, col, it)
 
@@ -675,7 +684,7 @@ class MainWindow(QWidget):
                 if row >= self.trades_table.rowCount():
                     timer.stop()
                     return
-                item = self.trades_table.item(row, 7)  # P/L
+                item = self.trades_table.item(row, 9)  # P/L
                 if item:
                     item.setText(f"Ожидание ({_fmt_left(left)})")
                 if left <= 0:
@@ -703,8 +712,10 @@ class MainWindow(QWidget):
                 "direction": int(direction),
                 "stake": float(stake),
                 "percent": int(percent),
+                "signal_at": signal_at,
                 "placed_at": placed_at,
                 "account_mode": account_mode or ("ДЕМО" if self.is_demo else "РЕАЛ"),
+                "wait_seconds": float(wait_seconds),
             }
 
             if was_sorting:
@@ -717,6 +728,7 @@ class MainWindow(QWidget):
         self,
         *,
         trade_id: str | None = None,
+        signal_at: str,
         placed_at: str,
         symbol: str,
         timeframe: str,
@@ -733,7 +745,7 @@ class MainWindow(QWidget):
         Красим строку по результату.
         """
 
-        def _fill_row(row: int, indicator_value: str):
+        def _fill_row(row: int, indicator_value: str, sig_time: str, place_time: str, duration_txt: str):
             dir_text = "ВВЕРХ" if int(direction) == 1 else "ВНИЗ"
             account_txt = account_mode or ("ДЕМО" if self.is_demo else "РЕАЛ")
             ccy = self.account_currency
@@ -745,19 +757,21 @@ class MainWindow(QWidget):
                 return "+" + txt if p > 0 else txt
 
             vals = [
-                placed_at,  # 0 Время
-                indicator_value,  # 1 Индикатор
-                symbol,  # 2 Пара
-                timeframe,  # 3 ТФ
-                dir_text,  # 4 Направление
-                format_money(stake, ccy),  # 5 Ставка
-                f"{percent}%",  # 6 %
-                fmt_pl(profit),  # 7 P/L
-                account_txt,  # 8 Счёт
+                sig_time,  # 0 Время сигнала
+                place_time,  # 1 Время ставки
+                indicator_value,  # 2 Индикатор
+                symbol,  # 3 Пара
+                timeframe,  # 4 ТФ
+                dir_text,  # 5 Направление
+                format_money(stake, ccy),  # 6 Ставка
+                duration_txt,  # 7 Время
+                f"{percent}%",  # 8 %
+                fmt_pl(profit),  # 9 P/L
+                account_txt,  # 10 Счёт
             ]
             for col, v in enumerate(vals):
                 it = QTableWidgetItem(str(v))
-                if col in (4, 7):
+                if col in (5, 9):
                     it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.trades_table.setItem(row, col, it)
 
@@ -780,6 +794,9 @@ class MainWindow(QWidget):
 
             row_to_update = None
             indicator_value = indicator or "-"
+            sig_time = signal_at
+            place_time = placed_at
+            duration_txt = ""
 
             if trade_id and trade_id in self.pending_trades:
                 info = self.pending_trades.pop(trade_id, {})
@@ -794,12 +811,15 @@ class MainWindow(QWidget):
                     row_to_update = row
                     # если при pending уже знали индикатор — используем его
                     indicator_value = info.get("indicator", indicator_value)
+                    sig_time = info.get("signal_at", sig_time)
+                    place_time = info.get("placed_at", place_time)
+                    duration_txt = f"{int(round(info.get('wait_seconds', 0.0) / 60))} мин"
 
             if row_to_update is None:
                 row_to_update = 0
                 self.trades_table.insertRow(row_to_update)
 
-            _fill_row(row_to_update, indicator_value)
+            _fill_row(row_to_update, indicator_value, sig_time, place_time, duration_txt)
 
             if was_sorting:
                 self.trades_table.setSortingEnabled(True)
@@ -987,6 +1007,7 @@ class MainWindow(QWidget):
         self,
         *,
         trade_id,
+        signal_at,
         symbol,
         timeframe,
         placed_at,
@@ -1000,6 +1021,7 @@ class MainWindow(QWidget):
     ):
         self.add_trade_pending(
             trade_id=trade_id,
+            signal_at=signal_at,
             placed_at=placed_at,
             symbol=symbol,
             timeframe=timeframe,
@@ -1016,6 +1038,7 @@ class MainWindow(QWidget):
         self,
         *,
         trade_id,
+        signal_at,
         symbol,
         timeframe,
         placed_at,
@@ -1029,6 +1052,7 @@ class MainWindow(QWidget):
     ):
         self.add_trade_result(
             trade_id=trade_id,
+            signal_at=signal_at,
             placed_at=placed_at,
             symbol=symbol,
             timeframe=timeframe,

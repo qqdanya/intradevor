@@ -5,6 +5,7 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox,
     QLabel,
     QLineEdit,
+    QMessageBox,
 )
 
 ALL_SYMBOLS_LABEL = "Все валютные пары"
@@ -28,6 +29,15 @@ class AddBotDialog(QDialog):
 
         layout = QVBoxLayout()
 
+        # Сначала выбор алгоритма
+        layout.addWidget(QLabel("Алгоритм:"))
+        self.strategy_combo = QComboBox()
+        for key in self.available_strategies.keys():
+            label = self.strategy_labels.get(key, key)
+            self.strategy_combo.addItem(label, userData=key)
+        layout.addWidget(self.strategy_combo)
+        self.strategy_combo.currentIndexChanged.connect(self.on_strategy_change)
+
         # Поиск валют
         layout.addWidget(QLabel("Поиск валютной пары:"))
         self.search_edit = QLineEdit()
@@ -47,14 +57,6 @@ class AddBotDialog(QDialog):
         self.tf_combo.setCurrentText("M1")
         layout.addWidget(self.tf_combo)
 
-        # Стратегии
-        layout.addWidget(QLabel("Алгоритм:"))
-        self.strategy_combo = QComboBox()
-        for key in self.available_strategies.keys():
-            label = self.strategy_labels.get(key, key)
-            self.strategy_combo.addItem(label, userData=key)
-        layout.addWidget(self.strategy_combo)
-
         # Кнопки
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -64,6 +66,7 @@ class AddBotDialog(QDialog):
         layout.addWidget(buttons)
 
         self.setLayout(layout)
+        self.on_strategy_change()
 
     def filter_symbols(self, text: str):
         self.symbol_combo.clear()
@@ -80,6 +83,25 @@ class AddBotDialog(QDialog):
             if t in s.upper() or t in s_no_slash:
                 filtered.append(s)
         self.symbol_combo.addItems(filtered)
+        self.on_strategy_change()
+
+    def on_strategy_change(self, *_):
+        key = self.selected_strategy
+        is_martingale = key == "martingale"
+
+        # disable "all" options for Martingale
+        sym_item = self.symbol_combo.model().item(0)
+        tf_item = self.tf_combo.model().item(0)
+        if sym_item:
+            sym_item.setEnabled(not is_martingale)
+        if tf_item:
+            tf_item.setEnabled(not is_martingale)
+
+        if is_martingale:
+            if self.symbol_combo.currentIndex() == 0 and self.symbol_combo.count() > 1:
+                self.symbol_combo.setCurrentIndex(1)
+            if self.tf_combo.currentIndex() == 0 and self.tf_combo.count() > 1:
+                self.tf_combo.setCurrentIndex(1)
 
     @property
     def selected_symbol(self):
@@ -95,3 +117,19 @@ class AddBotDialog(QDialog):
 
     def get_result(self):
         return self.selected_symbol, self.selected_strategy
+
+    def accept(self):
+        if (
+            self.selected_strategy == "martingale"
+            and (
+                self.selected_symbol == ALL_SYMBOLS_LABEL
+                or self.selected_timeframe == ALL_TF_LABEL
+            )
+        ):
+            QMessageBox.warning(
+                self,
+                "Ошибка",
+                "Стратегия 'Мартингейл' работает только с одной валютной парой и таймфреймом.",
+            )
+            return
+        super().accept()

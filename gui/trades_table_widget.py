@@ -9,24 +9,28 @@ class TradesTableWidget(QTableWidget):
     """
     Таблица сделок.
     Колонки:
-      [0] Время
-      [1] Индикатор        <-- ОТ КОГО ПРИШЁЛ СИГНАЛ
-      [2] Валютная пара
-      [3] ТФ
-      [4] Направление
-      [5] Ставка
-      [6] Процент
-      [7] P/L
-      [8] Счёт
+      [0] Время сигнала
+      [1] Время ставки
+      [2] Индикатор        <-- ОТ КОГО ПРИШЁЛ СИГНАЛ
+      [3] Валютная пара
+      [4] ТФ
+      [5] Направление
+      [6] Ставка
+      [7] Время
+      [8] Процент
+      [9] P/L
+      [10] Счёт
     """
 
     COLS = [
-        "Время",
+        "Время сигнала",
+        "Время ставки",
         "Индикатор",
         "Валютная пара",
         "ТФ",
         "Направление",
         "Ставка",
+        "Время",
         "Процент",
         "P/L",
         "Счет",
@@ -38,8 +42,9 @@ class TradesTableWidget(QTableWidget):
         self.setHorizontalHeaderLabels(self.COLS)
 
         hdr = self.horizontalHeader()
-        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)  # Время
-        for c in range(1, len(self.COLS)):
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)  # Время сигнала
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)  # Время ставки
+        for c in range(2, len(self.COLS)):
             hdr.setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
 
         self.setAlternatingRowColors(True)
@@ -50,11 +55,13 @@ class TradesTableWidget(QTableWidget):
     def add_pending(
         self,
         trade_id: str,
+        signal_at: str,
         placed_at: str,
         symbol: str,
         timeframe: str,
         direction: int,  # 1=UP, 2=DOWN
         stake: float,
+        duration: float,
         percent: int,
         account_mode: str,  # "ДЕМО"/"РЕАЛ"
         indicator: str = "-",  # НАЗВАНИЕ ИНДИКАТОРА
@@ -64,19 +71,21 @@ class TradesTableWidget(QTableWidget):
 
         dir_text = "ВВЕРХ" if int(direction) == 1 else "ВНИЗ"
         values = [
+            signal_at,
             placed_at,
             indicator or "-",
             symbol,
             timeframe,
             dir_text,
             f"{stake:.2f}",
+            f"{int(round(duration / 60))} мин",
             f"{percent}%",
             "ожидание…",
             account_mode,
         ]
         for col, val in enumerate(values):
             it = QTableWidgetItem(str(val))
-            if col in (4, 7):  # выравнивание Направление, P/L по центру
+            if col in (5, 9):  # выравнивание Направление, P/L по центру
                 it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.setItem(row, col, it)
 
@@ -93,11 +102,11 @@ class TradesTableWidget(QTableWidget):
             return
         row = self._row_by_trade[trade_id]
 
-        pl_item = self.item(row, 7)
+        pl_item = self.item(row, 9)
         if pl_item is None:
             pl_item = QTableWidgetItem()
             pl_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.setItem(row, 7, pl_item)
+            self.setItem(row, 9, pl_item)
 
         if profit is None:
             pl_item.setText("неизв.")
