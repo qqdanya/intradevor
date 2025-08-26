@@ -94,15 +94,19 @@ class StrategyControlDialog(QDialog):
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)  # Время ставки
         hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)  # Пара
         hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)  # ТФ
-        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)  # Индикатор
-        hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)  # Направление
+        hdr.setSectionResizeMode(
+            4, QHeaderView.ResizeMode.ResizeToContents
+        )  # Индикатор
+        hdr.setSectionResizeMode(
+            5, QHeaderView.ResizeMode.ResizeToContents
+        )  # Направление
         hdr.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)  # Ставка
         hdr.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)  # Время
         hdr.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)  # %
         hdr.setSectionResizeMode(9, QHeaderView.ResizeMode.ResizeToContents)  # P/L
         hdr.setSectionResizeMode(10, QHeaderView.ResizeMode.ResizeToContents)  # Счёт
         self.trades_table.setAlternatingRowColors(True)
-        self.trades_table.setSortingEnabled(True)
+        self.trades_table.setSortingEnabled(False)
 
         # ---------- Настройки (inline) ----------
         self.settings_box = QGroupBox("Настройки стратегии")
@@ -309,7 +313,7 @@ class StrategyControlDialog(QDialog):
             "max_steps": self.max_steps.value(),
             "repeat_count": self.repeat_count.value(),
             "min_balance": self.min_balance.value(),
-            "coefficient": self.coefficient.value(),
+            "coefficient": round(float(self.coefficient.value()), 2),
             "min_percent": self.min_percent.value(),
             "minutes": int(norm),
         }
@@ -319,7 +323,14 @@ class StrategyControlDialog(QDialog):
             self.bot.strategy.update_params(**new_params)
 
         self.minutes.setValue(int(norm))
-        self.log_edit.append(f"💾 Настройки сохранены: {new_params}")
+
+        formatted = []
+        for k, v in new_params.items():
+            if isinstance(v, float):
+                formatted.append(f"'{k}': {v:.2f}")
+            else:
+                formatted.append(f"'{k}': {v}")
+        self.log_edit.append("💾 Настройки сохранены: {" + ", ".join(formatted) + "}")
 
     # ---- хелперы: локальная таблица сделок ----
     def _fmt_money(self, value: float, ccy: str) -> str:
