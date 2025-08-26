@@ -49,6 +49,9 @@ class TradesTableWidget(QTableWidget):
 
         self.setAlternatingRowColors(True)
         self.setSortingEnabled(True)
+        self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         # trade_id -> row
         self._row_by_trade: dict[str, int] = {}
 

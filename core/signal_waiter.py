@@ -192,10 +192,12 @@ async def wait_for_signal(
     timeout: Optional[float] = None,
     raise_on_timeout: bool = True,
 ) -> int:
+    # Всегда ждём следующий сигнал, игнорируя уже полученные ранее.
+    st = _states[_key(symbol, timeframe)]
     direction, _ = await wait_for_signal_versioned(
         symbol,
         timeframe,
-        since_version=None,  # NB: стратегия, желающая избегать повторов, должна хранить версию сама
+        since_version=st.version,
         check_pause=check_pause,
         timeout=timeout,
         raise_on_timeout=raise_on_timeout,

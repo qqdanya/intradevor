@@ -228,6 +228,9 @@ class MainWindow(QWidget):
         hdr.setSectionResizeMode(10, QHeaderView.ResizeMode.ResizeToContents)
         self.trades_table.setAlternatingRowColors(True)
         # self.trades_table.setSortingEnabled(True)
+        self.trades_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.trades_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self.trades_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         layout = QVBoxLayout()
         layout.addLayout(top_layout)
