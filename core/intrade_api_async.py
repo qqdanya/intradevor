@@ -177,45 +177,22 @@ async def check_trade_result(
     user_id: str,
     user_hash: str,
     trade_id: str,
-    wait_time: float = 60.0,
-    poll_interval: float = 1.0,
-    initial_wait: float | None = None,
+    wait_time: float,
 ) -> Optional[float]:
     """
-    Периодически опрашивает сервер о результате сделки, возвращая profit
-    (result - investment) как float, либо None.
-
-    wait_time     – максимальное время ожидания в секундах.
-    poll_interval – интервал между повторными запросами.
-    initial_wait  – сколько секунд подождать перед первым запросом
-                    (по умолчанию poll_interval).
+    Ждёт wait_time сек, затем запрашивает результат.
+    Возвращает profit (result - investment) как float, либо None.
     """
-    deadline = asyncio.get_running_loop().time() + float(wait_time)
+    await asyncio.sleep(wait_time)
     payload = {"user_id": user_id, "user_hash": user_hash, "trade_id": trade_id}
-
-    # пауза перед первым запросом, чтобы не дёргать сервер слишком рано
-    if wait_time > 0:
-        delay = poll_interval if initial_wait is None else float(initial_wait)
-        await asyncio.sleep(min(delay, wait_time))
-
-    while True:
+    text = await client.post(PATH_TRADE_CHECK, data=payload, expect_json=False)
+    parts = str(text).strip().split(";")
+    if len(parts) >= 3:
         try:
-            text = await client.post(PATH_TRADE_CHECK, data=payload, expect_json=False)
+            rate, result, investment = parts[:3]
+            return float(result) - float(investment)
         except Exception:
-            text = None
-        parts = str(text).strip().split(";") if text is not None else []
-        if len(parts) >= 3:
-            try:
-                rate, result, investment = parts[:3]
-                return float(result) - float(investment)
-            except Exception:
-                pass
-
-        left = deadline - asyncio.get_running_loop().time()
-        if left <= 0:
-            break
-        await asyncio.sleep(min(poll_interval, left))
-
+            return None
     return None
 
 
