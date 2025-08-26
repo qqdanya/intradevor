@@ -78,9 +78,10 @@ class MartingaleStrategy(StrategyBase):
             p.update(params)
 
         _symbol = (symbol or "").strip()
-        _tf = (timeframe or "").strip().upper()
+        _tf_raw = (timeframe or "").strip()
+        _tf = _tf_raw.upper()
         self._use_any_symbol = _symbol == ALL_SYMBOLS_LABEL
-        self._use_any_timeframe = _tf == ALL_TF_LABEL
+        self._use_any_timeframe = _tf_raw == ALL_TF_LABEL
 
         cur_symbol = "*" if self._use_any_symbol else _symbol
         cur_tf = "*" if self._use_any_timeframe else _tf
@@ -545,8 +546,9 @@ class MartingaleStrategy(StrategyBase):
             self.params["minutes"] = self._trade_minutes
 
         if "timeframe" in params:
-            tf = str(params["timeframe"]).strip().upper()
-            self._use_any_timeframe = tf in (ALL_TF_LABEL, "*")
+            tf_raw = str(params["timeframe"]).strip()
+            tf = tf_raw.upper()
+            self._use_any_timeframe = tf_raw in (ALL_TF_LABEL, "*")
             self.timeframe = "*" if self._use_any_timeframe else tf
             self.params["timeframe"] = self.timeframe
             if self.timeframe != "*" and "minutes" not in params:
