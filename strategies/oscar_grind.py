@@ -6,10 +6,11 @@ from typing import Optional
 
 from core.http_async import HttpClient
 from core.intrade_api_async import (
-    get_balance,
+    get_balance_info,
     get_current_percent,
     place_trade,
     check_trade_result,
+    is_demo_account,
 )
 from core.signal_waiter import wait_for_signal
 from strategies.base import StrategyBase
@@ -65,6 +66,11 @@ class OscarGrindStrategy(StrategyBase):
         self.timeframe = timeframe or self.params.get("timeframe", "M1")
         self.params["timeframe"] = self.timeframe
 
+        anchor = str(self.params.get("account_currency", DEFAULTS["account_currency"])).upper()
+        self._anchor_ccy = anchor
+        self.params["account_currency"] = anchor
+        self._anchor_is_demo: Optional[bool] = None
+
         self._on_trade_result = self.params.get("on_trade_result")
         self._on_trade_pending = self.params.get("on_trade_pending")
         self._on_status = self.params.get("on_status")
@@ -83,6 +89,24 @@ class OscarGrindStrategy(StrategyBase):
         self._running = True
         log = self.log or (lambda s: None)
 
+        try:
+            self._anchor_is_demo = await is_demo_account(self.http_client)
+            mode_txt = "ДЕМО" if self._anchor_is_demo else "РЕАЛ"
+            log(f"[{self.symbol}] Якорный режим счёта: {mode_txt}")
+        except Exception as e:
+            log(f"[{self.symbol}] ⚠ Не удалось определить режим счёта при старте: {e}")
+            self._anchor_is_demo = False
+
+        try:
+            amount, cur_ccy, display = await get_balance_info(
+                self.http_client, self.user_id, self.user_hash
+            )
+            log(
+                f"[{self.symbol}] Баланс: {display} ({amount:.2f}), текущая валюта: {cur_ccy}, якорь: {self._anchor_ccy}"
+            )
+        except Exception as e:
+            log(f"[{self.symbol}] ⚠ Не удалось получить баланс при старте: {e}")
+
         base = float(self.params.get("base_investment", DEFAULTS["base_investment"]))
         repeat_count = int(self.params.get("repeat_count", DEFAULTS["repeat_count"]))
         min_balance = float(self.params.get("min_balance", DEFAULTS["min_balance"]))
@@ -93,9 +117,7 @@ class OscarGrindStrategy(StrategyBase):
         signal_timeout = float(
             self.params.get("signal_timeout_sec", DEFAULTS["signal_timeout_sec"])
         )
-        account_ccy = self.params.get(
-            "account_currency", DEFAULTS["account_currency"]
-        )
+        account_ccy = self._anchor_ccy
         minutes = int(self.params.get("minutes", DEFAULTS["minutes"]))
         result_wait_s = float(
             self.params.get("result_wait_s", DEFAULTS["result_wait_s"])
@@ -106,9 +128,16 @@ class OscarGrindStrategy(StrategyBase):
         while self._running and series_left > 0:
             await self._pause_point()
 
+            if not await self._ensure_anchor_currency():
+                continue
+            if not await self._ensure_anchor_account_mode():
+                continue
+
             # Проверка баланса перед серией
             try:
-                bal = await get_balance(self.http_client, self.user_id, self.user_hash)
+                bal, _, _ = await get_balance_info(
+                    self.http_client, self.user_id, self.user_hash
+                )
                 if bal < min_balance:
                     log(
                         f"[{self.symbol}] 🛑 Баланс {bal:.2f} ниже минимального {min_balance:.2f}"
@@ -128,6 +157,11 @@ class OscarGrindStrategy(StrategyBase):
 
             while self._running and total_profit < base:
                 await self._pause_point()
+
+                if not await self._ensure_anchor_currency():
+                    continue
+                if not await self._ensure_anchor_account_mode():
+                    continue
 
                 pct = await get_current_percent(
                     self.http_client,
@@ -256,3 +290,34 @@ class OscarGrindStrategy(StrategyBase):
         self._running = False
         self._status("завершен")
         log(f"[{self.symbol}] Завершение стратегии.")
+
+    async def _ensure_anchor_currency(self) -> bool:
+        try:
+            _, ccy_now, _ = await get_balance_info(
+                self.http_client, self.user_id, self.user_hash
+            )
+        except Exception:
+            ccy_now = None
+        if ccy_now != self._anchor_ccy:
+            self._status(f"ожидание смены валюты на {self._anchor_ccy}")
+            await self.sleep(1.0)
+            return False
+        return True
+
+    async def _ensure_anchor_account_mode(self) -> bool:
+        try:
+            demo_now = await is_demo_account(self.http_client)
+        except Exception:
+            self._status("ожидание проверки режима счёта")
+            await self.sleep(1.0)
+            return False
+
+        if self._anchor_is_demo is None:
+            self._anchor_is_demo = bool(demo_now)
+
+        if bool(demo_now) != bool(self._anchor_is_demo):
+            need = "ДЕМО" if self._anchor_is_demo else "РЕАЛ"
+            self._status(f"ожидание смены счёта на {need}")
+            await self.sleep(1.0)
+            return False
+        return True
