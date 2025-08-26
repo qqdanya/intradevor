@@ -180,21 +180,27 @@ class StrategyControlDialog(QDialog):
         ch.addWidget(self.btn_resume)
         ch.addWidget(self.btn_stop)
 
-        # ---------- Верхний блок (лог слева + сделки справа) ----------
+        # ---------- Главный блок: слева лог+настройки, справа таблица ----------
+        left_panel = QWidget()
+        lv = QVBoxLayout(left_panel)
+        lv.setContentsMargins(0, 0, 0, 0)
+        lv.setSpacing(8)
+        lv.addWidget(self.log_edit, 1)
+        lv.addWidget(self.settings_box)
+        lv.addWidget(settings_row)
+        lv.addWidget(controls)
+
         top_split = QWidget()
         hs = QHBoxLayout(top_split)
         hs.setContentsMargins(0, 0, 0, 0)
         hs.setSpacing(8)
-        hs.addWidget(self.log_edit, 1)
+        hs.addWidget(left_panel, 1)
         hs.addWidget(self.trades_table, 1)
 
         # ---------- Layout ----------
         layout = QVBoxLayout(self)
         layout.addWidget(header)
         layout.addWidget(top_split, stretch=1)
-        layout.addWidget(self.settings_box)
-        layout.addWidget(settings_row)
-        layout.addWidget(controls)
 
         # Таймер статуса/кнопок
         self.timer = QTimer(self)
