@@ -72,35 +72,33 @@ class StrategyControlDialog(QDialog):
 
         # ---------- ТАБЛИЦА СДЕЛОК (справа) ----------
         self.trades_table = QTableWidget(self)
-        self.trades_table.setColumnCount(9)
+        self.trades_table.setColumnCount(10)
         self.trades_table.setHorizontalHeaderLabels(
             [
-                "Время",  # 0
-                "Пара",  # 1
-                "ТФ",  # 2
-                "Индикатор",  # 3  (если не прилетит — ставим "—")
-                "Направление",  # 4
-                "Ставка",  # 5
-                "Процент",  # 6
-                "P/L",  # 7
-                "Счёт",  # 8
+                "Время сигнала",  # 0
+                "Время ставки",  # 1
+                "Пара",  # 2
+                "ТФ",  # 3
+                "Индикатор",  # 4  (если не прилетит — ставим "—")
+                "Направление",  # 5
+                "Ставка",  # 6
+                "Процент",  # 7
+                "P/L",  # 8
+                "Счёт",  # 9
             ]
         )
         hdr = self.trades_table.horizontalHeader()
         # PyQt6: используем QHeaderView.ResizeMode.*
-        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)  # Время
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)  # Пара
-        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)  # ТФ
-        hdr.setSectionResizeMode(
-            3, QHeaderView.ResizeMode.ResizeToContents
-        )  # Индикатор
-        hdr.setSectionResizeMode(
-            4, QHeaderView.ResizeMode.ResizeToContents
-        )  # Направление
-        hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)  # Ставка
-        hdr.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)  # %
-        hdr.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)  # P/L
-        hdr.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)  # Счёт
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)  # Время сигнала
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)  # Время ставки
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)  # Пара
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)  # ТФ
+        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)  # Индикатор
+        hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)  # Направление
+        hdr.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)  # Ставка
+        hdr.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)  # %
+        hdr.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)  # P/L
+        hdr.setSectionResizeMode(9, QHeaderView.ResizeMode.ResizeToContents)  # Счёт
         self.trades_table.setAlternatingRowColors(True)
         self.trades_table.setSortingEnabled(True)
 
@@ -357,6 +355,7 @@ class StrategyControlDialog(QDialog):
         self,
         *,
         trade_id: str,
+        signal_at: str,
         placed_at: str,
         symbol: str,
         timeframe: str,
@@ -403,19 +402,20 @@ class StrategyControlDialog(QDialog):
         ind_txt = indicator or "—"
 
         vals = [
-            placed_at,  # 0 Время
-            symbol,  # 1 Пара
-            timeframe,  # 2 ТФ
-            ind_txt,  # 3 Индикатор
-            dir_text,  # 4 Направление
-            self._fmt_money(stake, ccy),  # 5 Ставка
-            f"{percent}%",  # 6 %
-            f"Ожидание ({_fmt_left(left_now)})",  # 7 P/L
-            account_txt,  # 8 Счёт
+            signal_at,  # 0 Время сигнала
+            placed_at,  # 1 Время ставки
+            symbol,  # 2 Пара
+            timeframe,  # 3 ТФ
+            ind_txt,  # 4 Индикатор
+            dir_text,  # 5 Направление
+            self._fmt_money(stake, ccy),  # 6 Ставка
+            f"{percent}%",  # 7 %
+            f"Ожидание ({_fmt_left(left_now)})",  # 8 P/L
+            account_txt,  # 9 Счёт
         ]
         for col, v in enumerate(vals):
             it = QTableWidgetItem(str(v))
-            if col in (4, 7):
+            if col in (5, 8):
                 it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.trades_table.setItem(row, col, it)
 
@@ -433,7 +433,7 @@ class StrategyControlDialog(QDialog):
             if row >= self.trades_table.rowCount():
                 timer.stop()
                 return
-            item = self.trades_table.item(row, 7)
+            item = self.trades_table.item(row, 8)
             if item:
                 item.setText(f"Ожидание ({_fmt_left(left)})")
             if left <= 0:
@@ -454,6 +454,7 @@ class StrategyControlDialog(QDialog):
             "timer": timer,
             "expected_end_ts": float(expected_end_ts),
             "indicator": ind_txt,
+            "signal_at": signal_at,
         }
 
         if was_sort:
@@ -463,6 +464,7 @@ class StrategyControlDialog(QDialog):
         self,
         *,
         trade_id: str | None = None,
+        signal_at: str,
         placed_at: str,
         symbol: str,
         timeframe: str,
@@ -485,6 +487,8 @@ class StrategyControlDialog(QDialog):
 
         # найти существующую строку по trade_id (если была pending)
         row_to_update = None
+        ind_txt = indicator or "—"
+        sig_time = signal_at
         if trade_id and trade_id in self._pending_rows:
             info = self._pending_rows.pop(trade_id, {})
             timer = info.get("timer")
@@ -496,6 +500,8 @@ class StrategyControlDialog(QDialog):
             row = info.get("row")
             if isinstance(row, int) and 0 <= row < self.trades_table.rowCount():
                 row_to_update = row
+                ind_txt = info.get("indicator", ind_txt)
+                sig_time = info.get("signal_at", sig_time)
 
         was_sort = self.trades_table.isSortingEnabled()
         if was_sort:
@@ -510,21 +516,24 @@ class StrategyControlDialog(QDialog):
             "ДЕМО" if getattr(self.main, "is_demo", False) else "РЕАЛ"
         )
         ccy = getattr(self.main, "account_currency", "RUB")
-        ind_txt = indicator or "—"
 
         vals = [
-            placed_at,  # 0
-            symbol,  # 1
-            timeframe,  # 2
-            ind_txt,  # 3
-            dir_text,  # 4
-            self._fmt_money(stake, ccy),  # 5
-            f"{percent}%",  # 6
-            fmt_pl(profit, ccy),  # 7
-            account_txt,  # 8
+            sig_time,  # 0
+            placed_at,  # 1
+            symbol,  # 2
+            timeframe,  # 3
+            ind_txt,  # 4
+            dir_text,  # 5
+            self._fmt_money(stake, ccy),  # 6
+            f"{percent}%",  # 7
+            fmt_pl(profit, ccy),  # 8
+            account_txt,  # 9
         ]
         for col, v in enumerate(vals):
-            self.trades_table.setItem(row_to_update, col, QTableWidgetItem(str(v)))
+            item = QTableWidgetItem(str(v))
+            if col in (5, 8):
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.trades_table.setItem(row_to_update, col, item)
 
         if profit is None or abs(profit) < 1e-9:
             color = QColor("#e0e0e0")
