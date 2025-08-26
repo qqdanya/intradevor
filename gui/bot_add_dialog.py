@@ -5,7 +5,6 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox,
     QLabel,
     QLineEdit,
-    QMessageBox,
 )
 
 ALL_SYMBOLS_LABEL = "Все валютные пары"
@@ -86,22 +85,7 @@ class AddBotDialog(QDialog):
         self.on_strategy_change()
 
     def on_strategy_change(self, *_):
-        key = self.selected_strategy
-        is_martingale = key == "martingale"
-
-        # disable "all" options for Martingale
-        sym_item = self.symbol_combo.model().item(0)
-        tf_item = self.tf_combo.model().item(0)
-        if sym_item:
-            sym_item.setEnabled(not is_martingale)
-        if tf_item:
-            tf_item.setEnabled(not is_martingale)
-
-        if is_martingale:
-            if self.symbol_combo.currentIndex() == 0 and self.symbol_combo.count() > 1:
-                self.symbol_combo.setCurrentIndex(1)
-            if self.tf_combo.currentIndex() == 0 and self.tf_combo.count() > 1:
-                self.tf_combo.setCurrentIndex(1)
+        pass
 
     @property
     def selected_symbol(self):
@@ -119,14 +103,4 @@ class AddBotDialog(QDialog):
         return self.selected_symbol, self.selected_strategy
 
     def accept(self):
-        if self.selected_strategy == "martingale" and (
-            self.selected_symbol == ALL_SYMBOLS_LABEL
-            or self.selected_timeframe == ALL_TF_LABEL
-        ):
-            QMessageBox.warning(
-                self,
-                "Ошибка",
-                "Стратегия 'Мартингейл' работает только с одной валютной парой и таймфреймом.",
-            )
-            return
         super().accept()

@@ -55,9 +55,10 @@ def _minutes_from_timeframe(tf: str) -> int:
 
 class MartingaleStrategy(StrategyBase):
     """
-    Мартингейл — работает ТОЛЬКО по одной паре и ОДНОМУ таймфрейму.
-    Если в UI выбраны «Все валютные пары»/«Все таймфреймы», мы корректно
-    приводим к одиночным (символ из kwargs и TF=M1) и пишем предупреждение в лог.
+    Мартингейл — серия ставок после каждого сигнала.
+    При выборе параметров "Все валютные пары"/"Все таймфреймы" стратегия
+    будет ожидать сигнал по любой паре/таймфрейму и выполнять серию для
+    полученных значений.
     """
 
     def __init__(
@@ -76,37 +77,37 @@ class MartingaleStrategy(StrategyBase):
         if params:
             p.update(params)
 
-        # Нормализация «все» → одиночные
         _symbol = (symbol or "").strip()
         _tf = (timeframe or "").strip().upper()
-        if _symbol == ALL_SYMBOLS_LABEL:
-            _symbol = params.get("force_symbol", "") or "EUR/USD"
-        if _tf == ALL_TF_LABEL:
-            _tf = "M1"
+        self._use_any_symbol = _symbol == ALL_SYMBOLS_LABEL
+        self._use_any_timeframe = _tf == ALL_TF_LABEL
+
+        cur_symbol = "*" if self._use_any_symbol else _symbol
+        cur_tf = "*" if self._use_any_timeframe else _tf
 
         super().__init__(
             session=http_client,
             user_id=user_id,
             user_hash=user_hash,
-            symbol=_symbol,
+            symbol=cur_symbol,
             log_callback=log_callback,
             **p,
         )
 
         self.http_client = http_client
-        self.timeframe = _tf or self.params.get("timeframe", "M1")
+        self.timeframe = cur_tf or self.params.get("timeframe", "M1")
         self.params["timeframe"] = self.timeframe
 
         raw_minutes = int(
             self.params.get("minutes", _minutes_from_timeframe(self.timeframe))
         )
-        norm = normalize_sprint(self.symbol, raw_minutes)
+        norm = normalize_sprint(cur_symbol, raw_minutes)
         if norm is None:
             fallback = _minutes_from_timeframe(self.timeframe)
-            norm = normalize_sprint(self.symbol, fallback) or fallback
+            norm = normalize_sprint(cur_symbol, fallback) or fallback
             if self.log:
                 self.log(
-                    f"[{self.symbol}] ⚠ Минуты {raw_minutes} недопустимы. Использую {norm}."
+                    f"[{cur_symbol}] ⚠ Минуты {raw_minutes} недопустимы. Использую {norm}."
                 )
         self._trade_minutes = int(norm)
         self.params["minutes"] = self._trade_minutes
@@ -144,13 +145,6 @@ class MartingaleStrategy(StrategyBase):
         self._running = True
         log = self.log or (lambda s: None)
 
-        # Подсказка, если кто-то пытался запустить «на всех»
-        if self.symbol == ALL_SYMBOLS_LABEL or self.timeframe == ALL_TF_LABEL:
-            log(
-                "⚠ Мартингейл поддерживает только одну валютную пару и один таймфрейм. "
-                "Привожу к одиночным параметрам (TF=M1)."
-            )
-
         try:
             self._anchor_is_demo = await is_demo_account(self.http_client)
             mode_txt = "ДЕМО" if self._anchor_is_demo else "РЕАЛ"
@@ -179,18 +173,27 @@ class MartingaleStrategy(StrategyBase):
             return
 
         try:
-            st = peek_signal_state(self.symbol, self.timeframe)
-            self._last_signal_ver = st.get("version", 0) or 0
-            if self.log:
-                self.log(
-                    f"[{self.symbol}] Заякорена версия сигнала: v{self._last_signal_ver}"
-                )
+            if self.symbol != "*" and self.timeframe != "*":
+                st = peek_signal_state(self.symbol, self.timeframe)
+                self._last_signal_ver = st.get("version", 0) or 0
+                if self.log:
+                    self.log(
+                        f"[{self.symbol}] Заякорена версия сигнала: v{self._last_signal_ver}"
+                    )
+            else:
+                self._last_signal_ver = 0
         except Exception:
             self._last_signal_ver = 0
 
         while self._running and series_left > 0:
             self._last_signal_at_str = None
             await self._pause_point()
+
+            if self._use_any_symbol:
+                self.symbol = "*"
+            if self._use_any_timeframe:
+                self.timeframe = "*"
+                self.params["timeframe"] = self.timeframe
 
             if not await self._ensure_anchor_currency():
                 continue
@@ -494,7 +497,27 @@ class MartingaleStrategy(StrategyBase):
         direction, ver, meta = await self.wait_cancellable(coro, timeout=timeout)
         self._last_signal_ver = ver
         self._last_indicator = (meta or {}).get("indicator") or "-"
-        # фиксируем момент прихода сигнала — для таблицы "Время получения сигнала"
+
+        sig_symbol = (meta or {}).get("symbol") or self.symbol
+        sig_tf = (meta or {}).get("timeframe") or self.timeframe
+        if self._use_any_symbol:
+            self.symbol = sig_symbol
+        if self._use_any_timeframe:
+            self.timeframe = sig_tf
+            self.params["timeframe"] = self.timeframe
+        if self._use_any_symbol or self._use_any_timeframe:
+            raw_minutes = _minutes_from_timeframe(self.timeframe)
+            norm = normalize_sprint(self.symbol, raw_minutes)
+            if norm is None:
+                fallback = raw_minutes
+                norm = normalize_sprint(self.symbol, fallback) or fallback
+                if self.log:
+                    self.log(
+                        f"[{self.symbol}] ⚠ Минуты {raw_minutes} недопустимы. Использую {norm}."
+                    )
+            self._trade_minutes = int(norm)
+            self.params["minutes"] = self._trade_minutes
+
         from datetime import datetime
 
         self._last_signal_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
@@ -523,14 +546,10 @@ class MartingaleStrategy(StrategyBase):
 
         if "timeframe" in params:
             tf = str(params["timeframe"]).strip().upper()
-            if tf == ALL_TF_LABEL:
-                tf = "M1"
-                if self.log:
-                    self.log(
-                        f"[{self.symbol}] ⚠ Мартингейл не поддерживает «Все таймфреймы». Установлено M1."
-                    )
-            self.timeframe = tf
-            if "minutes" not in params:
+            self._use_any_timeframe = tf in (ALL_TF_LABEL, "*")
+            self.timeframe = "*" if self._use_any_timeframe else tf
+            self.params["timeframe"] = self.timeframe
+            if self.timeframe != "*" and "minutes" not in params:
                 self._trade_minutes = _minutes_from_timeframe(self.timeframe)
 
         if "account_currency" in params:
