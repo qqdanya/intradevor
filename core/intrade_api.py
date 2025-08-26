@@ -231,15 +231,28 @@ def place_trade(
     return None
 
 
-async def check_trade_result(session, user_id, user_hash, trade_id, wait_time):
+async def check_trade_result(session, user_id, user_hash, trade_id, wait_time=60.0):
+    """Запрашивает результат сделки и, при необходимости, опрашивает сервер.
+
+    После ожидания ``wait_time`` секунд отправляется запрос на получение
+    результата сделки. Если ответ не содержит нужных данных, выполняется
+    повторная проверка каждую секунду до появления результата. Отмена
+    корутины приводит к немедленному выходу из функции.
+    """
+
     await asyncio.sleep(wait_time)
     payload = {"user_id": user_id, "user_hash": user_hash, "trade_id": trade_id}
-    r = session.post(TRADE_CHECK_URL, data=payload)
-    parts = r.text.strip().split(";")
-    if len(parts) >= 3:
+
+    while True:
         try:
-            rate, result, investment = parts
-            return float(result) - float(investment)
-        except:
-            return None
-    return None
+            r = session.post(TRADE_CHECK_URL, data=payload)
+            parts = r.text.strip().split(";")
+            if len(parts) >= 3:
+                rate, result, investment = parts[:3]
+                return float(result) - float(investment)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+
+        await asyncio.sleep(1)

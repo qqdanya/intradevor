@@ -177,23 +177,40 @@ async def check_trade_result(
     user_id: str,
     user_hash: str,
     trade_id: str,
-    wait_time: float,
+    wait_time: float = 60.0,
 ) -> Optional[float]:
+    """Fetch trade result, polling until it becomes available.
+
+    Первоначально ждём ``wait_time`` секунд (время закрытия спринта),
+    затем запрашиваем результат сделки. Если результат не получен, то
+    продолжаем проверять его каждую секунду до тех пор, пока платформа
+    не вернёт корректные данные. Короутина прерывается только исключением
+    ``asyncio.CancelledError``.
+
+    Возвращает прибыль (``result - investment``) как ``float``.
     """
-    Ждёт wait_time сек, затем запрашивает результат.
-    Возвращает profit (result - investment) как float, либо None.
-    """
+
     await asyncio.sleep(wait_time)
     payload = {"user_id": user_id, "user_hash": user_hash, "trade_id": trade_id}
-    text = await client.post(PATH_TRADE_CHECK, data=payload, expect_json=False)
-    parts = str(text).strip().split(";")
-    if len(parts) >= 3:
+
+    while True:
         try:
-            rate, result, investment = parts[:3]
-            return float(result) - float(investment)
+            text = await client.post(PATH_TRADE_CHECK, data=payload, expect_json=False)
+        except asyncio.CancelledError:  # уважать отмену стратегии
+            raise
         except Exception:
-            return None
-    return None
+            text = ""
+
+        parts = str(text).strip().split(";")
+        if len(parts) >= 3:
+            try:
+                rate, result, investment = parts[:3]
+                return float(result) - float(investment)
+            except Exception:
+                pass
+
+        # результат ещё не готов — подождём и попробуем снова
+        await asyncio.sleep(1.0)
 
 
 # ---------------- Прочее: риск/валюта аккаунта ----------------
