@@ -7,7 +7,10 @@ from PyQt6.QtWidgets import (
     QLineEdit,
 )
 
-TIMEFRAMES = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1"]
+ALL_SYMBOLS_LABEL = "Все валютные пары"
+ALL_TF_LABEL = "Все таймфреймы"
+
+TIMEFRAMES = [ALL_TF_LABEL, "M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1"]
 
 
 class AddBotDialog(QDialog):
@@ -18,7 +21,8 @@ class AddBotDialog(QDialog):
 
         self.setWindowTitle("Добавить нового бота")
 
-        self.available_symbols = available_symbols
+        # дополняем список символов опцией "Все валютные пары"
+        self.available_symbols = [ALL_SYMBOLS_LABEL] + list(available_symbols)
         self.available_strategies = available_strategies
         self.strategy_labels = strategy_labels or {}
 
@@ -34,10 +38,10 @@ class AddBotDialog(QDialog):
         # Список валют
         layout.addWidget(QLabel("Валютная пара:"))
         self.symbol_combo = QComboBox()
-        self.symbol_combo.addItems(available_symbols)
+        self.symbol_combo.addItems(self.available_symbols)
         layout.addWidget(self.symbol_combo)
 
-        layout.addWidget(QLabel("Таймфрейм:"))  # <<< новое поле
+        layout.addWidget(QLabel("Таймфрейм:"))
         self.tf_combo = QComboBox()
         self.tf_combo.addItems(TIMEFRAMES)
         self.tf_combo.setCurrentText("M1")
@@ -63,9 +67,15 @@ class AddBotDialog(QDialog):
 
     def filter_symbols(self, text: str):
         self.symbol_combo.clear()
-        t = text.upper().replace("/", "")  # убираем "/" у запроса, чтобы не мешал
+        t = text.upper().replace("/", "")
         filtered = []
+
+        # Всегда держим опцию "Все валютные пары" сверху
+        filtered.append(ALL_SYMBOLS_LABEL)
+
         for s in self.available_symbols:
+            if s == ALL_SYMBOLS_LABEL:
+                continue
             s_no_slash = s.replace("/", "")
             if t in s.upper() or t in s_no_slash:
                 filtered.append(s)
