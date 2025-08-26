@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Optional
+from typing import Optional, Sequence
 
 from core.http_async import HttpClient
 from core.intrade_api_async import (
@@ -14,6 +14,8 @@ from core.intrade_api_async import (
 )
 from core.signal_waiter import wait_for_signal
 from strategies.base import StrategyBase
+
+ALL_SYMBOLS_LABEL = "Все валютные пары"
 
 DEFAULTS = {
     "base_investment": 100,
@@ -62,6 +64,10 @@ class OscarGrindStrategy(StrategyBase):
             **p,
         )
 
+        # если выбран режим "Все валютные пары" — список конкретных пар обязателен
+        symbols: Sequence[str] = self.params.get("symbols", [])
+        self._all_symbols = [s for s in symbols if s != ALL_SYMBOLS_LABEL]
+
         self.http_client = http_client
         self.timeframe = timeframe or self.params.get("timeframe", "M1")
         self.params["timeframe"] = self.timeframe
@@ -84,6 +90,37 @@ class OscarGrindStrategy(StrategyBase):
                     pass
 
         self._status = _status
+
+    async def _wait_any_signal(self, timeout: float) -> tuple[str, int]:
+        """Ожидает первый сигнал среди всех доступных пар."""
+        tasks = {}
+        loop = asyncio.get_running_loop()
+        for sym in self._all_symbols:
+            task = loop.create_task(
+                wait_for_signal(
+                    sym,
+                    self.timeframe,
+                    check_pause=self._pause_point,
+                    timeout=None,
+                )
+            )
+            tasks[task] = sym
+
+        try:
+            done, pending = await asyncio.wait(
+                tasks.keys(), timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+            )
+            if not done:
+                raise asyncio.TimeoutError
+            finished = done.pop()
+            symbol = tasks[finished]
+            direction = finished.result()
+            return symbol, direction
+        finally:
+            for t in tasks.keys():
+                if not t.done():
+                    t.cancel()
+            await asyncio.gather(*tasks.keys(), return_exceptions=True)
 
     async def run(self) -> None:
         self._running = True
@@ -163,27 +200,40 @@ class OscarGrindStrategy(StrategyBase):
                 if not await self._ensure_anchor_account_mode():
                     continue
 
-                pct = await get_current_percent(
-                    self.http_client,
-                    stake,
-                    self.symbol,
-                    minutes,
-                    account_ccy,
-                )
-                if pct is None or pct < min_percent:
-                    await self.sleep(wait_low)
-                    continue
-
-                try:
-                    status = await wait_for_signal(
-                        self.symbol,
-                        self.timeframe,
-                        check_pause=self._pause_point,
-                        timeout=signal_timeout,
+                if self.symbol == ALL_SYMBOLS_LABEL:
+                    try:
+                        sym, status = await self._wait_any_signal(signal_timeout)
+                    except asyncio.TimeoutError:
+                        log(f"[{self.symbol}] ⏱️ Таймаут ожидания сигнала")
+                        continue
+                    pct = await get_current_percent(
+                        self.http_client, stake, sym, minutes, account_ccy
                     )
-                except asyncio.TimeoutError:
-                    log(f"[{self.symbol}] ⏱️ Таймаут ожидания сигнала")
-                    continue
+                    if pct is None or pct < min_percent:
+                        await self.sleep(wait_low)
+                        continue
+                else:
+                    pct = await get_current_percent(
+                        self.http_client,
+                        stake,
+                        self.symbol,
+                        minutes,
+                        account_ccy,
+                    )
+                    if pct is None or pct < min_percent:
+                        await self.sleep(wait_low)
+                        continue
+                    try:
+                        status = await wait_for_signal(
+                            self.symbol,
+                            self.timeframe,
+                            check_pause=self._pause_point,
+                            timeout=signal_timeout,
+                        )
+                        sym = self.symbol
+                    except asyncio.TimeoutError:
+                        log(f"[{self.symbol}] ⏱️ Таймаут ожидания сигнала")
+                        continue
 
                 self._status("ожидание результата")
 
@@ -192,7 +242,7 @@ class OscarGrindStrategy(StrategyBase):
                     self.user_id,
                     self.user_hash,
                     stake,
-                    self.symbol,
+                    sym,
                     status,
                     minutes,
                     account_ccy=account_ccy,
@@ -200,7 +250,7 @@ class OscarGrindStrategy(StrategyBase):
                     on_log=log,
                 )
                 if not trade_id:
-                    log(f"[{self.symbol}] ❌ Сделка не размещена. Пауза и повтор.")
+                    log(f"[{sym}] ❌ Сделка не размещена. Пауза и повтор.")
                     await self.sleep(1.0)
                     continue
 
@@ -212,7 +262,7 @@ class OscarGrindStrategy(StrategyBase):
                     try:
                         self._on_trade_pending(
                             trade_id=trade_id,
-                            symbol=self.symbol,
+                            symbol=sym,
                             timeframe=self.timeframe,
                             signal_at=None,
                             placed_at=placed_at,
@@ -241,7 +291,7 @@ class OscarGrindStrategy(StrategyBase):
                     try:
                         self._on_trade_result(
                             trade_id=trade_id,
-                            symbol=self.symbol,
+                            symbol=sym,
                             timeframe=self.timeframe,
                             signal_at=None,
                             placed_at=placed_at,
@@ -259,12 +309,12 @@ class OscarGrindStrategy(StrategyBase):
 
                 if profit is None:
                     log(
-                        f"[{self.symbol}] ⚠ Результат неизвестен — считаем как убыточный."
+                        f"[{sym}] ⚠ Результат неизвестен — считаем как убыточный."
                     )
                     profit = -float(stake)
 
                 log(
-                    f"[{self.symbol}] Сделка {trade_number}: {'ПРИБЫЛЬ' if profit > 0 else 'УБЫТОК'} {profit:.2f}"
+                    f"[{sym}] Сделка {trade_number}: {'ПРИБЫЛЬ' if profit > 0 else 'УБЫТОК'} {profit:.2f}"
                 )
 
                 total_profit += profit

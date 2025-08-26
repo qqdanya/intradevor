@@ -20,7 +20,7 @@ import asyncio
 from core.money import format_money
 from core.logger import ts
 
-from gui.bot_add_dialog import AddBotDialog
+from gui.bot_add_dialog import AddBotDialog, ALL_SYMBOLS_LABEL
 from gui.risk_dialog import RiskDialog
 from core.session import (
     create_http_client_from_browser_cookies,
@@ -360,6 +360,14 @@ class MainWindow(QWidget):
                     "timeframe": timeframe,
                     "params": {
                         "account_currency": getattr(self, "account_currency", "RUB"),
+                        # если выбран режим "все валютные пары" — передаём полный список
+                        **(
+                            {
+                                "symbols": self.available_symbols
+                            }
+                            if symbol == ALL_SYMBOLS_LABEL
+                            else {}
+                        ),
                     },
                 },
                 on_log=self.append_to_log,
