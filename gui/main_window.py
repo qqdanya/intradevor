@@ -297,7 +297,7 @@ class MainWindow(QWidget):
 
     def _make_bot_logger(self, bot):
         def _log(text: str):
-            s = str(text)
+            s = ts(str(text))
             self.bot_logs[bot].append(s)
             for cb in list(self.bot_log_listeners.get(bot, [])):
                 try:

@@ -21,6 +21,7 @@ from PyQt6.QtCore import QTimer, Qt
 from strategies.martingale import _minutes_from_timeframe
 from core.policy import normalize_sprint
 from core.money import format_money
+from core.logger import ts
 
 
 class StrategyControlDialog(QDialog):
@@ -65,9 +66,11 @@ class StrategyControlDialog(QDialog):
 
         # История старых логов
         for line in self.main.bot_logs.get(self.bot, []):
-            self.log_edit.append(line)
+            self.log_edit.append(line if str(line).startswith("[") else ts(str(line)))
         # Подписка на новые логи
-        self._log_listener = lambda text: self.log_edit.append(text)
+        self._log_listener = lambda text: self.log_edit.append(
+            text if str(text).startswith("[") else ts(str(text))
+        )
         self.main.bot_log_listeners.setdefault(self.bot, []).append(self._log_listener)
 
         # ---------- ТАБЛИЦА СДЕЛОК (справа) ----------
@@ -263,34 +266,34 @@ class StrategyControlDialog(QDialog):
         try:
             if not self.bot.has_started():
                 self.bot.start()
-                self.log_edit.append("🚀 Старт стратегии.")
+                self.log_edit.append(ts("🚀 Старт стратегии."))
         except Exception as e:
-            self.log_edit.append(f"⚠ Ошибка старта: {e}")
+            self.log_edit.append(ts(f"⚠ Ошибка старта: {e}"))
 
     def _do_pause(self):
         try:
             self.bot.pause()
-            self.log_edit.append("⏸ Пауза.")
+            self.log_edit.append(ts("⏸ Пауза."))
         except Exception as e:
-            self.log_edit.append(f"⚠ Ошибка паузы: {e}")
+            self.log_edit.append(ts(f"⚠ Ошибка паузы: {e}"))
 
     def _do_resume(self):
         try:
             self.bot.resume()
-            self.log_edit.append("▶ Продолжено.")
+            self.log_edit.append(ts("▶ Продолжено."))
         except Exception as e:
-            self.log_edit.append(f"⚠ Ошибка продолжения: {e}")
+            self.log_edit.append(ts(f"⚠ Ошибка продолжения: {e}"))
 
     def _do_stop(self):
         try:
             self.bot.stop()
-            self.log_edit.append("⏹ Остановлено.")
+            self.log_edit.append(ts("⏹ Остановлено."))
             self.btn_pause.setEnabled(False)
             self.btn_resume.setEnabled(False)
             self.btn_stop.setEnabled(False)
             self.btn_start.setEnabled(False)
         except Exception as e:
-            self.log_edit.append(f"⚠ Ошибка остановки: {e}")
+            self.log_edit.append(ts(f"⚠ Ошибка остановки: {e}"))
 
     # ---- сохранение настроек ----
     def save_settings(self):
@@ -333,7 +336,7 @@ class StrategyControlDialog(QDialog):
                 formatted.append(f"'{k}': {v:.2f}")
             else:
                 formatted.append(f"'{k}': {v}")
-        self.log_edit.append("💾 Настройки сохранены: {" + ", ".join(formatted) + "}")
+        self.log_edit.append(ts("💾 Настройки сохранены: {" + ", ".join(formatted) + "}"))
 
     # ---- хелперы: локальная таблица сделок ----
     def _fmt_money(self, value: float, ccy: str) -> str:
@@ -566,7 +569,7 @@ class StrategyControlDialog(QDialog):
                 self._add_trade_result_local(**payload)
         except Exception as e:
             # пусть ошибка в UI не роняет окно
-            self.log_edit.append(f"⚠ Ошибка обновления таблицы сделок: {e}")
+            self.log_edit.append(ts(f"⚠ Ошибка обновления таблицы сделок: {e}"))
 
     # ---- жизнь/смерть окна ----
     def closeEvent(self, e):
