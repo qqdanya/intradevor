@@ -605,14 +605,20 @@ class MainWindow(QWidget):
         percent: int,
         wait_seconds: float,
         account_mode: str | None = None,
-        indicator: str | None = None,  # <= НОВОЕ
+        indicator: str | None = None,
+        expected_end_ts: float
+        | None = None,  # ⬅️ НОВОЕ: абсолютный дедлайн (epoch seconds)
     ):
         """
         Добавляет строку «ожидание результата».
         Колонки: Время | Индикатор | Пара | ТФ | Направление | Ставка | % | P/L | Счет
-        В P/L показываем обратный отсчёт.
+        В P/L показываем обратный отсчёт, синхронизированный по expected_end_ts.
         """
         from time import time as _now
+
+        # если нам не прислали абсолютный дедлайн — посчитаем сами
+        if expected_end_ts is None:
+            expected_end_ts = _now() + float(wait_seconds)
 
         def _fmt_left(sec: float) -> str:
             s = int(max(0, round(sec)))
@@ -633,19 +639,19 @@ class MainWindow(QWidget):
             self.trades_table.insertRow(row)
 
             dir_text = "ВВЕРХ" if int(direction) == 1 else "ВНИЗ"
-            remaining_txt = _fmt_left(wait_seconds)
+            left_now = max(0.0, expected_end_ts - _now())
             account_txt = account_mode or ("ДЕМО" if self.is_demo else "РЕАЛ")
             ccy = self.account_currency
 
             vals = [
                 placed_at,  # 0 Время
-                indicator or "-",  # 1 Индикатор
+                (indicator or "-"),  # 1 Индикатор
                 symbol,  # 2 Пара
                 timeframe,  # 3 ТФ
                 dir_text,  # 4 Направление
                 format_money(stake, ccy),  # 5 Ставка
                 f"{percent}%",  # 6 %
-                f"Ожидание ({remaining_txt})",  # 7 P/L
+                f"Ожидание ({_fmt_left(left_now)})",  # 7 P/L
                 account_txt,  # 8 Счёт
             ]
             for col, v in enumerate(vals):
@@ -660,12 +666,11 @@ class MainWindow(QWidget):
                 if it:
                     it.setBackground(yellow)
 
-            deadline = _now() + float(wait_seconds)
             timer = QTimer(self)
             timer.setInterval(1000)
 
             def _tick():
-                left = deadline - _now()
+                left = expected_end_ts - _now()
                 # если строка пропала — стоп
                 if row >= self.trades_table.rowCount():
                     timer.stop()
@@ -679,17 +684,27 @@ class MainWindow(QWidget):
             timer.timeout.connect(_tick)
             timer.start()
 
+            # остановим предыдущий таймер, если такой trade_id уже есть
             prev = self.pending_trades.get(trade_id)
             if prev and isinstance(prev.get("timer"), QTimer):
                 try:
                     prev["timer"].stop()
                 except Exception:
                     pass
-            # сохраним и индикатор, пригодится если результат придёт без pending
+
+            # сохраняем всё, включая индикатор и дедлайн
             self.pending_trades[trade_id] = {
                 "row": row,
                 "timer": timer,
                 "indicator": (indicator or "-"),
+                "expected_end_ts": float(expected_end_ts),
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "direction": int(direction),
+                "stake": float(stake),
+                "percent": int(percent),
+                "placed_at": placed_at,
+                "account_mode": account_mode or ("ДЕМО" if self.is_demo else "РЕАЛ"),
             }
 
             if was_sorting:
@@ -919,15 +934,32 @@ class MainWindow(QWidget):
                 pass
 
     def _on_bot_trade_pending(self, bot, **kw):
-        """Сначала — в общую таблицу, затем — подписчикам этого бота (если открыто окно стратегии)."""
+        """
+        Сначала — в общую таблицу, затем — уведомляем окна стратегии ЭТОГО бота.
+        Прокидываем expected_end_ts, чтобы их таймеры были синхронными.
+        """
+        from time import time as _now
+
+        wait_seconds = float(kw.get("wait_seconds", 0.0))
+        expected_end_ts = kw.get("expected_end_ts")
+        if expected_end_ts is None:
+            expected_end_ts = _now() + wait_seconds
+
         try:
-            self.add_trade_pending(**kw)
+            # В общую (главную) таблицу
+            self.add_trade_pending(**kw, expected_end_ts=expected_end_ts)
         finally:
-            # кэшируем для истории
-            self.bot_trade_history[bot].append(("pending", dict(kw)))
+            # Готовим полезную нагрузку с абсолютным дедлайном
+            payload = dict(kw)
+            payload["expected_end_ts"] = float(expected_end_ts)
+
+            # ⬇️ НОВОЕ: сохраняем в историю, чтобы StrategyControlDialog восстановил «ожидание»
+            self.bot_trade_history[bot].append(("pending", dict(payload)))
+
+            # Уведомляем открытые окна конкретного бота
             for cb in list(self.bot_trade_listeners.get(bot, [])):
                 try:
-                    cb("pending", kw)
+                    cb("pending", payload)
                 except Exception:
                     pass
 

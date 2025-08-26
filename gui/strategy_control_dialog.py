@@ -366,11 +366,16 @@ class StrategyControlDialog(QDialog):
         wait_seconds: float,
         account_mode: str | None = None,
         indicator: str | None = None,
+        expected_end_ts: float | None = None,  # ⬅️ НОВОЕ: абсолютный дедлайн
     ):
         """
         Добавляем жёлтую строку с обратным отсчётом в ПРАВОЙ таблице диалога.
+        Отсчёт синхронизирован по expected_end_ts, чтобы не «прыгало» при открытии окна.
         """
         from time import time as _now
+
+        if expected_end_ts is None:
+            expected_end_ts = _now() + float(wait_seconds)
 
         def _fmt_left(sec: float) -> str:
             s = int(max(0, round(sec)))
@@ -390,7 +395,7 @@ class StrategyControlDialog(QDialog):
         self.trades_table.insertRow(row)
 
         dir_text = "ВВЕРХ" if int(direction) == 1 else "ВНИЗ"
-        remaining_txt = _fmt_left(wait_seconds)
+        left_now = max(0.0, expected_end_ts - _now())
         account_txt = account_mode or (
             "ДЕМО" if getattr(self.main, "is_demo", False) else "РЕАЛ"
         )
@@ -405,11 +410,14 @@ class StrategyControlDialog(QDialog):
             dir_text,  # 4 Направление
             self._fmt_money(stake, ccy),  # 5 Ставка
             f"{percent}%",  # 6 %
-            f"Ожидание ({remaining_txt})",  # 7 P/L
+            f"Ожидание ({_fmt_left(left_now)})",  # 7 P/L
             account_txt,  # 8 Счёт
         ]
         for col, v in enumerate(vals):
-            self.trades_table.setItem(row, col, QTableWidgetItem(str(v)))
+            it = QTableWidgetItem(str(v))
+            if col in (4, 7):
+                it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.trades_table.setItem(row, col, it)
 
         yellow = QBrush(QColor("#fff4c2"))
         for c in range(self.trades_table.columnCount()):
@@ -417,14 +425,11 @@ class StrategyControlDialog(QDialog):
             if it:
                 it.setBackground(yellow)
 
-        deadline = _now() + float(wait_seconds)
         timer = QTimer(self)
         timer.setInterval(1000)
 
         def _tick():
-            left = deadline - _now()
-            # строка могла уехать из‑за сортировки — трекать по индексу нельзя,
-            # здесь для простоты держим “как есть”: верхняя строка в ожидании
+            left = expected_end_ts - _now()
             if row >= self.trades_table.rowCount():
                 timer.stop()
                 return
@@ -437,14 +442,19 @@ class StrategyControlDialog(QDialog):
         timer.timeout.connect(_tick)
         timer.start()
 
-        # сохраним pending, чтобы обновить потом по trade_id
+        # сохраним pending, чтобы потом обновить по result
         prev = self._pending_rows.get(trade_id)
         if prev and isinstance(prev.get("timer"), QTimer):
             try:
                 prev["timer"].stop()
             except Exception:
                 pass
-        self._pending_rows[trade_id] = {"row": row, "timer": timer}
+        self._pending_rows[trade_id] = {
+            "row": row,
+            "timer": timer,
+            "expected_end_ts": float(expected_end_ts),
+            "indicator": ind_txt,
+        }
 
         if was_sort:
             self.trades_table.setSortingEnabled(True)
