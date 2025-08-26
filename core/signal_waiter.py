@@ -121,19 +121,20 @@ async def wait_for_signal_versioned(
     где meta = {"indicator": str|None, "tf_sec": int|None}.
     """
     st = _states[_key(symbol, timeframe)]
+    start = asyncio.get_running_loop().time()
 
     async def _await_next_change() -> Tuple[Optional[int], int]:
         async with st.cond:
-            # быстрый путь
-            if st.value in (1, 2) and (
-                since_version is None or st.version > since_version
+            # быстрый путь — только если сигнал пришёл ПОСЛЕ start
+            if (
+                st.value in (1, 2)
+                and (since_version is None or st.version > since_version)
+                and (st.last_monotonic or 0) >= start
             ):
                 return st.value, st.version
             # иначе ждём новое сообщение
             await st.cond.wait()
             return st.value, st.version
-
-    start = asyncio.get_running_loop().time()
 
     while True:
         # пауза/стоп
@@ -171,14 +172,21 @@ async def wait_for_signal_versioned(
             # мягкий режим: крутимся дальше
             continue
 
-        # игнорируем очистки (None) и устаревшие версии
-        if direction in (1, 2) and (since_version is None or ver > since_version):
+        # игнорируем очистки, устаревшие версии и старые сигналы
+        if (
+            direction in (1, 2)
+            and (since_version is None or ver > since_version)
+            and st.last_monotonic is not None
+            and st.last_monotonic >= start
+        ):
             if include_meta:
                 meta = {
                     "indicator": st.last_indicator,
                     "tf_sec": st.tf_sec,
                 }
+                st.value = None  # сигнал больше не хранится
                 return int(direction), int(ver), meta
+            st.value = None  # сигнал больше не хранится
             return int(direction), int(ver)
         # иначе ждём следующего уведомления
 
