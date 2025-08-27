@@ -200,9 +200,7 @@ async def wait_for_signal_versioned(
                     "symbol": st.last_symbol,
                     "timeframe": st.last_timeframe,
                 }
-                st.value = None  # сигнал больше не хранится
                 return int(direction), int(ver), meta
-            st.value = None  # сигнал больше не хранится
             return int(direction), int(ver)
         # иначе ждём следующего уведомления
 
