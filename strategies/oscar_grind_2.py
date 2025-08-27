@@ -1,4 +1,4 @@
-# strategies/oscar_grind.py
+# strategies/oscar_grind_2.py
 from __future__ import annotations
 
 import asyncio
@@ -47,14 +47,12 @@ DEFAULTS = {
 }
 
 
-class OscarGrindStrategy(StrategyBase):
-    """
-    Oscar Grind (позитивная прогрессия):
-    - Цель серии — получить фиксированный профит (target_profit), по умолчанию 1 «единицу» (base_investment).
-    - На проигрыше следующая ставка НЕ увеличивается (остаётся прежней).
-    - На выигрыше следующая ставка увеличивается на 1 «единицу», но НЕ больше, чем необходимо,
-      чтобы при следующем выигрыше достичь целевой прибыли серии.
-    - Серия заканчивается, когда cumulative_profit >= target_profit, либо по лимиту шагов.
+class OscarGrind2Strategy(StrategyBase):
+    """Oscar Grind 2 (позитивная прогрессия).
+
+    Вариант стратегии, в котором после выигрыша следующая ставка
+    увеличивается на 1 «единицу», но не больше, чем необходимо для
+    достижения целевой прибыли серии одним следующим выигрышем.
     """
 
     def __init__(
@@ -440,34 +438,18 @@ class OscarGrindStrategy(StrategyBase):
                     break
 
                 # Вычислим следующую ставку по правилам Oscar Grind
-                k = pct / 100.0
-                # Сколько ещё надо добрать профита
                 need = max(0.0, target_profit - cum_profit)
-
-                if outcome == "win":
-                    # Выигрыш → увеличиваем на 1 unit, но не выше, чем нужно для достижения цели за один следующий WIN
-                    # Требуемая ставка для достижения цели одной следующей победой:
-                    # need = next_stake * k  →  next_stake_req = ceil(need / k)
-                    next_req = math.ceil(need / k) if k > 0 else stake
-                    next_stake = max(base_unit, min(stake + base_unit, float(next_req)))
-                    log(
-                        f"[{self.symbol}] ✅ WIN: profit={profit:.2f}. "
-                        f"Накоплено {cum_profit:.2f}/{target_profit:.2f}. "
-                        f"Следующая ставка = min(stake+unit, req) → {stake + base_unit:.2f} / {next_req:.2f} = {next_stake:.2f}"
-                    )
-                else:
-                    # Проигрыш или возврат → ставка остаётся прежней
-                    next_stake = stake
-                    if outcome == "refund":
-                        log(
-                            f"[{self.symbol}] ↩️ REFUND: ставка возвращена. "
-                            f"Следующая ставка остаётся {next_stake:.2f}."
-                        )
-                    else:
-                        log(
-                            f"[{self.symbol}] ❌ LOSS: profit={0.0 if profit is None else profit:.2f}. "
-                            f"Следующая ставка остаётся {next_stake:.2f}."
-                        )
+                next_stake = self._next_stake(
+                    outcome=outcome,
+                    stake=stake,
+                    base_unit=base_unit,
+                    pct=pct,
+                    need=need,
+                    profit=0.0 if profit is None else float(profit),
+                    cum_profit=cum_profit,
+                    target_profit=target_profit,
+                    log=log,
+                )
 
                 # Переходим к следующему шагу
                 stake = float(next_stake)
@@ -492,6 +474,42 @@ class OscarGrindStrategy(StrategyBase):
 
         self._running = False
         (self.log or (lambda s: None))(f"[{self.symbol}] Завершение стратегии.")
+
+    def _next_stake(
+        self,
+        *,
+        outcome: str,
+        stake: float,
+        base_unit: float,
+        pct: float,
+        need: float,
+        profit: float,
+        cum_profit: float,
+        target_profit: float,
+        log,
+    ) -> float:
+        k = pct / 100.0
+        if outcome == "win":
+            next_req = math.ceil(need / k) if k > 0 else stake
+            next_stake = max(base_unit, min(stake + base_unit, float(next_req)))
+            log(
+                f"[{self.symbol}] ✅ WIN: profit={profit:.2f}. "
+                f"Накоплено {cum_profit:.2f}/{target_profit:.2f}. "
+                f"Следующая ставка = min(stake+unit, req) → {stake + base_unit:.2f} / {next_req:.2f} = {next_stake:.2f}"
+            )
+        else:
+            next_stake = stake
+            if outcome == "refund":
+                log(
+                    f"[{self.symbol}] ↩️ REFUND: ставка возвращена. "
+                    f"Следующая ставка остаётся {next_stake:.2f}."
+                )
+            else:
+                log(
+                    f"[{self.symbol}] ❌ LOSS: profit={profit:.2f}. "
+                    f"Следующая ставка остаётся {next_stake:.2f}."
+                )
+        return float(next_stake)
 
     async def _ensure_anchor_currency(self) -> bool:
         try:

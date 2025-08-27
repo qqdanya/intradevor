@@ -42,7 +42,8 @@ from core.ws_client import listen_to_signals
 from core.bot_manager import BotManager
 from core.bot import Bot
 from strategies.martingale import MartingaleStrategy
-from strategies.oscar_grind import OscarGrindStrategy
+from strategies.oscar_grind_1 import OscarGrind1Strategy
+from strategies.oscar_grind_2 import OscarGrind2Strategy
 
 
 class MainWindow(QWidget):
@@ -92,11 +93,13 @@ class MainWindow(QWidget):
         ]
         self.available_strategies = {
             "martingale": MartingaleStrategy,
-            "oscar_grind": OscarGrindStrategy,
+            "oscar_grind_1": OscarGrind1Strategy,
+            "oscar_grind_2": OscarGrind2Strategy,
         }
         self.strategy_labels = {
             "martingale": "Мартингейл",
-            "oscar_grind": "Оскар Грайнд",
+            "oscar_grind_1": "Оскар Грайнд 1",
+            "oscar_grind_2": "Оскар Грайнд 2",
         }
 
         self.bot_ever_started = defaultdict(bool)
