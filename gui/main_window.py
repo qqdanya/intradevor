@@ -725,11 +725,16 @@ class MainWindow(QWidget):
 
             def _tick():
                 left = expected_end_ts - _now()
-                # если строка пропала — стоп
-                if row >= self.trades_table.rowCount():
+                info = self.pending_trades.get(trade_id)
+                if not info:
                     timer.stop()
                     return
-                item = self.trades_table.item(row, 10)  # P/L
+                cur_row = info.get("row")
+                # если строка пропала — стоп
+                if not isinstance(cur_row, int) or cur_row >= self.trades_table.rowCount():
+                    timer.stop()
+                    return
+                item = self.trades_table.item(cur_row, 10)  # P/L
                 if item:
                     item.setText(f"Ожидание ({_fmt_left(left)})")
                 if left <= 0:
