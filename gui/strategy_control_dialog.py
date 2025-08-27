@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QColor, QBrush
 from PyQt6.QtCore import QTimer, Qt
+from core.money import format_amount
 from strategies.martingale import _minutes_from_timeframe
 from core.policy import normalize_sprint
 from core.money import format_money
@@ -92,22 +93,7 @@ class StrategyControlDialog(QDialog):
             ]
         )
         hdr = self.trades_table.horizontalHeader()
-        # PyQt6: используем QHeaderView.ResizeMode.*
-        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)  # Время сигнала
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)  # Время ставки
-        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)  # Пара
-        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)  # ТФ
-        hdr.setSectionResizeMode(
-            4, QHeaderView.ResizeMode.ResizeToContents
-        )  # Индикатор
-        hdr.setSectionResizeMode(
-            5, QHeaderView.ResizeMode.ResizeToContents
-        )  # Направление
-        hdr.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)  # Ставка
-        hdr.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)  # Время
-        hdr.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)  # %
-        hdr.setSectionResizeMode(9, QHeaderView.ResizeMode.ResizeToContents)  # P/L
-        hdr.setSectionResizeMode(10, QHeaderView.ResizeMode.ResizeToContents)  # Счёт
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.trades_table.setAlternatingRowColors(True)
         self.trades_table.setSortingEnabled(False)
         self.trades_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -259,6 +245,7 @@ class StrategyControlDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addWidget(header)
         layout.addWidget(top_split, stretch=1)
+        self.resize(1000, 600)
 
         # Таймер статуса/кнопок
         self.timer = QTimer(self)
@@ -392,7 +379,7 @@ class StrategyControlDialog(QDialog):
         formatted = []
         for k, v in new_params.items():
             if isinstance(v, float):
-                formatted.append(f"'{k}': {v:.2f}")
+                formatted.append(f"'{k}': {format_amount(v)}")
             else:
                 formatted.append(f"'{k}': {v}")
         self.log_edit.append(

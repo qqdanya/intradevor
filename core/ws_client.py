@@ -122,9 +122,10 @@ async def listen_to_signals() -> None:
 
                     dt_naive = sig.timestamp.replace(tzinfo=None)
                     msg_dir = {1: "UP", 2: "DOWN", None: "none"}[sig.direction]
-                    _log(
-                        f"[WS] {sig.symbol} / {sig.timeframe}. Прогноз: {msg_dir} от {sig.indicator}. Время свечи: {dt_naive.strftime('%H:%M')}"
-                    )
+                    if msg_dir != "none":
+                        _log(
+                            f"[WS] {sig.symbol} / {sig.timeframe}. Прогноз: {msg_dir} от {sig.indicator}. Время свечи: {dt_naive.strftime('%H:%M')}"
+                        )
         except Exception as e:
             delay = min(30, 2 ** min(retry, 5))
             _log(f"[WS] Потеря соединения: {e}. Повтор через {delay}c")

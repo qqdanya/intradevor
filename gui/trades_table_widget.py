@@ -3,6 +3,7 @@ from __future__ import annotations
 from PyQt6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QBrush
+from core.money import format_amount
 
 
 class TradesTableWidget(QTableWidget):
@@ -44,10 +45,7 @@ class TradesTableWidget(QTableWidget):
         self.setHorizontalHeaderLabels(self.COLS)
 
         hdr = self.horizontalHeader()
-        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)  # Время сигнала
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)  # Время ставки
-        for c in range(2, len(self.COLS)):
-            hdr.setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
         self.setAlternatingRowColors(True)
         self.setSortingEnabled(True)
@@ -84,7 +82,7 @@ class TradesTableWidget(QTableWidget):
             symbol,
             timeframe,
             dir_text,
-            f"{stake:.2f}",
+            format_amount(stake),
             f"{int(round(duration / 60))} мин",
             f"{percent}%",
             "ожидание…",
@@ -119,7 +117,7 @@ class TradesTableWidget(QTableWidget):
             pl_item.setText("неизв.")
             return
 
-        text = f"{profit:+.2f}"
+        text = format_amount(profit, show_plus=True)
         if currency_suffix:
             text += f" {currency_suffix}"
         pl_item.setText(text)

@@ -8,6 +8,7 @@ from bs4 import BeautifulSoup
 
 from core.http_async import HttpClient
 from core.policy import DEFAULT_ACCOUNT_CCY, clamp_stake, normalize_sprint
+from core.money import format_amount
 from core.intrade_api import (
     _parse_balance_text,
 )  # переиспользуем точный парсер sync-версии
@@ -143,7 +144,10 @@ async def place_trade(
 
     clamped = clamp_stake(account_ccy, inv)
     if clamped != inv:
-        msg = f"[{option}] ℹ️ Ставка приведена к лимитам {account_ccy}: {clamped:.2f}"
+        msg = (
+            f"[{option}] ℹ️ Ставка приведена к лимитам {account_ccy}: "
+            f"{format_amount(clamped)}"
+        )
         if strict:
             if on_log:
                 on_log(f"[{option}] 🚫 Ставка вне лимитов {account_ccy}. {msg}")

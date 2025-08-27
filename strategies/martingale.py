@@ -14,6 +14,7 @@ from core.intrade_api_async import (
 )
 from core.signal_waiter import wait_for_signal_versioned, peek_signal_state
 from strategies.base import StrategyBase
+from core.money import format_amount
 from core.policy import normalize_sprint
 
 ALL_SYMBOLS_LABEL = "Все валютные пары"
@@ -160,7 +161,7 @@ class MartingaleStrategy(StrategyBase):
                 self.http_client, self.user_id, self.user_hash
             )
             log(
-                f"[{self.symbol}] Баланс: {display} ({amount:.2f}), текущая валюта: {cur_ccy}, якорь: {self._anchor_ccy}"
+                f"[{self.symbol}] Баланс: {display} ({format_amount(amount)}), текущая валюта: {cur_ccy}, якорь: {self._anchor_ccy}"
             )
         except Exception as e:
             log(f"[{self.symbol}] ⚠ Не удалось получить баланс при старте: {e}")
@@ -212,7 +213,7 @@ class MartingaleStrategy(StrategyBase):
             min_balance = float(self.params.get("min_balance", DEFAULTS["min_balance"]))
             if bal < min_balance:
                 log(
-                    f"[{self.symbol}] ⛔ Баланс ниже минимума ({bal:.2f} < {min_balance:.2f}). Ожидание..."
+                    f"[{self.symbol}] ⛔ Баланс ниже минимума ({format_amount(bal)} < {format_amount(min_balance)}). Ожидание..."
                 )
                 await self.sleep(2.0)
                 continue
@@ -309,12 +310,12 @@ class MartingaleStrategy(StrategyBase):
                 )
                 if cur_balance is None or (cur_balance - stake) < min_floor:
                     log(
-                        f"[{self.symbol}] 🛑 Сделка {stake:.2f} {account_ccy} может опустить баланс ниже "
-                        f"{min_floor:.2f} {account_ccy}"
+                        f"[{self.symbol}] 🛑 Сделка {format_amount(stake)} {account_ccy} может опустить баланс ниже "
+                        f"{format_amount(min_floor)} {account_ccy}"
                         + (
                             ""
                             if cur_balance is None
-                            else f" (текущий {cur_balance:.2f} {account_ccy})"
+                            else f" (текущий {format_amount(cur_balance)} {account_ccy})"
                         )
                         + ". Останавливаю стратегию."
                     )
@@ -327,7 +328,7 @@ class MartingaleStrategy(StrategyBase):
                     continue
 
                 log(
-                    f"[{self.symbol}] step={step} stake={stake:.2f} min={self._trade_minutes} "
+                    f"[{self.symbol}] step={step} stake={format_amount(stake)} min={self._trade_minutes} "
                     f"side={'UP' if status == 1 else 'DOWN'} payout={pct}%"
                 )
 
@@ -417,7 +418,7 @@ class MartingaleStrategy(StrategyBase):
                     stake *= coeff
                 elif profit > 0:
                     log(
-                        f"[{self.symbol}] ✅ WIN: profit={profit:.2f}. Серия завершена, откат к базе."
+                        f"[{self.symbol}] ✅ WIN: profit={format_amount(profit)}. Серия завершена, откат к базе."
                     )
                     break
                 elif abs(profit) < 1e-9:
@@ -426,7 +427,7 @@ class MartingaleStrategy(StrategyBase):
                     )
                 else:
                     log(
-                        f"[{self.symbol}] ❌ LOSS: profit={profit:.2f}. Увеличиваем ставку."
+                        f"[{self.symbol}] ❌ LOSS: profit={format_amount(profit)}. Увеличиваем ставку."
                     )
                     step += 1
                     stake *= coeff
