@@ -138,6 +138,7 @@ class OscarGrind2Strategy(StrategyBase):
         self.params["account_currency"] = anchor
 
         self._anchor_is_demo: Optional[bool] = None
+        self._low_payout_notified = False
 
     async def run(self) -> None:
         self._running = True
@@ -299,11 +300,18 @@ class OscarGrind2Strategy(StrategyBase):
                     continue
                 if pct < min_pct:
                     self._status("ожидание высокого процента")
-                    log(
-                        f"[{self.symbol}] ℹ Низкий payout {pct}% < {min_pct}% — ждём {wait_low}s"
-                    )
+                    if not self._low_payout_notified:
+                        log(
+                            f"[{self.symbol}] ℹ Низкий payout {pct}% < {min_pct}% — ждём {wait_low}s"
+                        )
+                        self._low_payout_notified = True
                     await self.sleep(wait_low)
                     continue
+                if self._low_payout_notified:
+                    log(
+                        f"[{self.symbol}] ℹ Работа продолжается (текущий payout = {pct}%)"
+                    )
+                    self._low_payout_notified = False
 
                 # Контроль min_balance к текущей ставке
                 try:
