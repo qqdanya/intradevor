@@ -50,6 +50,7 @@ class RiskDialog(QDialog):
 
         form.addRow(buttons)
         self.setLayout(form)
+        self.adjustSize()
 
     def values(self) -> Tuple[int, int]:
         """

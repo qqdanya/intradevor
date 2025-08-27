@@ -53,7 +53,7 @@ class AddBotDialog(QDialog):
         layout.addWidget(QLabel("Таймфрейм:"))
         self.tf_combo = QComboBox()
         self.tf_combo.addItems(TIMEFRAMES)
-        self.tf_combo.setCurrentText("M1")
+        self.tf_combo.setCurrentText(ALL_TF_LABEL)
         layout.addWidget(self.tf_combo)
 
         # Кнопки
@@ -66,6 +66,7 @@ class AddBotDialog(QDialog):
 
         self.setLayout(layout)
         self.on_strategy_change()
+        self.resize(self.sizeHint())
 
     def filter_symbols(self, text: str):
         self.symbol_combo.clear()

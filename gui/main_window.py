@@ -183,14 +183,7 @@ class MainWindow(QWidget):
             ]
         )
         hdr = self.bot_table.horizontalHeader()
-        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.bot_table.setAlternatingRowColors(True)
         self.bot_table.setSortingEnabled(False)
         self.bot_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -234,18 +227,7 @@ class MainWindow(QWidget):
             ]
         )
         hdr = self.trades_table.horizontalHeader()
-        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(9, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(10, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(11, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.trades_table.setAlternatingRowColors(True)
         # self.trades_table.setSortingEnabled(True)
         self.trades_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -266,6 +248,7 @@ class MainWindow(QWidget):
         layout.addWidget(QLabel("Сделки:"))
         layout.addWidget(self.trades_table)
         self.setLayout(layout)
+        self.resize(1200, 700)
 
         QTimer.singleShot(0, self.start_async_tasks)
 
@@ -922,9 +905,8 @@ class MainWindow(QWidget):
             v = float(value)
         except Exception:
             v = 0.0
-        sign = "+" if v > 1e-12 else ""
         ccy = getattr(self, "account_currency", "RUB")
-        return f"{sign}{v:.2f} {ccy}"
+        return format_money(v, ccy, show_plus=True)
 
     def _refresh_bot_rows_runtime(self):
         now = asyncio.get_running_loop().time()

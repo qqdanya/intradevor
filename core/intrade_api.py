@@ -7,6 +7,7 @@ from core.policy import (
     clamp_stake,
     normalize_sprint,
 )
+from core.money import format_amount
 
 BALANCE_URL = f"{config.base_url}/balance.php"
 TRADE_URL = f"{config.base_url}/ajax5_new.php"
@@ -200,7 +201,10 @@ def place_trade(
 
     clamped = clamp_stake(account_ccy, inv)
     if clamped != inv:
-        msg = f"[{option}] ℹ️ Ставка приведена к лимитам {account_ccy}: {clamped:.2f}"
+        msg = (
+            f"[{option}] ℹ️ Ставка приведена к лимитам {account_ccy}: "
+            f"{format_amount(clamped)}"
+        )
         if strict:
             if on_log:
                 on_log(f"[{option}] 🚫 Ставка вне лимитов {account_ccy}. {msg}")
