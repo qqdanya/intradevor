@@ -502,12 +502,19 @@ class StrategyControlDialog(QDialog):
         timer.start()
 
         # сохраним pending, чтобы потом обновить по result
-        prev = self._pending_rows.get(trade_id)
+        prev = self._pending_rows.pop(trade_id, None)
         if prev and isinstance(prev.get("timer"), QTimer):
             try:
                 prev["timer"].stop()
             except Exception:
                 pass
+
+        # сдвинем индексы ранее вставленных строк
+        for info in self._pending_rows.values():
+            r = info.get("row")
+            if isinstance(r, int) and r >= row:
+                info["row"] = r + 1
+
         self._pending_rows[trade_id] = {
             "row": row,
             "timer": timer,
@@ -575,6 +582,11 @@ class StrategyControlDialog(QDialog):
         if row_to_update is None:
             row_to_update = 0
             self.trades_table.insertRow(row_to_update)
+            # сдвинем индексы pending'ов, т.к. вставили строку сверху
+            for info in self._pending_rows.values():
+                r = info.get("row")
+                if isinstance(r, int) and r >= row_to_update:
+                    info["row"] = r + 1
 
         dir_text = "ВВЕРХ" if int(direction) == 1 else "ВНИЗ"
         account_txt = account_mode or (
