@@ -489,10 +489,15 @@ class StrategyControlDialog(QDialog):
 
         def _tick():
             left = expected_end_ts - _now()
-            if row >= self.trades_table.rowCount():
+            info = self._pending_rows.get(trade_id)
+            if not info:
                 timer.stop()
                 return
-            item = self.trades_table.item(row, 9)
+            cur_row = info.get("row")
+            if not isinstance(cur_row, int) or cur_row >= self.trades_table.rowCount():
+                timer.stop()
+                return
+            item = self.trades_table.item(cur_row, 9)
             if item:
                 item.setText(f"Ожидание ({_fmt_left(left)})")
             if left <= 0:
