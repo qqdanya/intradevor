@@ -134,7 +134,7 @@ class StrategyControlDialog(QDialog):
         strategy_key = str(self.bot.strategy_kwargs.get("strategy_key", "")).lower()
         self.strategy_key = strategy_key
 
-        if strategy_key == "oscar_grind":
+        if strategy_key in ("oscar_grind_1", "oscar_grind_2"):
             self.minutes = QSpinBox()
             self.minutes.setRange(5 if symbol == "BTCUSDT" else 1, 500)
             self.minutes.setValue(default_minutes)
@@ -361,7 +361,7 @@ class StrategyControlDialog(QDialog):
             box.open()
             return
 
-        if getattr(self, "strategy_key", "") == "oscar_grind":
+        if getattr(self, "strategy_key", "") in ("oscar_grind_1", "oscar_grind_2"):
             new_params = {
                 "base_investment": self.base_investment.value(),
                 "target_profit": self.target_profit.value(),
