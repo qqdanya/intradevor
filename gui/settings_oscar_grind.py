@@ -1,10 +1,11 @@
+# gui/settings_oscar_grind.py
 from PyQt6.QtWidgets import (
     QDialog,
     QFormLayout,
     QSpinBox,
+    QDoubleSpinBox,
     QDialogButtonBox,
 )
-
 from strategies.martingale import _minutes_from_timeframe
 from core.policy import normalize_sprint
 
@@ -16,16 +17,33 @@ class OscarGrindSettingsDialog(QDialog):
         self.params = params.copy()
 
         tf = str(self.params.get("timeframe", "M1"))
-        symbol = str(self.params.get("symbol", ""))
-        default_minutes = int(self.params.get("minutes", _minutes_from_timeframe(tf)))
+        symbol = str(self.params.get("symbol", ""))  # прокинут из MainWindow
 
+        default_minutes = int(self.params.get("minutes", _minutes_from_timeframe(tf)))
+        base_default = int(self.params.get("base_investment", 100))
+        target_default = self.params.get("target_profit", None)
+        if target_default in (None, 0):
+            target_default = base_default
+
+        # Время экспирации
         self.minutes = QSpinBox()
         self.minutes.setRange(5 if symbol == "BTCUSDT" else 1, 500)
         self.minutes.setValue(default_minutes)
 
+        # Базовая «единица» (unit)
         self.base_investment = QSpinBox()
         self.base_investment.setRange(1, 50000)
-        self.base_investment.setValue(self.params.get("base_investment", 100))
+        self.base_investment.setValue(base_default)
+
+        # Цель серии по прибыли (в валюте счёта)
+        self.target_profit = QSpinBox()
+        self.target_profit.setRange(1, 1_000_000)
+        self.target_profit.setValue(int(target_default))
+
+        # Ограничители
+        self.max_steps = QSpinBox()
+        self.max_steps.setRange(1, 100)
+        self.max_steps.setValue(self.params.get("max_steps", 20))
 
         self.repeat_count = QSpinBox()
         self.repeat_count.setRange(1, 1000)
@@ -35,16 +53,29 @@ class OscarGrindSettingsDialog(QDialog):
         self.min_balance.setRange(1, 10_000_000)
         self.min_balance.setValue(self.params.get("min_balance", 100))
 
+        # Фильтр payout
         self.min_percent = QSpinBox()
         self.min_percent.setRange(0, 100)
         self.min_percent.setValue(self.params.get("min_percent", 70))
 
+        # Поведение направления (фиксировать по первому сигналу)
+        self.lock_direction = QSpinBox()
+        self.lock_direction.setRange(
+            0, 1
+        )  # 1 = фиксировать, 0 = брать новый каждый раз
+        self.lock_direction.setValue(
+            1 if self.params.get("lock_direction_to_first", True) else 0
+        )
+
         form = QFormLayout()
-        form.addRow("Базовая ставка", self.base_investment)
+        form.addRow("Базовая ставка (unit)", self.base_investment)
+        form.addRow("Цель серии, прибыль", self.target_profit)
         form.addRow("Время экспирации (мин)", self.minutes)
+        form.addRow("Макс. сделок в серии", self.max_steps)
         form.addRow("Повторов серии", self.repeat_count)
         form.addRow("Мин. баланс", self.min_balance)
         form.addRow("Мин. процент", self.min_percent)
+        form.addRow("Фиксировать направление (0/1)", self.lock_direction)
 
         btns = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -56,6 +87,7 @@ class OscarGrindSettingsDialog(QDialog):
         self.setLayout(form)
 
     def get_params(self) -> dict:
+        # Мягкая нормализация минут через policy
         symbol = str(self.params.get("symbol", ""))
         m = int(self.minutes.value())
         norm = normalize_sprint(symbol, m)
@@ -64,9 +96,11 @@ class OscarGrindSettingsDialog(QDialog):
 
         return {
             "minutes": int(norm),
-            "base_investment": self.base_investment.value(),
-            "repeat_count": self.repeat_count.value(),
-            "min_balance": self.min_balance.value(),
-            "min_percent": self.min_percent.value(),
+            "base_investment": int(self.base_investment.value()),
+            "target_profit": int(self.target_profit.value()),
+            "max_steps": int(self.max_steps.value()),
+            "repeat_count": int(self.repeat_count.value()),
+            "min_balance": int(self.min_balance.value()),
+            "min_percent": int(self.min_percent.value()),
+            "lock_direction_to_first": bool(self.lock_direction.value() == 1),
         }
-

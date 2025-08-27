@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from typing import Optional
 
 from core.http_async import HttpClient
@@ -14,55 +15,46 @@ from core.intrade_api_async import (
 )
 from core.signal_waiter import wait_for_signal_versioned, peek_signal_state
 from strategies.base import StrategyBase
-from core.policy import normalize_sprint, clamp_stake
+from core.policy import normalize_sprint
+
+# Берём вспомогательные вещи из мартингейла, чтобы не дублировать
+from strategies.martingale import (
+    _minutes_from_timeframe,
+    ALL_SYMBOLS_LABEL,
+    ALL_TF_LABEL,
+)
 
 
 DEFAULTS = {
-    "base_investment": 100,  # базовая ставка (единица)
-    "target_units": 1.0,  # сколько базовых ставок хотим заработать за серию
-    "cap_to_target": 1,  # ограничивать рост ставки суммой, достаточной для добора до цели
-    "max_steps": 50,  # предохранитель: максимум сделок в серии
-    "repeat_count": 10,  # сколько серий выполнить
-    "min_balance": 100,  # ниже этого порога не торгуем
-    "min_percent": 70,  # минимальный payout %
-    "wait_on_low_percent": 1,  # ждать при низком % (сек)
-    "signal_timeout_sec": 3600,  # таймаут ожидания сигнала (сек)
-    "account_currency": "RUB",  # якорная валюта аккаунта
-    "result_wait_s": 60.0,  # ждать результат сделки (сек)
-    "grace_delay_sec": 30.0,  # терпимая задержка следующего прогноза (сек)
+    # Базовая «единица» ставки (unit)
+    "base_investment": 100,
+    # Цель серии по прибыли (в валюте счёта). По умолчанию == base_investment
+    "target_profit": None,  # если None — будет подставлено base_investment при инициализации
+    # Ограничения/повторения
+    "max_steps": 20,  # максимум сделок в серии
+    "repeat_count": 10,  # сколько серий подряд выполнять
+    "min_balance": 100,  # ниже не торгуем
+    # Фильтр по payout
+    "min_percent": 70,
+    "wait_on_low_percent": 1,  # задержка (сек) когда payout ниже минимума
+    # Временные и прочие параметры
+    "signal_timeout_sec": 3600,
+    "account_currency": "RUB",
+    "result_wait_s": 60.0,
+    "grace_delay_sec": 30.0,
+    # Поведение серии: фиксировать направление по первому сигналу (как в мартингейле)
+    "lock_direction_to_first": True,
 }
-
-
-def _minutes_from_timeframe(tf: str) -> int:
-    # "M1","M5","M15","M30","H1","H4","D1","W1" -> минуты (для sprint)
-    if not tf:
-        return 1
-    unit = tf[0].upper()
-    try:
-        n = int(tf[1:])
-    except Exception:
-        return 1
-    if unit == "M":
-        return n
-    if unit == "H":
-        return n * 60
-    if unit == "D":
-        return n * 60 * 24
-    if unit == "W":
-        return n * 60 * 24 * 7
-    return 1
 
 
 class OscarGrindStrategy(StrategyBase):
     """
-    Оскар Грайнд для бинарных опционов.
-
-    Ключевые отличия от мартингейла:
-      • цель серии — плюс N «единиц» (target_units×base_investment);
-      • ставка после LOSS не меняется; после WIN увеличивается на +1 «единицу»;
-      • опционально ограничиваем следующую ставку расчётом «хватит ли выигрышной прибыли,
-        чтобы добрать оставшуюся цель серии» с учётом payout;
-      • серия завершается, когда суммарный P/L серии ≥ целевой прибыли.
+    Oscar Grind (позитивная прогрессия):
+    - Цель серии — получить фиксированный профит (target_profit), по умолчанию 1 «единицу» (base_investment).
+    - На проигрыше следующая ставка НЕ увеличивается (остаётся прежней).
+    - На выигрыше следующая ставка увеличивается на 1 «единицу», но НЕ больше, чем необходимо,
+      чтобы при следующем выигрыше достичь целевой прибыли серии.
+    - Серия заканчивается, когда cumulative_profit >= target_profit, либо по лимиту шагов.
     """
 
     def __init__(
@@ -81,38 +73,47 @@ class OscarGrindStrategy(StrategyBase):
         if params:
             p.update(params)
 
+        # Если цель не задана — равна base_investment
+        if p.get("target_profit") in (None, 0):
+            p["target_profit"] = float(p.get("base_investment", 100))
+
+        _symbol = (symbol or "").strip()
+        _tf_raw = (timeframe or "").strip()
+        _tf = _tf_raw.upper()
+
+        self._use_any_symbol = _symbol == ALL_SYMBOLS_LABEL
+        self._use_any_timeframe = _tf_raw == ALL_TF_LABEL
+
+        cur_symbol = "*" if self._use_any_symbol else _symbol
+        cur_tf = "*" if self._use_any_timeframe else _tf
+
         super().__init__(
             session=http_client,
             user_id=user_id,
             user_hash=user_hash,
-            symbol=symbol,
+            symbol=cur_symbol,
             log_callback=log_callback,
             **p,
         )
 
-        # чтобы Bot._run мог корректно закрыть per-bot клиента
         self.http_client = http_client
-
-        # таймфрейм сигналов
-        self.timeframe = timeframe or self.params.get("timeframe", "M1")
+        self.timeframe = cur_tf or self.params.get("timeframe", "M1")
         self.params["timeframe"] = self.timeframe
 
-        # минуты сделки (нормализация по политике)
         raw_minutes = int(
             self.params.get("minutes", _minutes_from_timeframe(self.timeframe))
         )
-        norm = normalize_sprint(self.symbol, raw_minutes)
+        norm = normalize_sprint(cur_symbol, raw_minutes)
         if norm is None:
             fallback = _minutes_from_timeframe(self.timeframe)
-            norm = normalize_sprint(self.symbol, fallback) or fallback
+            norm = normalize_sprint(cur_symbol, fallback) or fallback
             if self.log:
                 self.log(
-                    f"[{self.symbol}] ⚠ Минуты {raw_minutes} недопустимы. Использую {norm}."
+                    f"[{cur_symbol}] ⚠ Минуты {raw_minutes} недопустимы. Использую {norm}."
                 )
         self._trade_minutes = int(norm)
         self.params["minutes"] = self._trade_minutes
 
-        # колбэки в GUI
         self._on_trade_result = self.params.get("on_trade_result")
         self._on_trade_pending = self.params.get("on_trade_pending")
         self._on_status = self.params.get("on_status")
@@ -130,20 +131,21 @@ class OscarGrindStrategy(StrategyBase):
         self._running = False
         self._last_signal_ver: Optional[int] = None
         self._last_indicator: str = "-"
+        self._last_signal_at_str: Optional[str] = None
 
-        # якорная валюта / режим счёта
-        self._anchor_ccy = str(
+        anchor = str(
             self.params.get("account_currency", DEFAULTS["account_currency"])
         ).upper()
-        self.params["account_currency"] = self._anchor_ccy
+        self._anchor_ccy = anchor
+        self.params["account_currency"] = anchor
+
         self._anchor_is_demo: Optional[bool] = None
 
-    # ---- основной сценарий ----
     async def run(self) -> None:
         self._running = True
         log = self.log or (lambda s: None)
 
-        # Зафиксируем якорный режим счёта при старте
+        # Зафиксируем начальный режим счёта
         try:
             self._anchor_is_demo = await is_demo_account(self.http_client)
             mode_txt = "ДЕМО" if self._anchor_is_demo else "РЕАЛ"
@@ -152,7 +154,7 @@ class OscarGrindStrategy(StrategyBase):
             log(f"[{self.symbol}] ⚠ Не удалось определить режим счёта при старте: {e}")
             self._anchor_is_demo = False
 
-        # sanity-лог по балансу
+        # Баланс при старте (информативно)
         try:
             amount, cur_ccy, display = await get_balance_info(
                 self.http_client, self.user_id, self.user_hash
@@ -163,17 +165,6 @@ class OscarGrindStrategy(StrategyBase):
         except Exception as e:
             log(f"[{self.symbol}] ⚠ Не удалось получить баланс при старте: {e}")
 
-        # Заякорим текущую версию сигналов (чтобы не среагировать на "старый" уже полученный)
-        try:
-            st = peek_signal_state(self.symbol, self.timeframe)
-            self._last_signal_ver = st.get("version", 0) or 0
-            if self.log:
-                self.log(
-                    f"[{self.symbol}] Заякорена версия сигнала: v{self._last_signal_ver}"
-                )
-        except Exception:
-            self._last_signal_ver = 0
-
         series_left = int(self.params.get("repeat_count", DEFAULTS["repeat_count"]))
         if series_left <= 0:
             log(
@@ -183,16 +174,36 @@ class OscarGrindStrategy(StrategyBase):
             (self.log or (lambda s: None))(f"[{self.symbol}] Завершение стратегии.")
             return
 
+        # Зафиксируем версию сигнала, если пара/ТФ не «*»
+        try:
+            if self.symbol != "*" and self.timeframe != "*":
+                st = peek_signal_state(self.symbol, self.timeframe)
+                self._last_signal_ver = st.get("version", 0) or 0
+                log(
+                    f"[{self.symbol}] Заякорена версия сигнала: v{self._last_signal_ver}"
+                )
+            else:
+                self._last_signal_ver = 0
+        except Exception:
+            self._last_signal_ver = 0
+
         while self._running and series_left > 0:
+            self._last_signal_at_str = None
             await self._pause_point()
 
-            # Проверки якорей до серии
+            # Разрешаем * (все пары/ТФ)
+            if self._use_any_symbol:
+                self.symbol = "*"
+            if self._use_any_timeframe:
+                self.timeframe = "*"
+                self.params["timeframe"] = self.timeframe
+
             if not await self._ensure_anchor_currency():
                 continue
             if not await self._ensure_anchor_account_mode():
                 continue
 
-            # Порог входа по балансу
+            # Проверка минимального баланса
             try:
                 bal, _, _ = await get_balance_info(
                     self.http_client, self.user_id, self.user_hash
@@ -208,15 +219,10 @@ class OscarGrindStrategy(StrategyBase):
                 continue
 
             # Параметры серии
-            base = float(
-                self.params.get("base_investment", DEFAULTS["base_investment"])
-            )
-            target_units = float(
-                self.params.get("target_units", DEFAULTS["target_units"])
-            )
-            cap_to_target = bool(
-                int(self.params.get("cap_to_target", DEFAULTS["cap_to_target"]))
-            )
+            base_unit = float(self.params.get("base_investment", 100))
+            target_profit = float(
+                self.params.get("target_profit", base_unit)
+            )  # цель профита в валюте счёта
             max_steps = int(self.params.get("max_steps", DEFAULTS["max_steps"]))
             min_pct = int(self.params.get("min_percent", DEFAULTS["min_percent"]))
             wait_low = float(
@@ -228,43 +234,59 @@ class OscarGrindStrategy(StrategyBase):
             sig_timeout = float(
                 self.params.get("signal_timeout_sec", DEFAULTS["signal_timeout_sec"])
             )
+            lock_dir = bool(
+                self.params.get(
+                    "lock_direction_to_first", DEFAULTS["lock_direction_to_first"]
+                )
+            )
             account_ccy = self._anchor_ccy
 
-            series_target = base * max(
-                0.0, target_units
-            )  # целевая прибыль в валюте счёта
-            series_pl = 0.0
-            stake = base  # стартовая ставка
-            step = 0
-            did_place_any_trade = False
+            if max_steps <= 0:
+                log(
+                    f"[{self.symbol}] ⚠ max_steps={max_steps} — серию не стартуем. Жду следующий сигнал."
+                )
+                await self.sleep(1.0)
+                continue
 
-            # Серия
-            while (
-                self._running and step < max_steps and series_pl < series_target - 1e-9
-            ):
+            # Состояние серии Oscar Grind
+            step_idx = 0
+            cum_profit = 0.0  # накопленный профиль серии (может уходить в минус)
+            stake = base_unit  # текущая ставка (unit-кратная)
+
+            series_direction = (
+                None  # зафиксируем по первому сигналу (как в мартингейле)
+            )
+
+            # Основной цикл серии
+            while self._running and step_idx < max_steps:
                 await self._pause_point()
 
-                # якоря перед каждым действием
                 if not await self._ensure_anchor_currency():
                     continue
                 if not await self._ensure_anchor_account_mode():
                     continue
 
-                # ждём сигнал
-                self._status("ожидание сигнала")
-                log(
-                    f"[{self.symbol}] ⏳ Ожидание сигнала на {self.timeframe} (шаг {step}, ставка={stake:.2f})..."
-                )
-                try:
-                    direction = await self.wait_signal(timeout=sig_timeout)
-                except asyncio.TimeoutError:
+                # Получаем (или переиспользуем) направление
+                if series_direction is None or not lock_dir:
+                    self._status("ожидание сигнала")
                     log(
-                        f"[{self.symbol}] ⌛ Таймаут ожидания сигнала внутри серии — выхожу из серии."
+                        f"[{self.symbol}] ⏳ Ожидание сигнала на {self.timeframe} (шаг {step_idx + 1})..."
                     )
-                    break
-                status = 1 if int(direction) == 1 else 2
+                    try:
+                        direction = await self.wait_signal(timeout=sig_timeout)
+                        if lock_dir and series_direction is None:
+                            series_direction = 1 if int(direction) == 1 else 2
+                        else:
+                            series_direction = 1 if int(direction) == 1 else 2
+                    except asyncio.TimeoutError:
+                        log(
+                            f"[{self.symbol}] ⌛ Таймаут ожидания сигнала внутри серии — выхожу из серии."
+                        )
+                        break
 
-                # процент (payout) под ТЕКУЩУЮ ставку
+                status = series_direction  # 1=UP, 2=DOWN
+
+                # Узнаём payout на текущую ставку
                 pct = await get_current_percent(
                     self.http_client,
                     investment=stake,
@@ -285,7 +307,7 @@ class OscarGrindStrategy(StrategyBase):
                     await self.sleep(wait_low)
                     continue
 
-                # защита min_balance: не опускаться ниже порога в случае LOSS
+                # Контроль min_balance к текущей ставке
                 try:
                     cur_balance, _, _ = await get_balance_info(
                         self.http_client, self.user_id, self.user_hash
@@ -309,23 +331,17 @@ class OscarGrindStrategy(StrategyBase):
                     self._running = False
                     break
 
-                # финальная проверка якорей
-                if not await self._ensure_anchor_currency():
-                    continue
-                if not await self._ensure_anchor_account_mode():
-                    continue
-
-                log(
-                    f"[{self.symbol}] step={step} stake={stake:.2f} min={self._trade_minutes} "
-                    f"side={'UP' if status == 1 else 'DOWN'} payout={pct}%"
-                )
-
-                # для GUI: режим счета
+                # Текущий режим счёта (для GUI)
                 try:
                     demo_now = await is_demo_account(self.http_client)
                 except Exception:
                     demo_now = False
                 account_mode = "ДЕМО" if demo_now else "РЕАЛ"
+
+                log(
+                    f"[{self.symbol}] step={step_idx + 1} stake={stake:.2f} min={self._trade_minutes} "
+                    f"side={'UP' if status == 1 else 'DOWN'} payout={pct}%"
+                )
 
                 # --- размещаем сделку ---
                 self._status("делает ставку")
@@ -346,9 +362,7 @@ class OscarGrindStrategy(StrategyBase):
                     await self.sleep(1.0)
                     continue
 
-                did_place_any_trade = True
-
-                # GUI: ожидание результата
+                # GUI: ожидаем результат (две метки времени)
                 if callable(self._on_trade_pending):
                     from datetime import datetime
 
@@ -358,6 +372,7 @@ class OscarGrindStrategy(StrategyBase):
                             trade_id=trade_id,
                             symbol=self.symbol,
                             timeframe=self.timeframe,
+                            signal_at=self._last_signal_at_str,
                             placed_at=placed_at_str,
                             direction=status,
                             stake=float(stake),
@@ -371,7 +386,6 @@ class OscarGrindStrategy(StrategyBase):
 
                 self._status("ожидание результата")
 
-                # ждём результат
                 profit = await check_trade_result(
                     self.http_client,
                     user_id=self.user_id,
@@ -390,6 +404,7 @@ class OscarGrindStrategy(StrategyBase):
                             trade_id=trade_id,
                             symbol=self.symbol,
                             timeframe=self.timeframe,
+                            signal_at=self._last_signal_at_str,
                             placed_at=placed_at_str,
                             direction=status,
                             stake=float(stake),
@@ -401,76 +416,69 @@ class OscarGrindStrategy(StrategyBase):
                     except Exception:
                         pass
 
-                # интерпретация результата в духе Oscar Grind
-                # для управления серией считаем None как LOSS ~ -stake (консервативно),
-                # чтобы цель серии не засчиталась раньше времени
+                # Обновим накопленный профит
                 if profit is None:
                     log(f"[{self.symbol}] ⚠ Результат неизвестен — считаем как LOSS.")
-                    eff_pl = -float(stake)
-                    series_pl += eff_pl
-                    # ставка НЕ меняется
-                elif abs(profit) < 1e-9:
-                    log(
-                        f"[{self.symbol}] 🤝 PUSH: возврат ставки. Повтор шага без изменения."
-                    )
-                    # серия_pl не меняется; ставка не меняется
-                elif profit > 0:
-                    series_pl += float(profit)
-                    log(
-                        f"[{self.symbol}] ✅ WIN: profit={profit:.2f}. Прогресс серии: {series_pl:.2f}/{series_target:.2f}."
-                    )
-                    if series_pl >= series_target - 1e-9:
-                        # цель достигнута — серия завершена
-                        break
-                    # иначе — увеличить ставку на +base, возможно ограничив под «остаток цели»
-                    next_by_rule = float(stake) + float(base)
-                    if cap_to_target:
-                        remaining = max(0.0, series_target - series_pl)
-                        # сколько ставки достаточно при данном payout, чтобы добрать остаток
-                        need = remaining / max(1e-9, (pct / 100.0))
-                        # допускаем «снижение», если для точного добора нужно меньше текущей
-                        candidate = min(next_by_rule, need)
-                    else:
-                        candidate = next_by_rule
-                    # привести к лимитам валюты
-                    stake = clamp_stake(account_ccy, candidate)
-                else:  # LOSS
-                    series_pl += float(profit)
-                    log(
-                        f"[{self.symbol}] ❌ LOSS: profit={profit:.2f}. Прогресс серии: {series_pl:.2f}/{series_target:.2f}."
-                    )
-                    # ставка НЕ меняется
+                    cum_profit -= float(stake)
+                else:
+                    cum_profit += float(profit)
 
-                step += 1
+                # Проверим цель
+                if cum_profit >= target_profit:
+                    log(
+                        f"[{self.symbol}] ✅ Серия завершена: достигнута цель {target_profit:.2f} "
+                        f"(накоплено {cum_profit:.2f})."
+                    )
+                    step_idx += 1
+                    break
+
+                # Вычислим следующую ставку по правилам Oscar Grind
+                k = pct / 100.0
+                # Сколько ещё надо добрать профита
+                need = max(0.0, target_profit - cum_profit)
+
+                if profit is None or profit <= 0.0:
+                    # Проигрыш → оставляем ставку прежней (классика ОГ)
+                    next_stake = stake
+                    log(
+                        f"[{self.symbol}] ❌ LOSS: profit={0.0 if profit is None else profit:.2f}. "
+                        f"Следующая ставка остаётся {next_stake:.2f}."
+                    )
+                else:
+                    # Выигрыш → увеличиваем на 1 unit, но не выше, чем нужно для достижения цели за один следующий WIN
+                    # Требуемая ставка для достижения цели одной следующей победой:
+                    # need = next_stake * k  →  next_stake_req = ceil(need / k)
+                    next_req = math.ceil(need / k) if k > 0 else stake
+                    next_stake = max(base_unit, min(stake + base_unit, float(next_req)))
+                    log(
+                        f"[{self.symbol}] ✅ WIN: profit={profit:.2f}. "
+                        f"Накоплено {cum_profit:.2f}/{target_profit:.2f}. "
+                        f"Следующая ставка = min(stake+unit, req) → {stake + base_unit:.2f} / {next_req:.2f} = {next_stake:.2f}"
+                    )
+
+                # Переходим к следующему шагу
+                stake = float(next_stake)
+                step_idx += 1
                 await self.sleep(0.2)
 
-            # прерывание по stop()
             if not self._running:
                 break
 
-            # итог серии
-            if not did_place_any_trade:
+            if step_idx == 0:
                 log(
-                    f"[{self.symbol}] ℹ Серия завершена без сделок. Серий осталось: {series_left}."
+                    f"[{self.symbol}] ℹ Серия завершена без сделок (max_steps={max_steps} или условия не выполнились). "
+                    f"Серий осталось: {series_left}."
                 )
             else:
-                if series_pl >= series_target - 1e-9:
+                if step_idx >= max_steps:
                     log(
-                        f"[{self.symbol}] 🎯 Цель серии достигнута (+{series_target:.2f})."
+                        f"[{self.symbol}] 🛑 Достигнут лимит шагов ({max_steps}). Переход к новой серии."
                     )
-                elif step >= max_steps:
-                    log(
-                        f"[{self.symbol}] 🛑 Достигнут лимит шагов ({max_steps}). Завершаю серию."
-                    )
-                else:
-                    log(f"[{self.symbol}] ℹ Ранний выход из серии.")
                 series_left -= 1
                 log(f"[{self.symbol}] ▶ Осталось серий: {series_left}")
 
         self._running = False
         (self.log or (lambda s: None))(f"[{self.symbol}] Завершение стратегии.")
-
-    # ---- вспомогательные ----
 
     async def _ensure_anchor_currency(self) -> bool:
         try:
@@ -479,7 +487,6 @@ class OscarGrindStrategy(StrategyBase):
             )
         except Exception:
             ccy_now = None
-
         if ccy_now != self._anchor_ccy:
             self._status(f"ожидание смены валюты на {self._anchor_ccy}")
             await self.sleep(1.0)
@@ -505,10 +512,6 @@ class OscarGrindStrategy(StrategyBase):
         return True
 
     async def wait_signal(self, *, timeout: float) -> int:
-        """
-        Ожидает НОВЫЙ (version > self._last_signal_ver) сигнал up/down.
-        none (очистка) не возвращается.
-        """
         grace = float(self.params.get("grace_delay_sec", DEFAULTS["grace_delay_sec"]))
 
         def _on_delay(sec: float):
@@ -531,9 +534,32 @@ class OscarGrindStrategy(StrategyBase):
         direction, ver, meta = await self.wait_cancellable(coro, timeout=timeout)
         self._last_signal_ver = ver
         self._last_indicator = (meta or {}).get("indicator") or "-"
+
+        sig_symbol = (meta or {}).get("symbol") or self.symbol
+        sig_tf = (meta or {}).get("timeframe") or self.timeframe
+        if self._use_any_symbol:
+            self.symbol = sig_symbol
+        if self._use_any_timeframe:
+            self.timeframe = sig_tf
+            self.params["timeframe"] = self.timeframe
+        if self._use_any_symbol or self._use_any_timeframe:
+            raw_minutes = _minutes_from_timeframe(self.timeframe)
+            norm = normalize_sprint(self.symbol, raw_minutes)
+            if norm is None:
+                fallback = raw_minutes
+                norm = normalize_sprint(self.symbol, fallback) or fallback
+                if self.log:
+                    self.log(
+                        f"[{self.symbol}] ⚠ Минуты {raw_minutes} недопустимы. Использую {norm}."
+                    )
+            self._trade_minutes = int(norm)
+            self.params["minutes"] = self._trade_minutes
+
+        from datetime import datetime
+
+        self._last_signal_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
         return int(direction)
 
-    # --- горячее обновление параметров ---
     def update_params(self, **params):
         super().update_params(**params)
 
@@ -556,11 +582,14 @@ class OscarGrindStrategy(StrategyBase):
             self.params["minutes"] = self._trade_minutes
 
         if "timeframe" in params:
-            self.timeframe = str(params["timeframe"]) or self.timeframe
-            if "minutes" not in params:
+            tf_raw = str(params["timeframe"]).strip()
+            tf = tf_raw.upper()
+            self._use_any_timeframe = tf_raw in (ALL_TF_LABEL, "*")
+            self.timeframe = "*" if self._use_any_timeframe else tf
+            self.params["timeframe"] = self.timeframe
+            if self.timeframe != "*" and "minutes" not in params:
                 self._trade_minutes = _minutes_from_timeframe(self.timeframe)
 
-        # якорную валюту на лету не меняем
         if "account_currency" in params:
             want = str(params["account_currency"]).upper()
             if want != self._anchor_ccy and self.log:
@@ -569,3 +598,12 @@ class OscarGrindStrategy(StrategyBase):
                     f"{self._anchor_ccy} → {want}. Валюта зафиксирована при создании."
                 )
             self.params["account_currency"] = self._anchor_ccy
+
+        if "base_investment" in params and "target_profit" not in params:
+            # если юзер поменял unit, а цель оставил None — синхронизируем цель с unit
+            try:
+                unit = float(params["base_investment"])
+            except Exception:
+                unit = float(self.params.get("base_investment", 100))
+            if self.params.get("target_profit") in (None, 0):
+                self.params["target_profit"] = unit
