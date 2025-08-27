@@ -1,14 +1,27 @@
 import sys
+import asyncio
 from PyQt6.QtWidgets import QApplication
 from qasync import QEventLoop
-import asyncio
+
 from gui.main_window import MainWindow
+from core import config
 
 # from core.ws_server import run_server
 
 
 def run_gui():
     app = QApplication(sys.argv)
+
+    # Устанавливаем шрифт из config, если задан
+    font_family = config.get_font_family()
+    font_size = config.get_font_size()
+    if font_family or font_size:
+        font = app.font()  # текущий системный шрифт
+        if font_family:
+            font.setFamily(font_family)
+        if font_size:
+            font.setPointSize(font_size)
+        app.setFont(font)
 
     loop = QEventLoop(app)
     asyncio.set_event_loop(loop)

@@ -10,6 +10,9 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem,
     QHeaderView,
     QMessageBox,
+    QMenuBar,
+    QApplication,
+    QFontDialog,
 )
 from PyQt6.QtGui import QTextCursor, QColor, QBrush
 from PyQt6.QtCore import Qt, QTimer
@@ -19,6 +22,7 @@ import asyncio
 
 from core.money import format_money
 from core.logger import ts
+from core import config
 
 from gui.bot_add_dialog import AddBotDialog, ALL_SYMBOLS_LABEL
 from gui.risk_dialog import RiskDialog
@@ -44,6 +48,11 @@ from strategies.oscar_grind import OscarGrindStrategy
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
+
+        # === Меню ===
+        self.menu_bar = QMenuBar(self)
+        font_menu = self.menu_bar.addMenu("Шрифт")
+        font_menu.addAction("Выбрать...", self._choose_font)
 
         # === имя/версия приложения ===
         try:
@@ -239,6 +248,7 @@ class MainWindow(QWidget):
         self.trades_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         layout = QVBoxLayout()
+        layout.setMenuBar(self.menu_bar)
         layout.addLayout(top_layout)
         layout.addWidget(self.change_currency_button)
         layout.addWidget(self.set_risk_button)
@@ -320,6 +330,16 @@ class MainWindow(QWidget):
         cur.movePosition(QTextCursor.MoveOperation.Start)  # курсор в начало
         self.signal_log.setTextCursor(cur)
         self.signal_log.insertPlainText(s)  # вставляем новую строку сверху
+
+    def _choose_font(self):
+        current_font = QApplication.instance().font()
+        font, ok = QFontDialog.getFont(current_font, self, "Выбор шрифта")
+        if not ok:
+            return
+        QApplication.instance().setFont(font)
+        config.set_font_family(font.family())
+        config.set_font_size(font.pointSize())
+        config.save_config()
 
     # -------------------- bots --------------------
     def show_add_bot_dialog(self):
