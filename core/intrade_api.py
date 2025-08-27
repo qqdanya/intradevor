@@ -223,10 +223,18 @@ def place_trade(
     }
     r = session.post(TRADE_URL, data=payload)
     soup = BeautifulSoup(r.text, "html.parser")
-    trade = soup.find("tr", class_="trade_graph_tick")
-    if trade and trade.has_attr("data-id"):
-        return trade["data-id"]
-    return None
+
+    # На странице может присутствовать несколько открытых сделок. Метод
+    # ``find`` возвращал первую запись, из-за чего несколько стратегий могли
+    # получить одинаковый идентификатор сделки. Выберем строку с максимальным
+    # значением ``data-id`` — это и будет недавно созданная сделка.
+    trades = [
+        tr for tr in soup.find_all("tr", class_="trade_graph_tick") if tr.has_attr("data-id")
+    ]
+    if not trades:
+        return None
+    trade = max(trades, key=lambda tr: int(tr["data-id"]))
+    return trade["data-id"]
 
 
 async def check_trade_result(session, user_id, user_hash, trade_id, wait_time=60.0):
