@@ -16,6 +16,15 @@ base_url: str = f"https://{domain}"
 
 ws_url: str = os.getenv("WS_URL", "ws://192.168.56.101:8080")
 
+# Параметры шрифта приложения
+FONT_FAMILY: str | None = os.getenv("FONT_FAMILY")
+try:
+    FONT_SIZE: int | None = (
+        int(os.getenv("FONT_SIZE")) if os.getenv("FONT_SIZE") else None
+    )
+except ValueError:
+    FONT_SIZE = None
+
 
 def _read_json(path: str) -> Dict[str, Any]:
     if not os.path.exists(path):
@@ -45,7 +54,7 @@ def load_config() -> None:
       3) Значения по умолчанию
     Если файла нет — он будет создан с текущими значениями (дефолты/окружение).
     """
-    global APP_NAME, APP_VERSION, domain, base_url, ws_url
+    global APP_NAME, APP_VERSION, domain, base_url, ws_url, FONT_FAMILY, FONT_SIZE
 
     if not os.path.exists(_CONFIG_FILE):
         # создаём файл с текущими (дефолт/окружение) значениями
@@ -67,6 +76,14 @@ def load_config() -> None:
     if "WS_URL" not in os.environ:
         ws_url = data.get("ws_url", ws_url)
 
+    if "FONT_FAMILY" not in os.environ:
+        FONT_FAMILY = data.get("font_family", FONT_FAMILY)
+    if "FONT_SIZE" not in os.environ:
+        try:
+            FONT_SIZE = int(data.get("font_size", FONT_SIZE)) if data.get("font_size") is not None else FONT_SIZE
+        except (TypeError, ValueError):
+            pass
+
     base_url = f"https://{domain}"
 
 
@@ -82,6 +99,8 @@ def save_config() -> None:
             "app_version": APP_VERSION,
             "domain": domain,
             "ws_url": ws_url,
+            "font_family": FONT_FAMILY,
+            "font_size": FONT_SIZE,
         }
     )
     _write_json(_CONFIG_FILE, data)
@@ -115,6 +134,14 @@ def get_app_version() -> str:
     return APP_VERSION
 
 
+def get_font_family() -> str | None:
+    return FONT_FAMILY
+
+
+def get_font_size() -> int | None:
+    return FONT_SIZE
+
+
 # ===== Опционально: апдейтеры из кода =====
 def set_app_name(name: str) -> None:
     global APP_NAME
@@ -124,3 +151,13 @@ def set_app_name(name: str) -> None:
 def set_app_version(ver: str) -> None:
     global APP_VERSION
     APP_VERSION = (ver or "").strip() or APP_VERSION
+
+
+def set_font_family(name: str | None) -> None:
+    global FONT_FAMILY
+    FONT_FAMILY = name
+
+
+def set_font_size(size: int | None) -> None:
+    global FONT_SIZE
+    FONT_SIZE = size
