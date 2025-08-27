@@ -1,6 +1,7 @@
 # core/session.py
 from __future__ import annotations
 
+import asyncio
 import pickle
 import sys
 from pathlib import Path
@@ -61,6 +62,54 @@ def _cookies_for_domain(domain: str) -> Dict[str, str]:
     return cookies
 
 
+def _cookies_via_chromedriver(login_url: str) -> Dict[str, str]:
+    """
+    Открывает ChromeDriver на ``login_url`` и ждёт, пока пользователь
+    авторизуется. После появления нужных кук возвращает их в виде
+    ``dict``.
+    """
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    import time
+
+    options = Options()
+    driver = webdriver.Chrome(options=options)
+    driver.get(login_url)
+    print(f"Открыл браузер для авторизации: {login_url}")
+
+    expected_domain = get_domain()
+    cookies: Dict[str, str] = {}
+    try:
+        while True:
+            time.sleep(1)
+            try:
+                cookies_list = driver.get_cookies()
+            except Exception:
+                break
+
+            cookies = {
+                c["name"]: c["value"]
+                for c in cookies_list
+                if expected_domain in (c.get("domain") or "")
+            }
+
+            uid_cookie = next((c for c in cookies_list if c["name"] == "user_id"), None)
+            uhash_cookie = next((c for c in cookies_list if c["name"] == "user_hash"), None)
+            if uid_cookie and uhash_cookie:
+                uid_dom = uid_cookie.get("domain") or ""
+                uhash_dom = uhash_cookie.get("domain") or ""
+                if expected_domain in uid_dom and expected_domain in uhash_dom:
+                    break
+                raise ValueError(
+                    f"Куки user_id/user_hash получены с домена"
+                    f" {uid_dom!r}/{uhash_dom!r}, ожидался {expected_domain!r}"
+                )
+    finally:
+        driver.quit()
+
+    return cookies
+
+
 def save_cookies(cookies: Dict[str, str], path: Path = COOKIES_FILE) -> None:
     """Persist cookies to ``path``."""
     with path.open("wb") as fh:
@@ -110,6 +159,17 @@ async def create_http_client_from_browser_cookies(
             pass
 
     cookies = _cookies_for_domain(get_domain())
+    if not cookies:
+        login_url = f"{get_base_url()}/login"
+        try:
+            cookies = await asyncio.get_event_loop().run_in_executor(
+                None, _cookies_via_chromedriver, login_url
+            )
+        except Exception as e:
+            show_critical_error(f"Не удалось открыть браузер для авторизации: {e}")
+        if not cookies:
+            show_critical_error("Не удалось получить куки. Авторизация не выполнена.")
+
     save_cookies(cookies)
     client = HttpClient(cfg, cookies=cookies)
     await client.ensure_session()
