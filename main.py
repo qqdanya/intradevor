@@ -1,6 +1,7 @@
 import sys
 import asyncio
 from PyQt6.QtWidgets import QApplication
+from PyQt6.QtGui import QFont
 from qasync import QEventLoop
 
 from gui.main_window import MainWindow
@@ -11,6 +12,9 @@ from core import config
 
 def run_gui():
     app = QApplication(sys.argv)
+    app.setStyle("Fusion")
+    font = QFont("Calibri", 10)
+    app.setFont(font)
 
     # Устанавливаем шрифт из config, если задан
     font_family = config.get_font_family()
