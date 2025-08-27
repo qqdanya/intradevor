@@ -11,20 +11,22 @@ class TradesTableWidget(QTableWidget):
     Колонки:
       [0] Время сигнала
       [1] Время ставки
-      [2] Индикатор        <-- ОТ КОГО ПРИШЁЛ СИГНАЛ
-      [3] Валютная пара
-      [4] ТФ
-      [5] Направление
-      [6] Ставка
-      [7] Время
-      [8] Процент
-      [9] P/L
-      [10] Счёт
+      [2] Стратегия
+      [3] Индикатор        <-- ОТ КОГО ПРИШЁЛ СИГНАЛ
+      [4] Валютная пара
+      [5] ТФ
+      [6] Направление
+      [7] Ставка
+      [8] Время
+      [9] Процент
+      [10] P/L
+      [11] Счёт
     """
 
     COLS = [
         "Время сигнала",
         "Время ставки",
+        "Стратегия",
         "Индикатор",
         "Валютная пара",
         "ТФ",
@@ -68,6 +70,7 @@ class TradesTableWidget(QTableWidget):
         percent: int,
         account_mode: str,  # "ДЕМО"/"РЕАЛ"
         indicator: str = "-",  # НАЗВАНИЕ ИНДИКАТОРА
+        strategy: str = "-",
     ):
         row = 0
         self.insertRow(row)
@@ -76,6 +79,7 @@ class TradesTableWidget(QTableWidget):
         values = [
             signal_at,
             placed_at,
+            strategy or "-",
             indicator or "-",
             symbol,
             timeframe,
@@ -88,7 +92,7 @@ class TradesTableWidget(QTableWidget):
         ]
         for col, val in enumerate(values):
             it = QTableWidgetItem(str(val))
-            if col in (5, 9):  # выравнивание Направление, P/L по центру
+            if col in (6, 10):  # выравнивание Направление, P/L по центру
                 it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.setItem(row, col, it)
 
@@ -105,11 +109,11 @@ class TradesTableWidget(QTableWidget):
             return
         row = self._row_by_trade[trade_id]
 
-        pl_item = self.item(row, 9)
+        pl_item = self.item(row, 10)
         if pl_item is None:
             pl_item = QTableWidgetItem()
             pl_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.setItem(row, 9, pl_item)
+            self.setItem(row, 10, pl_item)
 
         if profit is None:
             pl_item.setText("неизв.")

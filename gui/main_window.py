@@ -216,11 +216,12 @@ class MainWindow(QWidget):
 
         # === Таблица результатов сделок ===
         self.trades_table = QTableWidget(self)
-        self.trades_table.setColumnCount(11)
+        self.trades_table.setColumnCount(12)
         self.trades_table.setHorizontalHeaderLabels(
             [
                 "Время сигнала",
                 "Время ставки",
+                "Стратегия",
                 "Индикатор",
                 "Валютная пара",
                 "ТФ",
@@ -244,6 +245,7 @@ class MainWindow(QWidget):
         hdr.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(9, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(10, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(11, QHeaderView.ResizeMode.ResizeToContents)
         self.trades_table.setAlternatingRowColors(True)
         # self.trades_table.setSortingEnabled(True)
         self.trades_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -643,6 +645,7 @@ class MainWindow(QWidget):
         trade_id: str,
         signal_at: str,
         placed_at: str,
+        strategy: str | None = None,
         symbol: str,
         timeframe: str,
         direction: int,
@@ -657,7 +660,7 @@ class MainWindow(QWidget):
     ):
         """
         Добавляет строку «ожидание результата».
-        Колонки: Время сигнала | Время ставки | Индикатор | Пара | ТФ |
+        Колонки: Время сигнала | Время ставки | Стратегия | Индикатор | Пара | ТФ |
                   Направление | Ставка | Время | % | P/L | Счет
         В P/L показываем обратный отсчёт, синхронизированный по expected_end_ts.
         """
@@ -694,19 +697,20 @@ class MainWindow(QWidget):
             vals = [
                 signal_at,  # 0 Время сигнала
                 placed_at,  # 1 Время ставки
-                (indicator or "-"),  # 2 Индикатор
-                symbol,  # 3 Пара
-                timeframe,  # 4 ТФ
-                dir_text,  # 5 Направление
-                format_money(stake, ccy),  # 6 Ставка
-                duration_txt,  # 7 Время
-                f"{percent}%",  # 8 %
-                f"Ожидание ({_fmt_left(left_now)})",  # 9 P/L
-                account_txt,  # 10 Счёт
+                (strategy or "-"),  # 2 Стратегия
+                (indicator or "-"),  # 3 Индикатор
+                symbol,  # 4 Пара
+                timeframe,  # 5 ТФ
+                dir_text,  # 6 Направление
+                format_money(stake, ccy),  # 7 Ставка
+                duration_txt,  # 8 Время
+                f"{percent}%",  # 9 %
+                f"Ожидание ({_fmt_left(left_now)})",  # 10 P/L
+                account_txt,  # 11 Счёт
             ]
             for col, v in enumerate(vals):
                 it = QTableWidgetItem(str(v))
-                if col in (5, 9):  # выравниваем Направление и P/L по центру
+                if col in (6, 10):  # выравниваем Направление и P/L по центру
                     it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.trades_table.setItem(row, col, it)
 
@@ -725,7 +729,7 @@ class MainWindow(QWidget):
                 if row >= self.trades_table.rowCount():
                     timer.stop()
                     return
-                item = self.trades_table.item(row, 9)  # P/L
+                item = self.trades_table.item(row, 10)  # P/L
                 if item:
                     item.setText(f"Ожидание ({_fmt_left(left)})")
                 if left <= 0:
@@ -735,18 +739,25 @@ class MainWindow(QWidget):
             timer.start()
 
             # остановим предыдущий таймер, если такой trade_id уже есть
-            prev = self.pending_trades.get(trade_id)
+            prev = self.pending_trades.pop(trade_id, None)
             if prev and isinstance(prev.get("timer"), QTimer):
                 try:
                     prev["timer"].stop()
                 except Exception:
                     pass
 
-            # сохраняем всё, включая индикатор и дедлайн
+            # сдвинем индексы ранее вставленных строк
+            for info in self.pending_trades.values():
+                r = info.get("row")
+                if isinstance(r, int) and r >= row:
+                    info["row"] = r + 1
+
+            # сохраняем всё, включая индикатор, стратегию и дедлайн
             self.pending_trades[trade_id] = {
                 "row": row,
                 "timer": timer,
                 "indicator": (indicator or "-"),
+                "strategy": (strategy or "-"),
                 "expected_end_ts": float(expected_end_ts),
                 "symbol": symbol,
                 "timeframe": timeframe,
@@ -771,6 +782,7 @@ class MainWindow(QWidget):
         trade_id: str | None = None,
         signal_at: str,
         placed_at: str,
+        strategy: str | None = None,
         symbol: str,
         timeframe: str,
         direction: int,
@@ -788,6 +800,7 @@ class MainWindow(QWidget):
 
         def _fill_row(
             row: int,
+            strategy_value: str,
             indicator_value: str,
             sig_time: str,
             place_time: str,
@@ -806,19 +819,20 @@ class MainWindow(QWidget):
             vals = [
                 sig_time,  # 0 Время сигнала
                 place_time,  # 1 Время ставки
-                indicator_value,  # 2 Индикатор
-                symbol,  # 3 Пара
-                timeframe,  # 4 ТФ
-                dir_text,  # 5 Направление
-                format_money(stake, ccy),  # 6 Ставка
-                duration_txt,  # 7 Время
-                f"{percent}%",  # 8 %
-                fmt_pl(profit),  # 9 P/L
-                account_txt,  # 10 Счёт
+                strategy_value,  # 2 Стратегия
+                indicator_value,  # 3 Индикатор
+                symbol,  # 4 Пара
+                timeframe,  # 5 ТФ
+                dir_text,  # 6 Направление
+                format_money(stake, ccy),  # 7 Ставка
+                duration_txt,  # 8 Время
+                f"{percent}%",  # 9 %
+                fmt_pl(profit),  # 10 P/L
+                account_txt,  # 11 Счёт
             ]
             for col, v in enumerate(vals):
                 it = QTableWidgetItem(str(v))
-                if col in (5, 9):
+                if col in (6, 10):
                     it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.trades_table.setItem(row, col, it)
 
@@ -840,6 +854,7 @@ class MainWindow(QWidget):
                 self.trades_table.setSortingEnabled(False)
 
             row_to_update = None
+            strategy_value = strategy or "-"
             indicator_value = indicator or "-"
             sig_time = signal_at
             place_time = placed_at
@@ -858,6 +873,7 @@ class MainWindow(QWidget):
                     row_to_update = row
                     # если при pending уже знали индикатор — используем его
                     indicator_value = info.get("indicator", indicator_value)
+                    strategy_value = info.get("strategy", strategy_value)
                     sig_time = info.get("signal_at", sig_time)
                     place_time = info.get("placed_at", place_time)
                     duration_txt = (
@@ -867,9 +883,19 @@ class MainWindow(QWidget):
             if row_to_update is None:
                 row_to_update = 0
                 self.trades_table.insertRow(row_to_update)
+                # сдвинем индексы pending'ов, т.к. вставили строку сверху
+                for info in self.pending_trades.values():
+                    r = info.get("row")
+                    if isinstance(r, int) and r >= row_to_update:
+                        info["row"] = r + 1
 
             _fill_row(
-                row_to_update, indicator_value, sig_time, place_time, duration_txt
+                row_to_update,
+                strategy_value,
+                indicator_value,
+                sig_time,
+                place_time,
+                duration_txt,
             )
 
             if was_sorting:
@@ -995,7 +1021,9 @@ class MainWindow(QWidget):
             self.append_to_log(f"[!] Ошибка обновления профита: {e}")
 
         # дальше — обычное добавление в таблицу сделок
-        self.add_trade_result(**kw)
+        key = bot.strategy_kwargs.get("strategy_key", "")
+        strat_label = self.strategy_label(key)
+        self.add_trade_result(**kw, strategy=strat_label)
         # кэшируем для истории
         self.bot_trade_history[bot].append(("result", dict(kw)))
         # 👇 уведомим всех подписчиков для этого бота (открытые StrategyControlDialog)
@@ -1019,7 +1047,11 @@ class MainWindow(QWidget):
 
         try:
             # В общую (главную) таблицу
-            self.add_trade_pending(**kw, expected_end_ts=expected_end_ts)
+            key = bot.strategy_kwargs.get("strategy_key", "")
+            strat_label = self.strategy_label(key)
+            self.add_trade_pending(
+                **kw, expected_end_ts=expected_end_ts, strategy=strat_label
+            )
         finally:
             # Готовим полезную нагрузку с абсолютным дедлайном
             payload = dict(kw)
@@ -1071,10 +1103,15 @@ class MainWindow(QWidget):
         indicator: str = "-",
         bot=None,
     ):
+        strat_label = "-"
+        if bot is not None:
+            key = bot.strategy_kwargs.get("strategy_key", "")
+            strat_label = self.strategy_label(key)
         self.add_trade_pending(
             trade_id=trade_id,
             signal_at=signal_at,
             placed_at=placed_at,
+            strategy=strat_label,
             symbol=symbol,
             timeframe=timeframe,
             direction=direction,
@@ -1102,10 +1139,15 @@ class MainWindow(QWidget):
         indicator: str = "-",
         bot=None,
     ):
+        strat_label = "-"
+        if bot is not None:
+            key = bot.strategy_kwargs.get("strategy_key", "")
+            strat_label = self.strategy_label(key)
         self.add_trade_result(
             trade_id=trade_id,
             signal_at=signal_at,
             placed_at=placed_at,
+            strategy=strat_label,
             symbol=symbol,
             timeframe=timeframe,
             direction=direction,
