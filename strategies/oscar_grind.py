@@ -420,8 +420,15 @@ class OscarGrindStrategy(StrategyBase):
                 if profit is None:
                     log(f"[{self.symbol}] ⚠ Результат неизвестен — считаем как LOSS.")
                     cum_profit -= float(stake)
+                    outcome = "loss"
                 else:
                     cum_profit += float(profit)
+                    if profit > 0.0:
+                        outcome = "win"
+                    elif profit == 0.0:
+                        outcome = "refund"
+                    else:
+                        outcome = "loss"
 
                 # Проверим цель
                 if cum_profit >= target_profit:
@@ -437,14 +444,7 @@ class OscarGrindStrategy(StrategyBase):
                 # Сколько ещё надо добрать профита
                 need = max(0.0, target_profit - cum_profit)
 
-                if profit is None or profit <= 0.0:
-                    # Проигрыш → оставляем ставку прежней (классика ОГ)
-                    next_stake = stake
-                    log(
-                        f"[{self.symbol}] ❌ LOSS: profit={0.0 if profit is None else profit:.2f}. "
-                        f"Следующая ставка остаётся {next_stake:.2f}."
-                    )
-                else:
+                if outcome == "win":
                     # Выигрыш → увеличиваем на 1 unit, но не выше, чем нужно для достижения цели за один следующий WIN
                     # Требуемая ставка для достижения цели одной следующей победой:
                     # need = next_stake * k  →  next_stake_req = ceil(need / k)
@@ -455,6 +455,19 @@ class OscarGrindStrategy(StrategyBase):
                         f"Накоплено {cum_profit:.2f}/{target_profit:.2f}. "
                         f"Следующая ставка = min(stake+unit, req) → {stake + base_unit:.2f} / {next_req:.2f} = {next_stake:.2f}"
                     )
+                else:
+                    # Проигрыш или возврат → ставка остаётся прежней
+                    next_stake = stake
+                    if outcome == "refund":
+                        log(
+                            f"[{self.symbol}] ↩️ REFUND: ставка возвращена. "
+                            f"Следующая ставка остаётся {next_stake:.2f}."
+                        )
+                    else:
+                        log(
+                            f"[{self.symbol}] ❌ LOSS: profit={0.0 if profit is None else profit:.2f}. "
+                            f"Следующая ставка остаётся {next_stake:.2f}."
+                        )
 
                 # Переходим к следующему шагу
                 stake = float(next_stake)
