@@ -6,3 +6,4 @@ websockets
 qasync
 tzdata
 aiohttp
+pickle
