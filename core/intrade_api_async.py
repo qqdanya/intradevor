@@ -166,19 +166,10 @@ async def place_trade(
     }
     html = await client.post(PATH_TRADE, data=payload, expect_json=False)
     soup = BeautifulSoup(html, "html.parser")
-
-    # Ответ может содержать несколько открытых сделок. Ранее брался первый
-    # <tr class="trade_graph_tick">, что приводило к возврату одного и того же
-    # идентификатора при одновременной работе нескольких стратегий. Чтобы
-    # гарантированно получить именно последнюю созданную сделку, выбираем
-    # запись с максимальным ``data-id``.
-    trades = [
-        tr for tr in soup.find_all("tr", class_="trade_graph_tick") if tr.has_attr("data-id")
-    ]
-    if not trades:
-        return None
-    trade = max(trades, key=lambda tr: int(tr["data-id"]))
-    return trade["data-id"]
+    trade = soup.find("tr", class_="trade_graph_tick")
+    if trade and trade.has_attr("data-id"):
+        return trade["data-id"]
+    return None
 
 
 async def check_trade_result(
