@@ -1,7 +1,9 @@
 # core/session.py
 from __future__ import annotations
 
+import pickle
 import sys
+from pathlib import Path
 from typing import Dict, Tuple
 
 from PyQt6.QtWidgets import QApplication, QMessageBox
@@ -19,6 +21,9 @@ def show_critical_error(text: str):
 
 
 # ---- cookies helpers ---------------------------------------------------------
+
+
+COOKIES_FILE = Path("cookies.pkl")
 
 
 def _cookies_for_domain(domain: str) -> Dict[str, str]:
@@ -56,15 +61,57 @@ def _cookies_for_domain(domain: str) -> Dict[str, str]:
     return cookies
 
 
+def save_cookies(cookies: Dict[str, str], path: Path = COOKIES_FILE) -> None:
+    """Persist cookies to ``path``."""
+    with path.open("wb") as fh:
+        pickle.dump(cookies, fh)
+
+
+def load_cookies(path: Path = COOKIES_FILE) -> Dict[str, str] | None:
+    """Load cookies from ``path`` if it exists."""
+    try:
+        with path.open("rb") as fh:
+            return pickle.load(fh)
+    except FileNotFoundError:
+        return None
+    except Exception:
+        return None
+
+
+def clear_saved_cookies(path: Path = COOKIES_FILE) -> None:
+    """Remove saved cookies file if present."""
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
 # ---- HttpClient фабрика и утилиты -------------------------------------------
 
 
-async def create_http_client_from_browser_cookies() -> HttpClient:
-    """
-    Создаёт глобальный HttpClient с куками браузера для текущего домена.
-    """
+async def create_http_client_from_browser_cookies(
+    force_refresh: bool = False,
+) -> HttpClient:
+    """Создаёт глобальный HttpClient с куками браузера для текущего домена."""
     cfg = HttpConfig(base_url=get_base_url(), user_agent="Intradevor/1.0")
-    client = HttpClient(cfg, cookies=_cookies_for_domain(get_domain()))
+
+    cookies: Dict[str, str] | None = None
+    if not force_refresh:
+        cookies = load_cookies()
+
+    if cookies:
+        client = HttpClient(cfg, cookies=cookies)
+        try:
+            await client.ensure_session()
+            uid, uhash = await extract_user_credentials_from_client(client)
+            if uid and uhash:
+                return client
+        except Exception:
+            pass
+
+    cookies = _cookies_for_domain(get_domain())
+    save_cookies(cookies)
+    client = HttpClient(cfg, cookies=cookies)
     await client.ensure_session()
     return client
 
@@ -78,6 +125,7 @@ async def refresh_http_client_cookies(client: HttpClient) -> None:
     # очистить и залить заново
     await client.clear_cookies()
     await client.update_cookies(new_cookies)
+    save_cookies(new_cookies)
 
 
 async def extract_user_credentials_from_client(
