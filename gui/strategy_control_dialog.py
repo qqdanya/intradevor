@@ -131,38 +131,85 @@ class StrategyControlDialog(QDialog):
         tf = str(getv("timeframe", self.bot.strategy_kwargs.get("timeframe", "M1")))
         default_minutes = int(getv("minutes", _minutes_from_timeframe(tf)))
 
-        self.minutes = QSpinBox()
-        self.minutes.setRange(5 if symbol == "BTCUSDT" else 1, 500)
-        self.minutes.setValue(default_minutes)
-        self.minutes.setToolTip("1; 3-500 мин; BTCUSDT: 5-500 мин")
+        strategy_key = str(self.bot.strategy_kwargs.get("strategy_key", "")).lower()
+        self.strategy_key = strategy_key
 
-        self.base_investment = QSpinBox()
-        self.base_investment.setRange(1, 50_000)
-        self.base_investment.setValue(int(getv("base_investment", 100)))
-        self.max_steps = QSpinBox()
-        self.max_steps.setRange(1, 20)
-        self.max_steps.setValue(int(getv("max_steps", 5)))
-        self.repeat_count = QSpinBox()
-        self.repeat_count.setRange(1, 1000)
-        self.repeat_count.setValue(int(getv("repeat_count", 10)))
-        self.min_balance = QSpinBox()
-        self.min_balance.setRange(1, 10_000_000)
-        self.min_balance.setValue(int(getv("min_balance", 100)))
-        self.coefficient = QDoubleSpinBox()
-        self.coefficient.setRange(1.0, 10.0)
-        self.coefficient.setSingleStep(0.1)
-        self.coefficient.setValue(float(getv("coefficient", 2.0)))
-        self.min_percent = QSpinBox()
-        self.min_percent.setRange(0, 100)
-        self.min_percent.setValue(int(getv("min_percent", 70)))
+        if strategy_key == "oscar_grind":
+            self.minutes = QSpinBox()
+            self.minutes.setRange(5 if symbol == "BTCUSDT" else 1, 500)
+            self.minutes.setValue(default_minutes)
+            self.minutes.setToolTip("1; 3-500 мин; BTCUSDT: 5-500 мин")
 
-        form.addRow("Базовая ставка", self.base_investment)
-        form.addRow("Время сделки (мин)", self.minutes)
-        form.addRow("Макс. шагов", self.max_steps)
-        form.addRow("Повторов серии", self.repeat_count)
-        form.addRow("Мин. баланс", self.min_balance)
-        form.addRow("Коэффициент", self.coefficient)
-        form.addRow("Мин. процент", self.min_percent)
+            self.base_investment = QSpinBox()
+            self.base_investment.setRange(1, 50_000)
+            self.base_investment.setValue(int(getv("base_investment", 100)))
+
+            tgt_default = int(getv("target_profit", getv("base_investment", 100)))
+            self.target_profit = QSpinBox()
+            self.target_profit.setRange(1, 1_000_000)
+            self.target_profit.setValue(tgt_default)
+
+            self.max_steps = QSpinBox()
+            self.max_steps.setRange(1, 100)
+            self.max_steps.setValue(int(getv("max_steps", 20)))
+
+            self.repeat_count = QSpinBox()
+            self.repeat_count.setRange(1, 1000)
+            self.repeat_count.setValue(int(getv("repeat_count", 10)))
+
+            self.min_balance = QSpinBox()
+            self.min_balance.setRange(1, 10_000_000)
+            self.min_balance.setValue(int(getv("min_balance", 100)))
+
+            self.min_percent = QSpinBox()
+            self.min_percent.setRange(0, 100)
+            self.min_percent.setValue(int(getv("min_percent", 70)))
+
+            self.lock_direction = QSpinBox()
+            self.lock_direction.setRange(0, 1)
+            self.lock_direction.setValue(1 if getv("lock_direction_to_first", True) else 0)
+
+            form.addRow("Базовая ставка", self.base_investment)
+            form.addRow("Цель серии, прибыль", self.target_profit)
+            form.addRow("Время сделки (мин)", self.minutes)
+            form.addRow("Макс. сделок в серии", self.max_steps)
+            form.addRow("Повторов серии", self.repeat_count)
+            form.addRow("Мин. баланс", self.min_balance)
+            form.addRow("Мин. процент", self.min_percent)
+            form.addRow("Фиксировать направление (0/1)", self.lock_direction)
+        else:
+            self.minutes = QSpinBox()
+            self.minutes.setRange(5 if symbol == "BTCUSDT" else 1, 500)
+            self.minutes.setValue(default_minutes)
+            self.minutes.setToolTip("1; 3-500 мин; BTCUSDT: 5-500 мин")
+
+            self.base_investment = QSpinBox()
+            self.base_investment.setRange(1, 50_000)
+            self.base_investment.setValue(int(getv("base_investment", 100)))
+            self.max_steps = QSpinBox()
+            self.max_steps.setRange(1, 20)
+            self.max_steps.setValue(int(getv("max_steps", 5)))
+            self.repeat_count = QSpinBox()
+            self.repeat_count.setRange(1, 1000)
+            self.repeat_count.setValue(int(getv("repeat_count", 10)))
+            self.min_balance = QSpinBox()
+            self.min_balance.setRange(1, 10_000_000)
+            self.min_balance.setValue(int(getv("min_balance", 100)))
+            self.coefficient = QDoubleSpinBox()
+            self.coefficient.setRange(1.0, 10.0)
+            self.coefficient.setSingleStep(0.1)
+            self.coefficient.setValue(float(getv("coefficient", 2.0)))
+            self.min_percent = QSpinBox()
+            self.min_percent.setRange(0, 100)
+            self.min_percent.setValue(int(getv("min_percent", 70)))
+
+            form.addRow("Базовая ставка", self.base_investment)
+            form.addRow("Время сделки (мин)", self.minutes)
+            form.addRow("Макс. шагов", self.max_steps)
+            form.addRow("Повторов серии", self.repeat_count)
+            form.addRow("Мин. баланс", self.min_balance)
+            form.addRow("Коэффициент", self.coefficient)
+            form.addRow("Мин. процент", self.min_percent)
 
         # Кнопка «Сохранить настройки»
         settings_row = QWidget()
@@ -314,15 +361,27 @@ class StrategyControlDialog(QDialog):
             box.open()
             return
 
-        new_params = {
-            "base_investment": self.base_investment.value(),
-            "max_steps": self.max_steps.value(),
-            "repeat_count": self.repeat_count.value(),
-            "min_balance": self.min_balance.value(),
-            "coefficient": round(float(self.coefficient.value()), 2),
-            "min_percent": self.min_percent.value(),
-            "minutes": int(norm),
-        }
+        if getattr(self, "strategy_key", "") == "oscar_grind":
+            new_params = {
+                "base_investment": self.base_investment.value(),
+                "target_profit": self.target_profit.value(),
+                "max_steps": self.max_steps.value(),
+                "repeat_count": self.repeat_count.value(),
+                "min_balance": self.min_balance.value(),
+                "min_percent": self.min_percent.value(),
+                "lock_direction_to_first": bool(self.lock_direction.value() == 1),
+                "minutes": int(norm),
+            }
+        else:
+            new_params = {
+                "base_investment": self.base_investment.value(),
+                "max_steps": self.max_steps.value(),
+                "repeat_count": self.repeat_count.value(),
+                "min_balance": self.min_balance.value(),
+                "coefficient": round(float(self.coefficient.value()), 2),
+                "min_percent": self.min_percent.value(),
+                "minutes": int(norm),
+            }
 
         self.bot.strategy_kwargs.setdefault("params", {}).update(new_params)
         if self.bot.strategy and hasattr(self.bot.strategy, "update_params"):
