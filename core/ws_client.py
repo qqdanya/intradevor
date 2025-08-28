@@ -12,13 +12,10 @@ from typing import Any, Optional
 import websockets
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
-from core.signal_waiter import push_signal  # <-- добавили
-
+from core.signal_waiter import push_signal  # без изменения сигнатуры
 
 signal_log_callback = None
 
-
-# Поддерживаемые таймфреймы. Значения не используются напрямую, важен только ключ.
 _TIMEFRAME_MAP = {
     "M1": 1,
     "M5": 5,
@@ -32,17 +29,14 @@ _TIMEFRAME_MAP = {
 
 
 def _log(message: str) -> None:
-    """Отправить сообщение через колбэк лога, если он установлен."""
     if signal_log_callback:
         signal_log_callback(message)
 
 
 def show_connection_error(error_text: str) -> None:
-    """Показать диалог с ошибкой подключения и завершить приложение."""
     app = QApplication.instance()
     if app is None:
         app = QApplication(sys.argv)
-
     QMessageBox.critical(
         None,
         "Ошибка подключения",
@@ -59,11 +53,12 @@ class SignalMessage:
     timeframe: str
     direction: Optional[int]
     indicator: str
-    timestamp: datetime
+    timestamp: datetime  # время свечи с сигналом (закрытая)
+    next_timestamp: Optional[datetime] = None  # начало следующей ПОСЛЕ текущей
+    next2_timestamp: Optional[datetime] = None  # ещё через одну
 
 
 def _parse_direction(raw_dir: Any) -> Optional[int]:
-    """Привести поле direction к 1, 2 или None."""
     if isinstance(raw_dir, int):
         return raw_dir if raw_dir in (1, 2) else None
     if isinstance(raw_dir, str):
@@ -75,8 +70,16 @@ def _parse_direction(raw_dir: Any) -> Optional[int]:
     return None
 
 
+def _parse_dt_opt(s: Any) -> Optional[datetime]:
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(str(s))
+    except Exception:
+        return None
+
+
 def _parse_message(message: str) -> Optional[SignalMessage]:
-    """Распарсить JSON-сообщение в структуру SignalMessage."""
     try:
         data = json.loads(message)
     except json.JSONDecodeError:
@@ -96,12 +99,22 @@ def _parse_message(message: str) -> Optional[SignalMessage]:
 
     direction = _parse_direction(data.get("direction"))
     timestamp = datetime.fromisoformat(dt_str)
-    return SignalMessage(symbol, timeframe, direction, indicator, timestamp)
+
+    next_ts = _parse_dt_opt(data.get("next_datetime"))
+    next2_ts = _parse_dt_opt(data.get("next2_datetime"))
+
+    return SignalMessage(
+        symbol=symbol,
+        timeframe=timeframe,
+        direction=direction,
+        indicator=indicator,
+        timestamp=timestamp,
+        next_timestamp=next_ts,
+        next2_timestamp=next2_ts,
+    )
 
 
 async def listen_to_signals() -> None:
-    """Подключиться к серверу и слушать входящие сигналы."""
-
     from core.config import ws_url
 
     retry = 0
@@ -117,15 +130,21 @@ async def listen_to_signals() -> None:
                     if sig is None:
                         continue
 
-                    # ВАЖНО: отправляем в ожидатель ВСЕ сообщения (включая none)
+                    # Отправляем в ожидатель — сигнатура без изменений
                     push_signal(sig.symbol, sig.timeframe, sig.direction, sig.indicator)
 
+                    # Лог: время без таймзоны (локально-наивное)
                     dt_naive = sig.timestamp.replace(tzinfo=None)
                     msg_dir = {1: "UP", 2: "DOWN", None: "none"}[sig.direction]
-                    if msg_dir != "none":
-                        _log(
-                            f"[WS] {sig.symbol} / {sig.timeframe}. Прогноз: {msg_dir} от {sig.indicator}. Время свечи: {dt_naive.strftime('%H:%M')}"
-                        )
+                    tail = ""
+                    if sig.next_timestamp and sig.next2_timestamp:
+                        n1 = sig.next_timestamp.replace(tzinfo=None).strftime("%H:%M")
+                        n2 = sig.next2_timestamp.replace(tzinfo=None).strftime("%H:%M")
+                        tail = f" | next: {n1}, next2: {n2}"
+                    _log(
+                        f"[WS] {sig.symbol} / {sig.timeframe}. Прогноз: {msg_dir} от {sig.indicator}. "
+                        f"Время свечи: {dt_naive.strftime('%H:%M')}{tail}"
+                    )
         except Exception as e:
             delay = min(30, 2 ** min(retry, 5))
             _log(f"[WS] Потеря соединения: {e}. Повтор через {delay}c")
