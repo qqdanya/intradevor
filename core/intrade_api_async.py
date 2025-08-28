@@ -75,7 +75,7 @@ async def get_current_percent(
     """
     Совместимая версия: отправляет form-data как sync, возвращает int|None.
     """
-    t = "Classic" if str(trade_type).lower() == "classic" else "Sprint"
+    t = "Classic" if str(trade_type).lower() == "classic" else "sprint"
     payload = {
         "type": t,
         "currency_name": account_ccy,
