@@ -254,19 +254,6 @@ class AntiMartingaleStrategy(StrategyBase):
                 if not await self._ensure_anchor_account_mode():
                     continue
 
-                self._status("ожидание сигнала")
-                log(
-                    f"[{self.symbol}] ⏳ Ожидание сигнала на {self.timeframe} (шаг {step})..."
-                )
-                try:
-                    direction = await self.wait_signal(timeout=sig_timeout)
-                except asyncio.TimeoutError:
-                    log(
-                        f"[{self.symbol}] ⌛ Таймаут ожидания сигнала внутри серии — выхожу из серии."
-                    )
-                    break
-                status = 1 if int(direction) == 1 else 2
-
                 pct = await get_current_percent(
                     self.http_client,
                     investment=stake,
@@ -283,7 +270,7 @@ class AntiMartingaleStrategy(StrategyBase):
                     self._status("ожидание высокого процента")
                     if not self._low_payout_notified:
                         log(
-                            f"[{self.symbol}] ℹ Низкий payout {pct}% < {min_pct}% — ждём {wait_low}s"
+                            f"[{self.symbol}] ℹ Низкий payout {pct}% < {min_pct}% — ждём..."
                         )
                         self._low_payout_notified = True
                     await self.sleep(wait_low)
@@ -293,6 +280,19 @@ class AntiMartingaleStrategy(StrategyBase):
                         f"[{self.symbol}] ℹ Работа продолжается (текущий payout = {pct}%)"
                     )
                     self._low_payout_notified = False
+
+                self._status("ожидание сигнала")
+                log(
+                    f"[{self.symbol}] ⏳ Ожидание сигнала на {self.timeframe} (шаг {step})..."
+                )
+                try:
+                    direction = await self.wait_signal(timeout=sig_timeout)
+                except asyncio.TimeoutError:
+                    log(
+                        f"[{self.symbol}] ⌛ Таймаут ожидания сигнала внутри серии — выхожу из серии."
+                    )
+                    break
+                status = 1 if int(direction) == 1 else 2
 
                 try:
                     cur_balance, _, _ = await get_balance_info(

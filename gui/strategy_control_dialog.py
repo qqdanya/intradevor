@@ -209,21 +209,18 @@ class StrategyControlDialog(QDialog):
         # ---------- Controls ----------
         controls = QWidget()
         ch = QHBoxLayout(controls)
-        self.btn_start = QPushButton("🚀 Старт")
-        self.btn_pause = QPushButton("⏸ Пауза")
-        self.btn_resume = QPushButton("▶ Продолжить")
+        self.btn_toggle = QPushButton("🚀 Старт")
         self.btn_stop = QPushButton("⏹ Стоп")
+        self.btn_delete = QPushButton("🗑 Удалить")
 
-        self.btn_start.clicked.connect(self._do_start)
-        self.btn_pause.clicked.connect(self._do_pause)
-        self.btn_resume.clicked.connect(self._do_resume)
+        self.btn_toggle.clicked.connect(self._do_toggle)
         self.btn_stop.clicked.connect(self._do_stop)
+        self.btn_delete.clicked.connect(self._do_delete)
 
         ch.addStretch(1)
-        ch.addWidget(self.btn_start)
-        ch.addWidget(self.btn_pause)
-        ch.addWidget(self.btn_resume)
+        ch.addWidget(self.btn_toggle)
         ch.addWidget(self.btn_stop)
+        ch.addWidget(self.btn_delete)
 
         # ---------- Главный блок: слева лог+настройки, справа таблица ----------
         left_panel = QWidget()
@@ -285,59 +282,62 @@ class StrategyControlDialog(QDialog):
         paused = bool(st and hasattr(st, "is_paused") and st.is_paused())
 
         if not bot_exists:
-            self.btn_start.setEnabled(False)
-            self.btn_pause.setEnabled(False)
-            self.btn_resume.setEnabled(False)
+            self.btn_toggle.setEnabled(False)
             self.btn_stop.setEnabled(False)
+            self.btn_delete.setEnabled(False)
             return
 
-        self.btn_start.setEnabled(bot_exists and not started)
-        self.btn_pause.setEnabled(running and not paused)
-        self.btn_resume.setEnabled(running and paused)
+        if not started:
+            self.btn_toggle.setText("🚀 Старт")
+        elif paused:
+            self.btn_toggle.setText("▶ Продолжить")
+        else:
+            self.btn_toggle.setText("⏸ Пауза")
+
+        self.btn_toggle.setEnabled(True)
         self.btn_stop.setEnabled(running)
+        self.btn_delete.setEnabled(True)
 
     # ---- управление ----
-    def _do_start(self):
+    def _do_toggle(self):
         try:
-            if not self.bot.has_started():
-                # очистим логи и таблицу
+            started = self.bot.has_started()
+            st = self.bot.strategy
+            paused = bool(st and hasattr(st, "is_paused") and st.is_paused())
+            if not started:
                 self.log_edit.clear()
                 self.trades_table.setRowCount(0)
                 self._pending_rows.clear()
-                # сбросим сохранённую историю и лог в MainWindow
                 self.main.bot_logs[self.bot].clear()
                 self.main.bot_trade_history[self.bot].clear()
                 self.main.reset_bot(self.bot)
-
                 self.bot.start()
                 self.log_edit.append(ts("🚀 Старт стратегии."))
+            elif paused:
+                self.bot.resume()
+                self.log_edit.append(ts("▶ Продолжено."))
+            else:
+                self.bot.pause()
+                self.log_edit.append(ts("⏸ Пауза."))
         except Exception as e:
-            self.log_edit.append(ts(f"⚠ Ошибка старта: {e}"))
-
-    def _do_pause(self):
-        try:
-            self.bot.pause()
-            self.log_edit.append(ts("⏸ Пауза."))
-        except Exception as e:
-            self.log_edit.append(ts(f"⚠ Ошибка паузы: {e}"))
-
-    def _do_resume(self):
-        try:
-            self.bot.resume()
-            self.log_edit.append(ts("▶ Продолжено."))
-        except Exception as e:
-            self.log_edit.append(ts(f"⚠ Ошибка продолжения: {e}"))
+            self.log_edit.append(ts(f"⚠ Ошибка управления: {e}"))
 
     def _do_stop(self):
         try:
             self.bot.stop()
             self.log_edit.append(ts("⏹ Остановлено."))
-            self.btn_pause.setEnabled(False)
-            self.btn_resume.setEnabled(False)
+            self.btn_toggle.setEnabled(False)
             self.btn_stop.setEnabled(False)
-            self.btn_start.setEnabled(False)
+            self.btn_delete.setEnabled(True)
         except Exception as e:
             self.log_edit.append(ts(f"⚠ Ошибка остановки: {e}"))
+
+    def _do_delete(self):
+        try:
+            self.main.delete_bot(self.bot)
+            self.close()
+        except Exception as e:
+            self.log_edit.append(ts(f"⚠ Ошибка удаления: {e}"))
 
     # ---- сохранение настроек ----
     def save_settings(self):
