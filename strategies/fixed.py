@@ -231,22 +231,6 @@ class FixedStakeStrategy(StrategyBase):
             )
             account_ccy = self._anchor_ccy
 
-            status = None
-            if self.symbol == "*":
-                self._status("ожидание сигнала")
-                log(
-                    f"[{self.symbol}] ⏳ Ожидание сигнала на {self.timeframe}..."
-                )
-                try:
-                    direction = await self.wait_signal(timeout=sig_timeout)
-                except asyncio.TimeoutError:
-                    log(
-                        f"[{self.symbol}] ⌛ Таймаут ожидания сигнала — повтор."
-                    )
-                    await self.sleep(1.0)
-                    continue
-                status = 1 if int(direction) == 1 else 2
-
             try:
                 pct = await get_current_percent(
                     self.http_client,
@@ -287,22 +271,21 @@ class FixedStakeStrategy(StrategyBase):
                 log(f"[{self.symbol}] ℹ Работа продолжается (текущий payout = {pct}%)")
                 self._low_payout_notified = False
 
-            if status is None:
-                self._status("ожидание сигнала")
+            self._status("ожидание сигнала")
+            log(
+                f"[{self.symbol}] ⏳ Ожидание сигнала на {self.timeframe}..."
+            )
+
+            try:
+                direction = await self.wait_signal(timeout=sig_timeout)
+            except asyncio.TimeoutError:
                 log(
-                    f"[{self.symbol}] ⏳ Ожидание сигнала на {self.timeframe}..."
+                    f"[{self.symbol}] ⌛ Таймаут ожидания сигнала — повтор."
                 )
+                await self.sleep(1.0)
+                continue
 
-                try:
-                    direction = await self.wait_signal(timeout=sig_timeout)
-                except asyncio.TimeoutError:
-                    log(
-                        f"[{self.symbol}] ⌛ Таймаут ожидания сигнала — повтор."
-                    )
-                    await self.sleep(1.0)
-                    continue
-
-                status = 1 if int(direction) == 1 else 2
+            status = 1 if int(direction) == 1 else 2
 
             try:
                 cur_balance, _, _ = await get_balance_info(
