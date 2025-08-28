@@ -227,9 +227,23 @@ class FixedStakeStrategy(StrategyBase):
             account_ccy = self._anchor_ccy
 
             try:
-                pct = await get_current_percent(self.http_client, self.symbol)
+                pct = await get_current_percent(
+                    self.http_client,
+                    investment=stake,
+                    option=self.symbol,
+                    minutes=self._trade_minutes,
+                    account_ccy=account_ccy,
+                )
             except Exception:
-                pct = 0
+                pct = None
+
+            if pct is None:
+                self._status("ожидание процента")
+                log(
+                    f"[{self.symbol}] ⚠ Не получили % выплаты. Пауза и повтор."
+                )
+                await self.sleep(1.0)
+                continue
 
             if pct < min_pct:
                 if wait_low > 0:
