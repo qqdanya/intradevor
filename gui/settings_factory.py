@@ -3,13 +3,16 @@ from PyQt6.QtWidgets import QDialog
 from strategies.martingale import MartingaleStrategy
 from strategies.oscar_grind_1 import OscarGrind1Strategy
 from strategies.oscar_grind_2 import OscarGrind2Strategy
+from strategies.antimartin import AntiMartingaleStrategy
 from gui.settings_martingale import MartingaleSettingsDialog
 from gui.settings_oscar_grind import OscarGrindSettingsDialog
+from gui.settings_antimartin import AntimartinSettingsDialog
 
 _registry: Dict[Type, Type[QDialog]] = {
     MartingaleStrategy: MartingaleSettingsDialog,
     OscarGrind1Strategy: OscarGrindSettingsDialog,
     OscarGrind2Strategy: OscarGrindSettingsDialog,
+    AntiMartingaleStrategy: AntimartinSettingsDialog,
 }
 
 
