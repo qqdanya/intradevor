@@ -3,6 +3,7 @@ import asyncio
 from dataclasses import dataclass, field
 from collections import defaultdict
 from typing import Optional, Tuple, Dict, Callable, Awaitable
+from datetime import datetime
 
 
 # --- helpers ---------------------------------------------------------
@@ -47,6 +48,7 @@ class _State:
     # для wildcard-ожидателей запоминаем исходный символ/таймфрейм
     last_symbol: Optional[str] = None
     last_timeframe: Optional[str] = None
+    next_timestamp: Optional[datetime] = None  # начало следующей свечи
 
 
 _states: Dict[tuple[str, str], _State] = defaultdict(_State)
@@ -68,6 +70,7 @@ def push_signal(
     timeframe: str,
     direction: Optional[int],
     indicator: Optional[str] = None,
+    next_timestamp: Optional[datetime] = None,
 ) -> None:
     """
     Положить НОВОЕ сообщение сигнала:
@@ -95,6 +98,7 @@ def push_signal(
                 st.last_indicator = indicator
             st.last_symbol = symbol
             st.last_timeframe = timeframe
+            st.next_timestamp = next_timestamp
             st.cond.notify_all()
 
     loop = asyncio.get_running_loop()
@@ -193,15 +197,16 @@ async def wait_for_signal_versioned(
             and st.last_monotonic is not None
             and st.last_monotonic >= start
         ):
-            if include_meta:
-                meta = {
-                    "indicator": st.last_indicator,
-                    "tf_sec": st.tf_sec,
-                    "symbol": st.last_symbol,
-                    "timeframe": st.last_timeframe,
-                }
-                return int(direction), int(ver), meta
-            return int(direction), int(ver)
+                if include_meta:
+                    meta = {
+                        "indicator": st.last_indicator,
+                        "tf_sec": st.tf_sec,
+                        "symbol": st.last_symbol,
+                        "timeframe": st.last_timeframe,
+                        "next_timestamp": st.next_timestamp,
+                    }
+                    return int(direction), int(ver), meta
+                return int(direction), int(ver)
         # иначе ждём следующего уведомления
 
 
@@ -229,7 +234,7 @@ async def wait_for_signal(
 
 def peek_signal_state(
     symbol: str, timeframe: str
-) -> Dict[str, Optional[int | float | str]]:
+) -> Dict[str, Optional[int | float | str | datetime]]:
     """
     Неблокирующий доступ к текущему состоянию: возвращает dict с полями:
       version, value (1/2/None), indicator (str|None), tf_sec (int|None), last_monotonic (float|None)
@@ -241,4 +246,5 @@ def peek_signal_state(
         "indicator": st.last_indicator,
         "tf_sec": st.tf_sec,
         "last_monotonic": st.last_monotonic,
+        "next_timestamp": st.next_timestamp,
     }

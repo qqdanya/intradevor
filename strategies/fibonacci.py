@@ -269,6 +269,17 @@ class FibonacciStrategy(MartingaleStrategy):
                 account_mode = "ДЕМО" if demo_now else "РЕАЛ"
 
                 self._status("делает ставку")
+                trade_kwargs = {"trade_type": self._trade_type}
+                time_arg = self._trade_minutes
+                if self._trade_type == "classic":
+                    if not self._next_expire_dt:
+                        log(
+                            f"[{self.symbol}] ❌ Нет времени экспирации для classic. Пауза и повтор."
+                        )
+                        await self.sleep(1.0)
+                        continue
+                    time_arg = self._next_expire_dt.strftime("%H:%M")
+                    trade_kwargs["date"] = self._next_expire_dt.strftime("%d-%m-%Y")
                 trade_id = await place_trade(
                     self.http_client,
                     user_id=self.user_id,
@@ -276,10 +287,11 @@ class FibonacciStrategy(MartingaleStrategy):
                     investment=stake,
                     option=self.symbol,
                     status=status,
-                    minutes=self._trade_minutes,
+                    minutes=time_arg,
                     account_ccy=account_ccy,
                     strict=True,
                     on_log=log,
+                    **trade_kwargs,
                 )
                 if not trade_id:
                     log(f"[{self.symbol}] ❌ Сделка не размещена. Пауза и повтор.")

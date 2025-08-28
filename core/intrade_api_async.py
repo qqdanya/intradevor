@@ -99,40 +99,45 @@ async def place_trade(
     investment: float | int | str,
     option: str,
     status: int,  # 1/2
-    minutes: int | str,  # минуты
+    minutes: int | str,  # минуты или HH:MM
     *,
     account_ccy: str = DEFAULT_ACCOUNT_CCY,
     strict: bool = True,
     on_log=None,
+    trade_type: str = "sprint",
+    date: str = "0",
 ) -> Optional[str]:
     """
     Полная проверка, как в sync-версии:
-      - нормализация времени спринта
+      - нормализация времени спринта (для sprint)
       - привод к лимитам суммы
       - POST и парсинг HTML ответа для data-id
     Возвращает trade_id или None.
     """
-    # --- время спринта
-    try:
-        m = int(minutes)
-    except Exception:
-        if on_log:
-            on_log(f"[{option}] ❌ Некорректное значение минут: {minutes}")
-        return None
+    if str(trade_type).lower() == "classic":
+        time_value = str(minutes)
+    else:
+        # --- время спринта
+        try:
+            m = int(minutes)
+        except Exception:
+            if on_log:
+                on_log(f"[{option}] ❌ Некорректное значение минут: {minutes}")
+            return None
 
-    norm_m = normalize_sprint(option, m)
-    if norm_m is None:
-        if on_log:
-            if option == "BTCUSDT":
-                on_log(
-                    f"[{option}] 🚫 Недопустимое время спринта: {m} мин. Разрешено 5–500."
-                )
-            else:
-                on_log(
-                    f"[{option}] 🚫 Недопустимое время спринта: {m} мин. Разрешено 1 или 3–500."
-                )
-        return None
-    minutes = str(norm_m)
+        norm_m = normalize_sprint(option, m)
+        if norm_m is None:
+            if on_log:
+                if option == "BTCUSDT":
+                    on_log(
+                        f"[{option}] 🚫 Недопустимое время спринта: {m} мин. Разрешено 5–500."
+                    )
+                else:
+                    on_log(
+                        f"[{option}] 🚫 Недопустимое время спринта: {m} мин. Разрешено 1 или 3–500."
+                    )
+            return None
+        time_value = str(norm_m)
 
     # --- сумма
     try:
@@ -163,9 +168,9 @@ async def place_trade(
         "user_hash": user_hash,
         "option": option.replace("/", ""),
         "investment": investment,
-        "time": minutes,
-        "date": "0",
-        "trade_type": "sprint",
+        "time": time_value,
+        "date": date,
+        "trade_type": str(trade_type),
         "status": str(status),
     }
     html = await client.post(PATH_TRADE, data=payload, expect_json=False)

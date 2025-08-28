@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QHeaderView,
+    QComboBox,
 )
 from PyQt6.QtGui import QColor, QBrush
 from PyQt6.QtCore import QTimer, Qt
@@ -118,6 +119,18 @@ class StrategyControlDialog(QDialog):
         tf = str(getv("timeframe", self.bot.strategy_kwargs.get("timeframe", "M1")))
         default_minutes = int(getv("minutes", _minutes_from_timeframe(tf)))
 
+        self.trade_type = QComboBox()
+        self.trade_type.addItems(["sprint", "classic"])
+        self.trade_type.setCurrentText(str(getv("trade_type", "sprint")))
+        allowed_classic = {"M5", "M15", "M30", "H1", "H4"}
+        if tf not in allowed_classic:
+            idx = self.trade_type.findText("classic")
+            if idx >= 0:
+                item = self.trade_type.model().item(idx)
+                item.setEnabled(False)
+            if self.trade_type.currentText() == "classic":
+                self.trade_type.setCurrentText("sprint")
+
         strategy_key = str(self.bot.strategy_kwargs.get("strategy_key", "")).lower()
         self.strategy_key = strategy_key
 
@@ -159,6 +172,7 @@ class StrategyControlDialog(QDialog):
             form.addRow("Базовая ставка", self.base_investment)
             form.addRow("Цель серии, прибыль", self.target_profit)
             form.addRow("Время сделки (мин)", self.minutes)
+            form.addRow("Тип торговли", self.trade_type)
             form.addRow("Макс. сделок в серии", self.max_steps)
             form.addRow("Повторов серии", self.repeat_count)
             form.addRow("Мин. баланс", self.min_balance)
@@ -188,6 +202,7 @@ class StrategyControlDialog(QDialog):
 
             form.addRow("Базовая ставка", self.base_investment)
             form.addRow("Время сделки (мин)", self.minutes)
+            form.addRow("Тип торговли", self.trade_type)
             form.addRow("Количество ставок", self.repeat_count)
             form.addRow("Мин. баланс", self.min_balance)
             form.addRow("Мин. процент", self.min_percent)
@@ -220,6 +235,7 @@ class StrategyControlDialog(QDialog):
 
             form.addRow("Базовая ставка", self.base_investment)
             form.addRow("Время сделки (мин)", self.minutes)
+            form.addRow("Тип торговли", self.trade_type)
             form.addRow("Макс. шагов", self.max_steps)
             form.addRow("Повторов серии", self.repeat_count)
             form.addRow("Мин. баланс", self.min_balance)
@@ -415,6 +431,7 @@ class StrategyControlDialog(QDialog):
                 "min_percent": self.min_percent.value(),
                 "minutes": int(norm),
             }
+        new_params["trade_type"] = self.trade_type.currentText()
 
         self.bot.strategy_kwargs.setdefault("params", {}).update(new_params)
         if self.bot.strategy and hasattr(self.bot.strategy, "update_params"):
