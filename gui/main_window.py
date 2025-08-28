@@ -46,6 +46,7 @@ from strategies.oscar_grind_1 import OscarGrind1Strategy
 from strategies.oscar_grind_2 import OscarGrind2Strategy
 from strategies.antimartin import AntiMartingaleStrategy
 from strategies.fibonacci import FibonacciStrategy
+from strategies.fixed import FixedStakeStrategy
 
 
 class MainWindow(QWidget):
@@ -99,6 +100,7 @@ class MainWindow(QWidget):
             "oscar_grind_1": OscarGrind1Strategy,
             "oscar_grind_2": OscarGrind2Strategy,
             "fibonacci": FibonacciStrategy,
+            "fixed": FixedStakeStrategy,
         }
         self.strategy_labels = {
             "martingale": "Мартингейл",
@@ -106,6 +108,7 @@ class MainWindow(QWidget):
             "oscar_grind_1": "Оскар Грайнд 1",
             "oscar_grind_2": "Оскар Грайнд 2",
             "fibonacci": "Фибоначчи",
+            "fixed": "Фиксированная ставка",
         }
 
         self.bot_ever_started = defaultdict(bool)

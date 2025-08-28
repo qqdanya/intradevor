@@ -163,6 +163,33 @@ class StrategyControlDialog(QDialog):
             form.addRow("Мин. баланс", self.min_balance)
             form.addRow("Мин. процент", self.min_percent)
             form.addRow("Фиксировать направление (0/1)", self.lock_direction)
+        elif strategy_key == "fixed":
+            self.minutes = QSpinBox()
+            self.minutes.setRange(5 if symbol == "BTCUSDT" else 1, 500)
+            self.minutes.setValue(default_minutes)
+            self.minutes.setToolTip("1; 3-500 мин; BTCUSDT: 5-500 мин")
+
+            self.base_investment = QSpinBox()
+            self.base_investment.setRange(1, 50_000)
+            self.base_investment.setValue(int(getv("base_investment", 100)))
+
+            self.repeat_count = QSpinBox()
+            self.repeat_count.setRange(1, 1000)
+            self.repeat_count.setValue(int(getv("repeat_count", 10)))
+
+            self.min_balance = QSpinBox()
+            self.min_balance.setRange(1, 10_000_000)
+            self.min_balance.setValue(int(getv("min_balance", 100)))
+
+            self.min_percent = QSpinBox()
+            self.min_percent.setRange(0, 100)
+            self.min_percent.setValue(int(getv("min_percent", 70)))
+
+            form.addRow("Базовая ставка", self.base_investment)
+            form.addRow("Время сделки (мин)", self.minutes)
+            form.addRow("Количество ставок", self.repeat_count)
+            form.addRow("Мин. баланс", self.min_balance)
+            form.addRow("Мин. процент", self.min_percent)
         else:
             self.minutes = QSpinBox()
             self.minutes.setRange(5 if symbol == "BTCUSDT" else 1, 500)
@@ -367,6 +394,14 @@ class StrategyControlDialog(QDialog):
                 "min_balance": self.min_balance.value(),
                 "min_percent": self.min_percent.value(),
                 "lock_direction_to_first": bool(self.lock_direction.value() == 1),
+                "minutes": int(norm),
+            }
+        elif getattr(self, "strategy_key", "") == "fixed":
+            new_params = {
+                "base_investment": self.base_investment.value(),
+                "repeat_count": self.repeat_count.value(),
+                "min_balance": self.min_balance.value(),
+                "min_percent": self.min_percent.value(),
                 "minutes": int(norm),
             }
         else:
