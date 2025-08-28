@@ -259,21 +259,6 @@ class MartingaleStrategy(StrategyBase):
                 if not await self._ensure_anchor_account_mode():
                     continue
 
-                if series_direction is None and self.symbol == "*":
-                    self._status("ожидание сигнала")
-                    log(
-                        f"[{self.symbol}] ⏳ Ожидание сигнала на {self.timeframe} (шаг {step})..."
-                    )
-                    try:
-                        direction = await self.wait_signal(timeout=sig_timeout)
-                    except asyncio.TimeoutError:
-                        log(
-                            f"[{self.symbol}] ⌛ Таймаут ожидания сигнала внутри серии — выхожу из серии."
-                        )
-                        break
-                    series_direction = 1 if int(direction) == 1 else 2
-                    continue
-
                 # payout
                 pct = await get_current_percent(
                     self.http_client,
