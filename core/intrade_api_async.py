@@ -70,18 +70,21 @@ async def get_current_percent(
     option: str,
     minutes: int | str = 1,
     account_ccy: str = "RUB",
+    trade_type: str = "sprint",
 ) -> Optional[int]:
     """
     Совместимая версия: отправляет form-data как sync, возвращает int|None.
     """
+    t = "Classic" if str(trade_type).lower() == "classic" else "Sprint"
     payload = {
-        "type": "Sprint",
-        "time": str(int(minutes)),
+        "type": t,
         "currency_name": account_ccy,
         "investment": str(investment),
         "percent": "",
         "option": option,
     }
+    if str(trade_type).lower() != "classic":
+        payload["time"] = str(int(minutes))
     text = await client.post(PATH_PERCENT, data=payload, expect_json=False)
     try:
         return int(str(text).strip())

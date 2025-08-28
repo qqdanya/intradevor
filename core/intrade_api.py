@@ -131,19 +131,21 @@ def get_account_currency(session, user_id, user_hash) -> str:
     return currency
 
 
-def get_current_percent(session, investment, option, minutes=1, account_ccy="RUB"):
+def get_current_percent(session, investment, option, minutes=1, account_ccy="RUB", trade_type="sprint"):
     """
     Получить текущий процент под заданную ставку/время/символ.
     minutes/ccy необязательны — оставлены для совместимости.
     """
+    t = "Classic" if str(trade_type).lower() == "classic" else "Sprint"
     payload = {
-        "type": "Sprint",
-        "time": str(int(minutes)),
+        "type": t,
         "currency_name": account_ccy,  # раньше было жестко "RUB"
         "investment": str(investment),
         "percent": "",
         "option": option,
     }
+    if str(trade_type).lower() != "classic":
+        payload["time"] = str(int(minutes))
     r = session.post(PERCENT_URL, data=payload)
     try:
         return int(r.text.strip())

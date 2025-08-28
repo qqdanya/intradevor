@@ -192,6 +192,7 @@ class FibonacciStrategy(MartingaleStrategy):
                     option=self.symbol,
                     minutes=self._trade_minutes,
                     account_ccy=account_ccy,
+                    trade_type=self._trade_type,
                 )
                 if pct is None:
                     self._status("ожидание процента")
