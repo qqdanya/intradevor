@@ -174,7 +174,8 @@ class StrategyControlDialog(QDialog):
             self.base_investment.setValue(int(getv("base_investment", 100)))
             self.max_steps = QSpinBox()
             self.max_steps.setRange(1, 20)
-            self.max_steps.setValue(int(getv("max_steps", 5)))
+            default_max_steps = 3 if strategy_key == "antimartin" else 5
+            self.max_steps.setValue(int(getv("max_steps", default_max_steps)))
             self.repeat_count = QSpinBox()
             self.repeat_count.setRange(1, 1000)
             self.repeat_count.setValue(int(getv("repeat_count", 10)))

@@ -239,7 +239,6 @@ class AntiMartingaleStrategy(StrategyBase):
 
             step = 0
             did_place_any_trade = False
-            series_direction = None
 
             while self._running and step < max_steps:
                 await self._pause_point()
@@ -249,21 +248,18 @@ class AntiMartingaleStrategy(StrategyBase):
                 if not await self._ensure_anchor_account_mode():
                     continue
 
-                if series_direction is None:
-                    self._status("ожидание сигнала")
+                self._status("ожидание сигнала")
+                log(
+                    f"[{self.symbol}] ⏳ Ожидание сигнала на {self.timeframe} (шаг {step})..."
+                )
+                try:
+                    direction = await self.wait_signal(timeout=sig_timeout)
+                except asyncio.TimeoutError:
                     log(
-                        f"[{self.symbol}] ⏳ Ожидание сигнала на {self.timeframe} (шаг {step})..."
+                        f"[{self.symbol}] ⌛ Таймаут ожидания сигнала внутри серии — выхожу из серии."
                     )
-                    try:
-                        direction = await self.wait_signal(timeout=sig_timeout)
-                    except asyncio.TimeoutError:
-                        log(
-                            f"[{self.symbol}] ⌛ Таймаут ожидания сигнала внутри серии — выхожу из серии."
-                        )
-                        break
-                    series_direction = 1 if int(direction) == 1 else 2
-
-                status = series_direction
+                    break
+                status = 1 if int(direction) == 1 else 2
 
                 pct = await get_current_percent(
                     self.http_client,
