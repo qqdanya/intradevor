@@ -442,10 +442,10 @@ class MainWindow(QWidget):
             ctrl_widget = QWidget()
             hl = QHBoxLayout(ctrl_widget)
             hl.setContentsMargins(0, 0, 0, 0)
-            btn_pause = QPushButton("⏸", self)
+            btn_pause = QPushButton("Пауза", self)
             btn_pause.setEnabled(False)
             btn_pause.clicked.connect(partial(self._toggle_pause_clicked, bot))
-            btn_del = QPushButton("×", self)
+            btn_del = QPushButton("Удалить", self)
             btn_del.clicked.connect(partial(self.delete_bot, bot))
             hl.addWidget(btn_pause)
             hl.addWidget(btn_del)
@@ -507,7 +507,7 @@ class MainWindow(QWidget):
         self.toggle_pause(bot, not paused)
         btn = self.bot_pause_buttons.get(bot)
         if btn:
-            btn.setText("⏸" if paused else "▶")
+            btn.setText("Пауза" if paused else "Продолжить")
 
     def delete_bot(self, bot):
         row = self.bot_rows.pop(bot, None)
@@ -1016,7 +1016,7 @@ class MainWindow(QWidget):
             btn = self.bot_pause_buttons.get(bot)
             if btn:
                 btn.setEnabled(started)
-                btn.setText("▶" if paused else "⏸")
+                btn.setText("Продолжить" if paused else "Пауза")
 
     def _set_bot_status(self, bot, status: str):
         """Колбэк от стратегии: 'ожидание сигнала' / 'делает ставку' / 'ожидание результата'.

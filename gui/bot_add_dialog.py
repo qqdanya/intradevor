@@ -83,6 +83,8 @@ class AddBotDialog(QDialog):
             if t in s.upper() or t in s_no_slash:
                 filtered.append(s)
         self.symbol_combo.addItems(filtered)
+        # если есть совпадения кроме опции "Все валютные пары" — выбираем первое
+        self.symbol_combo.setCurrentIndex(1 if len(filtered) > 1 else 0)
         self.on_strategy_change()
 
     def on_strategy_change(self, *_):
