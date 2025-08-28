@@ -271,6 +271,21 @@ class OscarGrind2Strategy(StrategyBase):
                 if not await self._ensure_anchor_account_mode():
                     continue
 
+                if series_direction is None and self.symbol == "*":
+                    self._status("ожидание сигнала")
+                    log(
+                        f"[{self.symbol}] ⏳ Ожидание сигнала на {self.timeframe} (шаг {step_idx + 1})..."
+                    )
+                    try:
+                        direction = await self.wait_signal(timeout=sig_timeout)
+                        series_direction = 1 if int(direction) == 1 else 2
+                    except asyncio.TimeoutError:
+                        log(
+                            f"[{self.symbol}] ⌛ Таймаут ожидания сигнала внутри серии — выхожу из серии."
+                        )
+                        break
+                    continue
+
                 # Узнаём payout на текущую ставку
                 pct = await get_current_percent(
                     self.http_client,
