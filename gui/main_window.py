@@ -439,7 +439,7 @@ class MainWindow(QWidget):
             btn_pause = QPushButton("⏸", self)
             btn_pause.setEnabled(False)
             btn_pause.clicked.connect(partial(self._toggle_pause_clicked, bot))
-            btn_del = QPushButton("🗑", self)
+            btn_del = QPushButton("×", self)
             btn_del.clicked.connect(partial(self.delete_bot, bot))
             hl.addWidget(btn_pause)
             hl.addWidget(btn_del)
@@ -528,7 +528,7 @@ class MainWindow(QWidget):
         key = bot.strategy_kwargs.get("strategy_key", "")
         sym = bot.strategy_kwargs.get("symbol")
         label = self.strategy_label(key)
-        self.append_to_log(f"🗑 Удалён бот: {label} [{sym}]")
+        self.append_to_log(f"× Удалён бот: {label} [{sym}]")
 
     def open_settings_dialog(self, bot):
         from gui.settings_factory import get_settings_dialog_cls
