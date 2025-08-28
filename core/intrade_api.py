@@ -158,38 +158,43 @@ def place_trade(
     investment,
     option,  # символ, напр. "EURUSD" / "BTCUSDT"
     status,  # 1/2
-    minutes,  # строка или int
+    minutes,  # строка (HH:MM) или int
     *,
     account_ccy: str = DEFAULT_ACCOUNT_CCY,
     strict: bool = True,
     on_log=None,
+    trade_type: str = "sprint",
+    date: str = "0",
 ):
     """
     strict=True  -> при нарушении правил возвращает None (не отправляет запрос).
     strict=False -> ставка будет поджата к лимитам, но недопустимое время спринта всё равно запрещаем.
     """
 
-    # ---- Валидация времени спринта
-    try:
-        m = int(minutes)
-    except Exception:
-        if on_log:
-            on_log(f"[{option}] ❌ Некорректное значение минут: {minutes}")
-        return None
+    if str(trade_type).lower() == "classic":
+        time_value = str(minutes)
+    else:
+        # ---- Валидация времени спринта
+        try:
+            m = int(minutes)
+        except Exception:
+            if on_log:
+                on_log(f"[{option}] ❌ Некорректное значение минут: {minutes}")
+            return None
 
-    norm_m = normalize_sprint(option, m)
-    if norm_m is None:
-        if on_log:
-            if option == "BTCUSDT":
-                on_log(
-                    f"[{option}] 🚫 Недопустимое время спринта: {m} мин. Разрешено 5–500."
-                )
-            else:
-                on_log(
-                    f"[{option}] 🚫 Недопустимое время спринта: {m} мин. Разрешено 1 или 3–500."
-                )
-        return None
-    minutes = str(norm_m)
+        norm_m = normalize_sprint(option, m)
+        if norm_m is None:
+            if on_log:
+                if option == "BTCUSDT":
+                    on_log(
+                        f"[{option}] 🚫 Недопустимое время спринта: {m} мин. Разрешено 5–500."
+                    )
+                else:
+                    on_log(
+                        f"[{option}] 🚫 Недопустимое время спринта: {m} мин. Разрешено 1 или 3–500."
+                    )
+            return None
+        time_value = str(norm_m)
 
     # ---- Валидация/приведение суммы ставки
     try:
@@ -220,9 +225,9 @@ def place_trade(
         "user_hash": user_hash,
         "option": option,
         "investment": investment,
-        "time": minutes,
-        "date": "0",
-        "trade_type": "sprint",
+        "time": time_value,
+        "date": date,
+        "trade_type": str(trade_type),
         "status": str(status),
     }
     r = session.post(TRADE_URL, data=payload)

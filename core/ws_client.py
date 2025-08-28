@@ -130,8 +130,14 @@ async def listen_to_signals() -> None:
                     if sig is None:
                         continue
 
-                    # Отправляем в ожидатель — сигнатура без изменений
-                    push_signal(sig.symbol, sig.timeframe, sig.direction, sig.indicator)
+                    # Отправляем в ожидатель
+                    push_signal(
+                        sig.symbol,
+                        sig.timeframe,
+                        sig.direction,
+                        sig.indicator,
+                        sig.next_timestamp,
+                    )
 
                     # Лог: время без таймзоны (локально-наивное)
                     dt_naive = sig.timestamp.replace(tzinfo=None)

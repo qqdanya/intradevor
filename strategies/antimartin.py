@@ -30,6 +30,7 @@ DEFAULTS = {
     "account_currency": "RUB",
     "result_wait_s": 60.0,
     "grace_delay_sec": 30.0,
+    "trade_type": "sprint",
 }
 
 
@@ -112,6 +113,9 @@ class AntiMartingaleStrategy(StrategyBase):
         self._trade_minutes = int(norm)
         self.params["minutes"] = self._trade_minutes
 
+        self._trade_type = str(self.params.get("trade_type", "sprint")).lower()
+        self.params["trade_type"] = self._trade_type
+
         self._on_trade_result = self.params.get("on_trade_result")
         self._on_trade_pending = self.params.get("on_trade_pending")
         self._on_status = self.params.get("on_status")
@@ -130,6 +134,7 @@ class AntiMartingaleStrategy(StrategyBase):
         self._last_signal_ver: Optional[int] = None
         self._last_indicator: str = "-"
         self._last_signal_at_str: Optional[str] = None
+        self._next_expire_dt = None
 
         anchor = str(
             self.params.get("account_currency", DEFAULTS["account_currency"])
@@ -334,6 +339,17 @@ class AntiMartingaleStrategy(StrategyBase):
                 account_mode = "ДЕМО" if demo_now else "РЕАЛ"
 
                 self._status("делает ставку")
+                trade_kwargs = {"trade_type": self._trade_type}
+                time_arg = self._trade_minutes
+                if self._trade_type == "classic":
+                    if not self._next_expire_dt:
+                        log(
+                            f"[{self.symbol}] ❌ Нет времени экспирации для classic. Пауза и повтор."
+                        )
+                        await self.sleep(1.0)
+                        continue
+                    time_arg = self._next_expire_dt.strftime("%H:%M")
+                    trade_kwargs["date"] = self._next_expire_dt.strftime("%d-%m-%Y")
                 trade_id = await place_trade(
                     self.http_client,
                     user_id=self.user_id,
@@ -341,10 +357,11 @@ class AntiMartingaleStrategy(StrategyBase):
                     investment=stake,
                     option=self.symbol,
                     status=status,
-                    minutes=self._trade_minutes,
+                    minutes=time_arg,
                     account_ccy=account_ccy,
                     strict=True,
                     on_log=log,
+                    **trade_kwargs,
                 )
                 if not trade_id:
                     log(f"[{self.symbol}] ❌ Сделка не размещена. Пауза и повтор.")
@@ -501,6 +518,8 @@ class AntiMartingaleStrategy(StrategyBase):
         self._last_signal_ver = ver
         self._last_indicator = (meta or {}).get("indicator") or "-"
 
+        self._next_expire_dt = (meta or {}).get("next_timestamp")
+
         sig_symbol = (meta or {}).get("symbol") or self.symbol
         sig_tf = (meta or {}).get("timeframe") or self.timeframe
         if self._use_any_symbol:
@@ -564,3 +583,7 @@ class AntiMartingaleStrategy(StrategyBase):
                     f"{self._anchor_ccy} → {want}. Валюта зафиксирована при создании."
                 )
             self.params["account_currency"] = self._anchor_ccy
+
+        if "trade_type" in params:
+            self._trade_type = str(params["trade_type"]).lower()
+            self.params["trade_type"] = self._trade_type
