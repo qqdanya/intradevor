@@ -238,6 +238,7 @@ class FixedStakeStrategy(StrategyBase):
                     option=self.symbol,
                     minutes=self._trade_minutes,
                     account_ccy=account_ccy,
+                    trade_type=self._trade_type,
                 )
             except Exception:
                 pct = None
@@ -448,7 +449,8 @@ class FixedStakeStrategy(StrategyBase):
         self._last_signal_ver = ver
         self._last_indicator = (meta or {}).get("indicator") or "-"
 
-        self._next_expire_dt = (meta or {}).get("next_timestamp")
+        ts = (meta or {}).get("next_timestamp")
+        self._next_expire_dt = ts.astimezone().replace(tzinfo=None) if ts else None
 
         sig_symbol = (meta or {}).get("symbol") or self.symbol
         sig_tf = (meta or {}).get("timeframe") or self.timeframe
