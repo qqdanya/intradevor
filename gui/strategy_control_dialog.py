@@ -93,7 +93,8 @@ class StrategyControlDialog(QDialog):
             ]
         )
         hdr = self.trades_table.horizontalHeader()
-        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setStretchLastSection(False)
         self.trades_table.setAlternatingRowColors(True)
         self.trades_table.setSortingEnabled(False)
         self.trades_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)

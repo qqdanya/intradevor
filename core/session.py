@@ -24,7 +24,8 @@ def show_critical_error(text: str):
 # ---- cookies helpers ---------------------------------------------------------
 
 
-COOKIES_FILE = Path("cookies.pkl")
+# путь к cookies.pkl всегда относительно корня проекта
+COOKIES_FILE = Path(__file__).resolve().parent.parent / "cookies.pkl"
 
 
 def _cookies_for_domain(domain: str) -> Dict[str, str]:
@@ -177,12 +178,10 @@ async def create_http_client_from_browser_cookies(
 
 
 async def refresh_http_client_cookies(client: HttpClient) -> None:
-    """
-    Перечитать куки из браузера и заменить их у клиента (для переключений ДЕМО/РЕАЛ и т.п.).
-    ⚠ Не трогает пер-ботовые форки: обновляй только глобальный клиент.
-    """
-    new_cookies = _cookies_for_domain(get_domain())
-    # очистить и залить заново
+    """Перечитать куки из текущей сессии клиента и сохранить их."""
+    session = await client.ensure_session()
+    simple = session.cookie_jar.filter_cookies(get_base_url())
+    new_cookies = {name: cookie.value for name, cookie in simple.items()}
     await client.clear_cookies()
     await client.update_cookies(new_cookies)
     save_cookies(new_cookies)
