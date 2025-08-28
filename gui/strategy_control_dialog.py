@@ -211,7 +211,7 @@ class StrategyControlDialog(QDialog):
         ch = QHBoxLayout(controls)
         self.btn_toggle = QPushButton("🚀 Старт")
         self.btn_stop = QPushButton("⏹ Стоп")
-        self.btn_delete = QPushButton("🗑 Удалить")
+        self.btn_delete = QPushButton("× Удалить")
 
         self.btn_toggle.clicked.connect(self._do_toggle)
         self.btn_stop.clicked.connect(self._do_stop)
