@@ -172,7 +172,7 @@ class MainWindow(QWidget):
         self.add_bot_button.clicked.connect(self.show_add_bot_dialog)
 
         self.bot_table = QTableWidget(self)
-        self.bot_table.setColumnCount(8)
+        self.bot_table.setColumnCount(9)
         self.bot_table.setHorizontalHeaderLabels(
             [
                 "Валютная пара",
@@ -183,6 +183,7 @@ class MainWindow(QWidget):
                 "Профит",
                 "Счёт",
                 "Настройки",
+                "Управление",
             ]
         )
         hdr = self.bot_table.horizontalHeader()
@@ -200,6 +201,7 @@ class MainWindow(QWidget):
         self.bot_status: dict[Bot, str] = {}
         self.bot_runtime_sec: dict[Bot, float] = defaultdict(float)
         self.bot_last_tick: dict[Bot, float] = {}
+        self.bot_pause_buttons: dict[Bot, QPushButton] = {}
 
         # Тикер для апдейта "Время работы"
         self._bots_timer = QTimer(self)
@@ -427,9 +429,22 @@ class MainWindow(QWidget):
             self.bot_table.setItem(row, 5, profit_item)
             _set(row, 6, account_txt)  # Счёт
 
-            btn = QPushButton("Открыть", self)
-            btn.clicked.connect(partial(self.open_strategy_control_dialog, bot))
-            self.bot_table.setCellWidget(row, 7, btn)
+            btn_open = QPushButton("Открыть", self)
+            btn_open.clicked.connect(partial(self.open_strategy_control_dialog, bot))
+            self.bot_table.setCellWidget(row, 7, btn_open)
+
+            ctrl_widget = QWidget()
+            hl = QHBoxLayout(ctrl_widget)
+            hl.setContentsMargins(0, 0, 0, 0)
+            btn_pause = QPushButton("⏸", self)
+            btn_pause.setEnabled(False)
+            btn_pause.clicked.connect(partial(self._toggle_pause_clicked, bot))
+            btn_del = QPushButton("🗑", self)
+            btn_del.clicked.connect(partial(self.delete_bot, bot))
+            hl.addWidget(btn_pause)
+            hl.addWidget(btn_del)
+            self.bot_table.setCellWidget(row, 8, ctrl_widget)
+            self.bot_pause_buttons[bot] = btn_pause
 
             self.bot_runtime_sec[bot] = 0.0
             self.bot_last_tick[bot] = asyncio.get_running_loop().time()
@@ -479,6 +494,41 @@ class MainWindow(QWidget):
         else:
             bot.resume()
             self.append_to_log(f"▶ Продолжить: {label} [{sym}]")
+
+    def _toggle_pause_clicked(self, bot):
+        st = bot.strategy
+        paused = bool(st and hasattr(st, "is_paused") and st.is_paused())
+        self.toggle_pause(bot, not paused)
+        btn = self.bot_pause_buttons.get(bot)
+        if btn:
+            btn.setText("⏸" if paused else "▶")
+
+    def delete_bot(self, bot):
+        row = self.bot_rows.pop(bot, None)
+        self.bot_manager.remove_bot(bot)
+        if row is not None and 0 <= row < self.bot_table.rowCount():
+            self.bot_table.removeRow(row)
+            for b, r in list(self.bot_rows.items()):
+                if r > row:
+                    self.bot_rows[b] = r - 1
+        for mp in (
+            self.bot_started_at,
+            self.bot_profit,
+            self.bot_status,
+            self.bot_runtime_sec,
+            self.bot_last_tick,
+            getattr(self, "bot_last_phase", {}),
+            self.bot_logs,
+            self.bot_log_listeners,
+            self.bot_trade_listeners,
+            self.bot_trade_history,
+        ):
+            mp.pop(bot, None)
+        self.bot_pause_buttons.pop(bot, None)
+        key = bot.strategy_kwargs.get("strategy_key", "")
+        sym = bot.strategy_kwargs.get("symbol")
+        label = self.strategy_label(key)
+        self.append_to_log(f"🗑 Удалён бот: {label} [{sym}]")
 
     def open_settings_dialog(self, bot):
         from gui.settings_factory import get_settings_dialog_cls
@@ -956,6 +1006,11 @@ class MainWindow(QWidget):
                 it_status = QTableWidgetItem()
                 self.bot_table.setItem(row, 3, it_status)
             it_status.setText(ui_status)
+
+            btn = self.bot_pause_buttons.get(bot)
+            if btn:
+                btn.setEnabled(started)
+                btn.setText("▶" if paused else "⏸")
 
     def _set_bot_status(self, bot, status: str):
         """Колбэк от стратегии: 'ожидание сигнала' / 'делает ставку' / 'ожидание результата'.

@@ -266,6 +266,34 @@ class OscarGrind2Strategy(StrategyBase):
                 if not await self._ensure_anchor_account_mode():
                     continue
 
+                # Узнаём payout на текущую ставку
+                pct = await get_current_percent(
+                    self.http_client,
+                    investment=stake,
+                    option=self.symbol,
+                    minutes=self._trade_minutes,
+                    account_ccy=account_ccy,
+                )
+                if pct is None:
+                    self._status("ожидание процента")
+                    log(f"[{self.symbol}] ⚠ Не получили % выплаты. Пауза и повтор.")
+                    await self.sleep(1.0)
+                    continue
+                if pct < min_pct:
+                    self._status("ожидание высокого процента")
+                    if not self._low_payout_notified:
+                        log(
+                            f"[{self.symbol}] ℹ Низкий payout {pct}% < {min_pct}% — ждём..."
+                        )
+                        self._low_payout_notified = True
+                    await self.sleep(wait_low)
+                    continue
+                if self._low_payout_notified:
+                    log(
+                        f"[{self.symbol}] ℹ Работа продолжается (текущий payout = {pct}%)"
+                    )
+                    self._low_payout_notified = False
+
                 # Получаем (или переиспользуем) направление
                 if series_direction is None or not lock_dir:
                     self._status("ожидание сигнала")
@@ -285,34 +313,6 @@ class OscarGrind2Strategy(StrategyBase):
                         break
 
                 status = series_direction  # 1=UP, 2=DOWN
-
-                # Узнаём payout на текущую ставку
-                pct = await get_current_percent(
-                    self.http_client,
-                    investment=stake,
-                    option=self.symbol,
-                    minutes=self._trade_minutes,
-                    account_ccy=account_ccy,
-                )
-                if pct is None:
-                    self._status("ожидание процента")
-                    log(f"[{self.symbol}] ⚠ Не получили % выплаты. Пауза и повтор.")
-                    await self.sleep(1.0)
-                    continue
-                if pct < min_pct:
-                    self._status("ожидание высокого процента")
-                    if not self._low_payout_notified:
-                        log(
-                            f"[{self.symbol}] ℹ Низкий payout {pct}% < {min_pct}% — ждём {wait_low}s"
-                        )
-                        self._low_payout_notified = True
-                    await self.sleep(wait_low)
-                    continue
-                if self._low_payout_notified:
-                    log(
-                        f"[{self.symbol}] ℹ Работа продолжается (текущий payout = {pct}%)"
-                    )
-                    self._low_payout_notified = False
 
                 # Контроль min_balance к текущей ставке
                 try:
