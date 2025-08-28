@@ -1058,24 +1058,58 @@ class MainWindow(QWidget):
                     pass
 
     def on_bot_finished(self, bot):
-        # помечаем статус и время работы, затем удаляем строку
-        row = self.bot_rows.pop(bot, None)
-        self.bot_started_at.pop(bot, None)
-        self.bot_status.pop(bot, None)
-        self.bot_profit.pop(bot, None)
+        # Просто помечаем статус, оставляя строку в таблице — бот можно перезапустить
+        row = self.bot_rows.get(bot)
+        self.bot_status[bot] = "стратегия завершена"
+        self.bot_last_phase[bot] = "стратегия завершена"
 
-        # удалить из таблицы
         if row is not None and 0 <= row < self.bot_table.rowCount():
-            self.bot_table.removeRow(row)
-        try:
-            self.bot_manager.remove_bot(bot)
-        except Exception:
-            pass
+            it = self.bot_table.item(row, 3)
+            if it is None:
+                it = QTableWidgetItem()
+                self.bot_table.setItem(row, 3, it)
+            it.setText("стратегия завершена")
+
         key = bot.strategy_kwargs.get("strategy_key", "")
         label = self.strategy_label(key)
         self.append_to_log(
             f"ℹ️ Бот завершил работу: {label} [{bot.strategy_kwargs.get('symbol')}]"
         )
+
+    def reset_bot(self, bot):
+        """Очистить состояние бота перед повторным запуском."""
+        # сбросим накопленные значения
+        self.bot_runtime_sec[bot] = 0.0
+        self.bot_profit[bot] = 0.0
+        self.bot_status[bot] = "выключен"
+        self.bot_last_phase[bot] = "выключен"
+        loop = asyncio.get_running_loop()
+        self.bot_started_at[bot] = loop.time()
+        self.bot_last_tick[bot] = loop.time()
+
+        row = self.bot_rows.get(bot)
+        if row is not None and row < self.bot_table.rowCount():
+            # время работы
+            it_time = self.bot_table.item(row, 2)
+            if it_time is None:
+                it_time = QTableWidgetItem()
+                self.bot_table.setItem(row, 2, it_time)
+            it_time.setText("0:00")
+
+            # статус
+            it_status = self.bot_table.item(row, 3)
+            if it_status is None:
+                it_status = QTableWidgetItem()
+                self.bot_table.setItem(row, 3, it_status)
+            it_status.setText("выключен")
+
+            # профит
+            it_profit = self.bot_table.item(row, 5)
+            if it_profit is None:
+                it_profit = QTableWidgetItem()
+                self.bot_table.setItem(row, 5, it_profit)
+            it_profit.setForeground(QColor("black"))
+            it_profit.setText(format_money(0, self.account_currency))
 
     def _on_trade_pending_global(
         self,
