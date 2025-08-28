@@ -242,6 +242,12 @@ class AntiMartingaleStrategy(StrategyBase):
 
             while self._running and step < max_steps:
                 await self._pause_point()
+                # В отличие от мартингейла не фиксируемся на паре/таймфрейме
+                if self._use_any_symbol:
+                    self.symbol = "*"
+                if self._use_any_timeframe:
+                    self.timeframe = "*"
+                    self.params["timeframe"] = self.timeframe
 
                 if not await self._ensure_anchor_currency():
                     continue
