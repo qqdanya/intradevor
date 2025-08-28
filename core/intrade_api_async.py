@@ -83,7 +83,7 @@ async def get_current_percent(
         "percent": "",
         "option": option,
     }
-    if str(trade_type).lower() != "classic":
+    if str(trade_type).lower() == "sprint":
         payload["time"] = str(int(minutes))
     text = await client.post(PATH_PERCENT, data=payload, expect_json=False)
     try:
