@@ -4,15 +4,18 @@ from strategies.martingale import MartingaleStrategy
 from strategies.oscar_grind_1 import OscarGrind1Strategy
 from strategies.oscar_grind_2 import OscarGrind2Strategy
 from strategies.antimartin import AntiMartingaleStrategy
+from strategies.fibonacci import FibonacciStrategy
 from gui.settings_martingale import MartingaleSettingsDialog
 from gui.settings_oscar_grind import OscarGrindSettingsDialog
 from gui.settings_antimartin import AntimartinSettingsDialog
+from gui.settings_fibonacci import FibonacciSettingsDialog
 
 _registry: Dict[Type, Type[QDialog]] = {
     MartingaleStrategy: MartingaleSettingsDialog,
     OscarGrind1Strategy: OscarGrindSettingsDialog,
     OscarGrind2Strategy: OscarGrindSettingsDialog,
     AntiMartingaleStrategy: AntimartinSettingsDialog,
+    FibonacciStrategy: FibonacciSettingsDialog,
 }
 
 
