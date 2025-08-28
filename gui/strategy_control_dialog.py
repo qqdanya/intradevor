@@ -300,6 +300,15 @@ class StrategyControlDialog(QDialog):
     def _do_start(self):
         try:
             if not self.bot.has_started():
+                # очистим логи и таблицу
+                self.log_edit.clear()
+                self.trades_table.setRowCount(0)
+                self._pending_rows.clear()
+                # сбросим сохранённую историю и лог в MainWindow
+                self.main.bot_logs[self.bot].clear()
+                self.main.bot_trade_history[self.bot].clear()
+                self.main.reset_bot(self.bot)
+
                 self.bot.start()
                 self.log_edit.append(ts("🚀 Старт стратегии."))
         except Exception as e:
