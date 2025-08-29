@@ -596,7 +596,7 @@ class MartingaleStrategy(StrategyBase):
 
             from datetime import datetime
 
-            self._last_signal_at_str = datetime.now(MOSCOW_TZ).strftime(
+            self._last_signal_at_str = datetime.now().strftime(
                 "%d.%m.%Y %H:%M:%S"
             )
             return int(direction)
