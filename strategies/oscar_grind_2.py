@@ -233,9 +233,6 @@ class OscarGrind2Strategy(StrategyBase):
             wait_low = float(
                 self.params.get("wait_on_low_percent", DEFAULTS["wait_on_low_percent"])
             )
-            result_wait_s = float(
-                self.params.get("result_wait_s", DEFAULTS["result_wait_s"])
-            )
             sig_timeout = float(
                 self.params.get("signal_timeout_sec", DEFAULTS["signal_timeout_sec"])
             )
@@ -402,11 +399,29 @@ class OscarGrind2Strategy(StrategyBase):
                     await self.sleep(1.0)
                     continue
 
+                # определяем длительность сделки (для таймера и ожидания результата)
+                wait_seconds = self.params.get("result_wait_s")
+                if wait_seconds is None:
+                    from datetime import datetime
+
+                    if (
+                        self._trade_type == "classic"
+                        and self._next_expire_dt is not None
+                    ):
+                        wait_seconds = max(
+                            0.0,
+                            (self._next_expire_dt - datetime.now()).total_seconds(),
+                        )
+                    else:
+                        wait_seconds = float(self._trade_minutes) * 60.0
+                else:
+                    wait_seconds = float(wait_seconds)
+
                 # GUI: ожидаем результат (две метки времени)
                 if callable(self._on_trade_pending):
                     from datetime import datetime
 
-                    placed_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+                    placed_at_str = datetime.now().strftime("%d.%м.%Y %H:%M:%S")
                     try:
                         self._on_trade_pending(
                             trade_id=trade_id,
@@ -417,7 +432,7 @@ class OscarGrind2Strategy(StrategyBase):
                             direction=status,
                             stake=float(stake),
                             percent=int(pct),
-                            wait_seconds=float(result_wait_s),
+                            wait_seconds=float(wait_seconds),
                             account_mode=account_mode,
                             indicator=self._last_indicator,
                         )
@@ -431,7 +446,7 @@ class OscarGrind2Strategy(StrategyBase):
                     user_id=self.user_id,
                     user_hash=self.user_hash,
                     trade_id=trade_id,
-                    wait_time=result_wait_s,
+                    wait_time=wait_seconds,
                 )
 
                 # GUI: результат
