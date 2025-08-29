@@ -117,6 +117,7 @@ class MainWindow(QWidget):
         self.bot_log_listeners = defaultdict(list)
         self.bot_trade_listeners = defaultdict(list)
         self.bot_trade_history = defaultdict(list)
+        self.bot_pending_trades = defaultdict(set)
         self.bot_last_phase: dict[Bot, str] = {}
 
         self.user_id_label = QLabel("user_id: loading...")
@@ -193,8 +194,8 @@ class MainWindow(QWidget):
             ]
         )
         hdr = self.bot_table.horizontalHeader()
-        hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setStretchLastSection(False)
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        hdr.setStretchLastSection(True)
         self.bot_table.setAlternatingRowColors(True)
         self.bot_table.setSortingEnabled(False)
         self.bot_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -494,6 +495,13 @@ class MainWindow(QWidget):
             for b, r in list(self.bot_rows.items()):
                 if r > row:
                     self.bot_rows[b] = r - 1
+
+        pending_ids = self.bot_pending_trades.pop(bot, set())
+        for tid in pending_ids:
+            try:
+                self.trades_table.set_result(str(tid), None, self.account_currency)
+            except Exception:
+                pass
         for mp in (
             self.bot_started_at,
             self.bot_profit,
@@ -855,6 +863,10 @@ class MainWindow(QWidget):
         except Exception as e:
             self.append_to_log(f"[!] Ошибка обновления профита: {e}")
 
+        tid = str(kw.get("trade_id", ""))
+        if tid:
+            self.bot_pending_trades.get(bot, set()).discard(tid)
+
         # дальше — обычное добавление в таблицу сделок
         key = bot.strategy_kwargs.get("strategy_key", "")
         strat_label = self.strategy_label(key)
@@ -889,6 +901,10 @@ class MainWindow(QWidget):
             self.add_trade_pending(**payload)
         except Exception:
             pass
+
+        tid = str(payload.get("trade_id", ""))
+        if tid:
+            self.bot_pending_trades[bot].add(tid)
 
         # ⬇️ НОВОЕ: сохраняем в историю, чтобы StrategyControlDialog восстановил «ожидание»
         self.bot_trade_history[bot].append(("pending", dict(payload)))
