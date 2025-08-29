@@ -49,7 +49,7 @@ DEFAULTS = {
     "grace_delay_sec": 30.0,
     # Поведение серии: фиксировать направление по первому сигналу (как в мартингейле)
     "lock_direction_to_first": True,
-    "trade_type": "sprint",
+    "trade_type": "classic",
 }
 
 
@@ -385,22 +385,33 @@ class OscarGrind2Strategy(StrategyBase):
                         continue
                     time_arg = self._next_expire_dt.strftime("%H:%M")
                     trade_kwargs["date"] = self._next_expire_dt.strftime("%d-%m-%Y")
-                trade_id = await place_trade(
-                    self.http_client,
-                    user_id=self.user_id,
-                    user_hash=self.user_hash,
-                    investment=stake,
-                    option=self.symbol,
-                    status=status,
-                    minutes=time_arg,
-                    account_ccy=account_ccy,
-                    strict=True,
-                    on_log=log,
-                    **trade_kwargs,
-                )
+                attempt = 0
+                trade_id = None
+                while attempt < 4:
+                    trade_id = await place_trade(
+                        self.http_client,
+                        user_id=self.user_id,
+                        user_hash=self.user_hash,
+                        investment=stake,
+                        option=self.symbol,
+                        status=status,
+                        minutes=time_arg,
+                        account_ccy=account_ccy,
+                        strict=True,
+                        on_log=log,
+                        **trade_kwargs,
+                    )
+                    if trade_id:
+                        break
+                    attempt += 1
+                    if attempt < 4:
+                        log(f"[{self.symbol}] ❌ Сделка не размещена. Пауза и повтор.")
+                        await self.sleep(1.0)
                 if not trade_id:
-                    log(f"[{self.symbol}] ❌ Сделка не размещена. Пауза и повтор.")
-                    await self.sleep(1.0)
+                    log(
+                        f"[{self.symbol}] ❌ Не удалось разместить сделку после 4 попыток. Ждём новый сигнал."
+                    )
+                    series_direction = None
                     continue
 
                 # определяем длительность сделки (для таймера и ожидания результата)
@@ -624,6 +635,7 @@ class OscarGrind2Strategy(StrategyBase):
                 grace_delay_sec=grace,
                 on_delay=_on_delay,
                 include_meta=True,
+                max_age_sec=(120.0 if self._trade_type == "classic" else 0.0),
             )
 
             direction, ver, meta = await self.wait_cancellable(coro, timeout=timeout)

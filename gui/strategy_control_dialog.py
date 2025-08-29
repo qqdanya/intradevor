@@ -122,7 +122,7 @@ class StrategyControlDialog(QDialog):
 
         self.trade_type = QComboBox()
         self.trade_type.addItems(["sprint", "classic"])
-        self.trade_type.setCurrentText(str(getv("trade_type", "sprint")))
+        self.trade_type.setCurrentText(str(getv("trade_type", "classic")))
         allowed_classic = {ALL_TF_LABEL, "M5", "M15", "M30", "H1", "H4"}
         if tf not in allowed_classic:
             idx = self.trade_type.findText("classic")

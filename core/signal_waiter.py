@@ -129,6 +129,7 @@ async def wait_for_signal_versioned(
     on_delay: Optional[Callable[[float], None]] = None,  # callback(delay_seconds)
     # --- новое: вернуть вместе с direction/version ещё и meta (indicator, tf_sec, symbol, timeframe) ---
     include_meta: bool = False,
+    max_age_sec: float = 0.0,
 ) -> Tuple[int, int] | Tuple[int, int, Dict[str, Optional[str | int | float]]]:
     """
     Ждёт ПЕРВЫЙ up/down с версией > since_version.
@@ -137,17 +138,19 @@ async def wait_for_signal_versioned(
 
     Если include_meta=True — вернёт (direction, version, meta),
     где meta = {"indicator": str|None, "tf_sec": int|None, "symbol": str|None, "timeframe": str|None}.
+    max_age_sec > 0 позволяет использовать сигнал, пришедший не ранее чем
+    max_age_sec секунд до вызова функции.
     """
     st = _states[_key(symbol, timeframe)]
     start = asyncio.get_running_loop().time()
 
     async def _await_next_change() -> Tuple[Optional[int], int]:
         async with st.cond:
-            # быстрый путь — только если сигнал пришёл ПОСЛЕ start
+            # быстрый путь — только если сигнал пришёл ПОСЛЕ start-max_age_sec
             if (
                 st.value in (1, 2)
                 and (since_version is None or st.version > since_version)
-                and (st.last_monotonic or 0) >= start
+                and (st.last_monotonic or 0) >= (start - float(max_age_sec))
             ):
                 return st.value, st.version
             # иначе ждём новое сообщение
@@ -195,7 +198,7 @@ async def wait_for_signal_versioned(
             direction in (1, 2)
             and (since_version is None or ver > since_version)
             and st.last_monotonic is not None
-            and st.last_monotonic >= start
+            and st.last_monotonic >= (start - float(max_age_sec))
         ):
                 if include_meta:
                     meta = {
