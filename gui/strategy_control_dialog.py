@@ -704,11 +704,14 @@ class StrategyControlDialog(QDialog):
         payload: dict с полями, как у MainWindow.add_trade_pending/add_trade_result,
                  расширенно допускаем 'indicator'
         """
+        data = dict(payload)
+        data.pop("strategy", None)  # в этом диалоге нет колонки "Стратегия"
+
         try:
             if kind == "pending":
-                self._add_trade_pending_local(**payload)
+                self._add_trade_pending_local(**data)
             else:
-                self._add_trade_result_local(**payload)
+                self._add_trade_result_local(**data)
         except Exception as e:
             # пусть ошибка в UI не роняет окно
             self.log_edit.append(ts(f"⚠ Ошибка обновления таблицы сделок: {e}"))
