@@ -372,17 +372,20 @@ class FixedStakeStrategy(StrategyBase):
             trades_left -= 1
 
             # определяем длительность сделки (для таймера и ожидания результата)
+            from datetime import datetime
+
+            if self._trade_type == "classic" and self._next_expire_dt is not None:
+                trade_seconds = max(
+                    0.0, (self._next_expire_dt - datetime.now()).total_seconds()
+                )
+                expected_end_ts = self._next_expire_dt.timestamp()
+            else:
+                trade_seconds = float(self._trade_minutes) * 60.0
+                expected_end_ts = datetime.now().timestamp() + trade_seconds
+
             wait_seconds = self.params.get("result_wait_s")
             if wait_seconds is None:
-                from datetime import datetime
-
-                if self._trade_type == "classic" and self._next_expire_dt is not None:
-                    wait_seconds = max(
-                        0.0,
-                        (self._next_expire_dt - datetime.now()).total_seconds(),
-                    )
-                else:
-                    wait_seconds = float(self._trade_minutes) * 60.0
+                wait_seconds = trade_seconds
             else:
                 wait_seconds = float(wait_seconds)
 
@@ -400,9 +403,10 @@ class FixedStakeStrategy(StrategyBase):
                         direction=status,
                         stake=float(stake),
                         percent=int(pct),
-                        wait_seconds=float(wait_seconds),
+                        wait_seconds=float(trade_seconds),
                         account_mode=account_mode,
                         indicator=self._last_indicator,
+                        expected_end_ts=expected_end_ts,
                     )
                 except Exception:
                     pass
