@@ -314,26 +314,27 @@ class FibonacciStrategy(MartingaleStrategy):
                 did_place_any_trade = True
 
                 # определяем длительность сделки (для таймера и ожидания результата)
+                from datetime import datetime
+
+                if (
+                    self._trade_type == "classic"
+                    and self._next_expire_dt is not None
+                ):
+                    trade_seconds = max(
+                        0.0, (self._next_expire_dt - datetime.now()).total_seconds()
+                    )
+                    expected_end_ts = self._next_expire_dt.timestamp()
+                else:
+                    trade_seconds = float(self._trade_minutes) * 60.0
+                    expected_end_ts = datetime.now().timestamp() + trade_seconds
+
                 wait_seconds = self.params.get("result_wait_s")
                 if wait_seconds is None:
-                    from datetime import datetime
-
-                    if (
-                        self._trade_type == "classic"
-                        and self._next_expire_dt is not None
-                    ):
-                        wait_seconds = max(
-                            0.0,
-                            (self._next_expire_dt - datetime.now()).total_seconds(),
-                        )
-                    else:
-                        wait_seconds = float(self._trade_minutes) * 60.0
+                    wait_seconds = trade_seconds
                 else:
                     wait_seconds = float(wait_seconds)
 
                 if callable(self._on_trade_pending):
-                    from datetime import datetime
-
                     placed_at_str = datetime.now().strftime("%d.%м.%Y %H:%M:%S")
                     try:
                         self._on_trade_pending(
@@ -345,9 +346,10 @@ class FibonacciStrategy(MartingaleStrategy):
                             direction=status,
                             stake=float(stake),
                             percent=int(pct),
-                            wait_seconds=float(wait_seconds),
+                            wait_seconds=float(trade_seconds),
                             account_mode=account_mode,
                             indicator=self._last_indicator,
+                            expected_end_ts=expected_end_ts,
                         )
                     except Exception:
                         pass
