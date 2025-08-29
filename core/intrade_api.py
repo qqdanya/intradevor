@@ -131,12 +131,14 @@ def get_account_currency(session, user_id, user_hash) -> str:
     return currency
 
 
-def get_current_percent(session, investment, option, minutes=1, account_ccy="RUB", trade_type="sprint"):
+def get_current_percent(
+    session, investment, option, minutes=1, account_ccy="RUB", trade_type="sprint"
+):
     """
     Получить текущий процент под заданную ставку/время/символ.
     minutes/ccy необязательны — оставлены для совместимости.
     """
-    t = "Classic" if str(trade_type).lower() == "classic" else "Sprint"
+    t = "Classic" if str(trade_type).lower() == "classic" else "sprint"
     payload = {
         "type": t,
         "currency_name": account_ccy,  # раньше было жестко "RUB"

@@ -95,7 +95,9 @@ def _cookies_via_chromedriver(login_url: str) -> Dict[str, str]:
             }
 
             uid_cookie = next((c for c in cookies_list if c["name"] == "user_id"), None)
-            uhash_cookie = next((c for c in cookies_list if c["name"] == "user_hash"), None)
+            uhash_cookie = next(
+                (c for c in cookies_list if c["name"] == "user_hash"), None
+            )
             if uid_cookie and uhash_cookie:
                 uid_dom = uid_cookie.get("domain") or ""
                 uhash_dom = uhash_cookie.get("domain") or ""
@@ -143,7 +145,10 @@ async def create_http_client_from_browser_cookies(
     force_refresh: bool = False,
 ) -> HttpClient:
     """Создаёт глобальный HttpClient с куками браузера для текущего домена."""
-    cfg = HttpConfig(base_url=get_base_url(), user_agent="Intradevor/1.0")
+    cfg = HttpConfig(
+        base_url=get_base_url(),
+        user_agent="Mozilla/5.0 (X11; Linux x86_64; rv:141.0) Gecko/20100101 Firefox/141.0",
+    )
 
     cookies: Dict[str, str] | None = None
     if not force_refresh:
