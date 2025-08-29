@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QApplication,
     QFontDialog,
 )
-from PyQt6.QtGui import QTextCursor, QColor, QBrush
+from PyQt6.QtGui import QTextCursor, QColor
 from PyQt6.QtCore import Qt, QTimer
 from collections import defaultdict
 from functools import partial
@@ -26,6 +26,7 @@ from core import config
 
 from gui.bot_add_dialog import AddBotDialog, ALL_SYMBOLS_LABEL
 from gui.risk_dialog import RiskDialog
+from gui.trades_table_widget import TradesTableWidget
 from core.session import (
     create_http_client_from_browser_cookies,
     refresh_http_client_cookies,
@@ -116,7 +117,6 @@ class MainWindow(QWidget):
         self.bot_log_listeners = defaultdict(list)
         self.bot_trade_listeners = defaultdict(list)
         self.bot_trade_history = defaultdict(list)
-        self.pending_trades = {}
         self.bot_last_phase: dict[Bot, str] = {}
 
         self.user_id_label = QLabel("user_id: loading...")
@@ -219,31 +219,7 @@ class MainWindow(QWidget):
         self.signal_log.setReadOnly(True)
 
         # === Таблица результатов сделок ===
-        self.trades_table = QTableWidget(self)
-        self.trades_table.setColumnCount(12)
-        self.trades_table.setHorizontalHeaderLabels(
-            [
-                "Время сигнала",
-                "Время ставки",
-                "Стратегия",
-                "Индикатор",
-                "Валютная пара",
-                "ТФ",
-                "Направление",
-                "Ставка",
-                "Время",
-                "Процент",
-                "P/L",
-                "Счет",
-            ]
-        )
-        hdr = self.trades_table.horizontalHeader()
-        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.trades_table.setAlternatingRowColors(True)
-        # self.trades_table.setSortingEnabled(True)
-        self.trades_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.trades_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
-        self.trades_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.trades_table = TradesTableWidget(self)
 
         layout = QVBoxLayout()
         layout.setMenuBar(self.menu_bar)
@@ -696,132 +672,25 @@ class MainWindow(QWidget):
         wait_seconds: float,
         account_mode: str | None = None,
         indicator: str | None = None,
-        expected_end_ts: (
-            float | None
-        ) = None,  # ⬅️ НОВОЕ: абсолютный дедлайн (epoch seconds)
+        expected_end_ts: float | None = None,
     ):
-        """
-        Добавляет строку «ожидание результата».
-        Колонки: Время сигнала | Время ставки | Стратегия | Индикатор | Пара | ТФ |
-                  Направление | Ставка | Время | % | P/L | Счет
-        В P/L показываем обратный отсчёт, синхронизированный по expected_end_ts.
-        """
-        from time import time as _now
-
-        # если нам не прислали абсолютный дедлайн — посчитаем сами
-        if expected_end_ts is None:
-            expected_end_ts = _now() + float(wait_seconds)
-
-        def _fmt_left(sec: float) -> str:
-            s = int(max(0, round(sec)))
-            h, r = divmod(s, 3600)
-            m, s = divmod(r, 60)
-            if h > 0:
-                return f"{h}:{m:02d}:{s:02d}"
-            if m > 0:
-                return f"{m}:{s:02d}"
-            return f"{s} с"
-
-        def _do():
-            was_sorting = self.trades_table.isSortingEnabled()
-            if was_sorting:
-                self.trades_table.setSortingEnabled(False)
-
-            row = 0
-            self.trades_table.insertRow(row)
-
-            dir_text = "ВВЕРХ" if int(direction) == 1 else "ВНИЗ"
-            left_now = max(0.0, expected_end_ts - _now())
-            account_txt = account_mode or ("ДЕМО" if self.is_demo else "РЕАЛ")
-            ccy = self.account_currency
-            duration_txt = f"{int(round(float(wait_seconds) / 60))} мин"
-
-            vals = [
-                signal_at,  # 0 Время сигнала
-                placed_at,  # 1 Время ставки
-                (strategy or "-"),  # 2 Стратегия
-                (indicator or "-"),  # 3 Индикатор
-                symbol,  # 4 Пара
-                timeframe,  # 5 ТФ
-                dir_text,  # 6 Направление
-                format_money(stake, ccy),  # 7 Ставка
-                duration_txt,  # 8 Время
-                f"{percent}%",  # 9 %
-                f"Ожидание ({_fmt_left(left_now)})",  # 10 P/L
-                account_txt,  # 11 Счёт
-            ]
-            for col, v in enumerate(vals):
-                it = QTableWidgetItem(str(v))
-                if col in (6, 10):  # выравниваем Направление и P/L по центру
-                    it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                self.trades_table.setItem(row, col, it)
-
-            yellow = QBrush(QColor("#fff4c2"))
-            for c in range(self.trades_table.columnCount()):
-                it = self.trades_table.item(row, c)
-                if it:
-                    it.setBackground(yellow)
-
-            timer = QTimer(self)
-            timer.setInterval(1000)
-
-            def _tick():
-                left = expected_end_ts - _now()
-                info = self.pending_trades.get(trade_id)
-                if not info:
-                    timer.stop()
-                    return
-                cur_row = info.get("row")
-                # если строка пропала — стоп
-                if not isinstance(cur_row, int) or cur_row >= self.trades_table.rowCount():
-                    timer.stop()
-                    return
-                item = self.trades_table.item(cur_row, 10)  # P/L
-                if item:
-                    item.setText(f"Ожидание ({_fmt_left(left)})")
-                if left <= 0:
-                    timer.stop()
-
-            timer.timeout.connect(_tick)
-            timer.start()
-
-            # остановим предыдущий таймер, если такой trade_id уже есть
-            prev = self.pending_trades.pop(trade_id, None)
-            if prev and isinstance(prev.get("timer"), QTimer):
-                try:
-                    prev["timer"].stop()
-                except Exception:
-                    pass
-
-            # сдвинем индексы ранее вставленных строк
-            for info in self.pending_trades.values():
-                r = info.get("row")
-                if isinstance(r, int) and r >= row:
-                    info["row"] = r + 1
-
-            # сохраняем всё, включая индикатор, стратегию и дедлайн
-            self.pending_trades[trade_id] = {
-                "row": row,
-                "timer": timer,
-                "indicator": (indicator or "-"),
-                "strategy": (strategy or "-"),
-                "expected_end_ts": float(expected_end_ts),
-                "symbol": symbol,
-                "timeframe": timeframe,
-                "direction": int(direction),
-                "stake": float(stake),
-                "percent": int(percent),
-                "signal_at": signal_at,
-                "placed_at": placed_at,
-                "account_mode": account_mode or ("ДЕМО" if self.is_demo else "РЕАЛ"),
-                "wait_seconds": float(wait_seconds),
-            }
-
-            if was_sorting:
-                self.trades_table.setSortingEnabled(True)
-            self.trades_table.scrollToTop()
-
-        QTimer.singleShot(0, _do)
+        """Добавляет строку ожидания сделки."""
+        duration = float(wait_seconds)
+        acc = account_mode or ("ДЕМО" if self.is_demo else "РЕАЛ")
+        self.trades_table.add_pending(
+            trade_id=str(trade_id),
+            signal_at=signal_at,
+            placed_at=placed_at,
+            strategy=strategy or "-",
+            indicator=indicator or "-",
+            symbol=symbol,
+            timeframe=timeframe,
+            direction=direction,
+            stake=float(stake),
+            duration=duration,
+            percent=int(percent),
+            account_mode=acc,
+        )
 
     def add_trade_result(
         self,
@@ -838,118 +707,29 @@ class MainWindow(QWidget):
         profit: float | None,
         account_mode: str | None = None,
         indicator: str | None = None,  # <= НОВОЕ
-    ):
-        """
-        Если есть pending с таким trade_id — обновляем его строку (сохраняя индикатор).
-        Иначе добавляем новую строку и используем indicator (или "-").
-        Красим строку по результату.
-        """
-
-        def _fill_row(
-            row: int,
-            strategy_value: str,
-            indicator_value: str,
-            sig_time: str,
-            place_time: str,
-            duration_txt: str,
         ):
-            dir_text = "ВВЕРХ" if int(direction) == 1 else "ВНИЗ"
-            account_txt = account_mode or ("ДЕМО" if self.is_demo else "РЕАЛ")
-            ccy = self.account_currency
+        """Добавляет результат сделки в таблицу."""
+        acc = account_mode or ("ДЕМО" if self.is_demo else "РЕАЛ")
+        tid = str(trade_id) if trade_id is not None else ""
 
-            def fmt_pl(p):
-                if p is None:
-                    return "—"
-                txt = format_money(p, ccy)
-                return "+" + txt if p > 0 else txt
-
-            vals = [
-                sig_time,  # 0 Время сигнала
-                place_time,  # 1 Время ставки
-                strategy_value,  # 2 Стратегия
-                indicator_value,  # 3 Индикатор
-                symbol,  # 4 Пара
-                timeframe,  # 5 ТФ
-                dir_text,  # 6 Направление
-                format_money(stake, ccy),  # 7 Ставка
-                duration_txt,  # 8 Время
-                f"{percent}%",  # 9 %
-                fmt_pl(profit),  # 10 P/L
-                account_txt,  # 11 Счёт
-            ]
-            for col, v in enumerate(vals):
-                it = QTableWidgetItem(str(v))
-                if col in (6, 10):
-                    it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                self.trades_table.setItem(row, col, it)
-
-            if profit is None or abs(profit) < 1e-9:
-                color = QColor("#e0e0e0")  # серый (PUSH/неизвестно)
-            elif profit > 0:
-                color = QColor("#d1f7c4")  # зелёный
-            else:
-                color = QColor("#ffd6d6")  # красный
-            brush = QBrush(color)
-            for c in range(self.trades_table.columnCount()):
-                it = self.trades_table.item(row, c)
-                if it:
-                    it.setBackground(brush)
-
-        def _do():
-            was_sorting = self.trades_table.isSortingEnabled()
-            if was_sorting:
-                self.trades_table.setSortingEnabled(False)
-
-            row_to_update = None
-            strategy_value = strategy or "-"
-            indicator_value = indicator or "-"
-            sig_time = signal_at
-            place_time = placed_at
-            duration_txt = ""
-
-            if trade_id and trade_id in self.pending_trades:
-                info = self.pending_trades.pop(trade_id, {})
-                timer = info.get("timer")
-                if isinstance(timer, QTimer):
-                    try:
-                        timer.stop()
-                    except Exception:
-                        pass
-                row = info.get("row")
-                if isinstance(row, int) and 0 <= row < self.trades_table.rowCount():
-                    row_to_update = row
-                    # если при pending уже знали индикатор — используем его
-                    indicator_value = info.get("indicator", indicator_value)
-                    strategy_value = info.get("strategy", strategy_value)
-                    sig_time = info.get("signal_at", sig_time)
-                    place_time = info.get("placed_at", place_time)
-                    duration_txt = (
-                        f"{int(round(info.get('wait_seconds', 0.0) / 60))} мин"
-                    )
-
-            if row_to_update is None:
-                row_to_update = 0
-                self.trades_table.insertRow(row_to_update)
-                # сдвинем индексы pending'ов, т.к. вставили строку сверху
-                for info in self.pending_trades.values():
-                    r = info.get("row")
-                    if isinstance(r, int) and r >= row_to_update:
-                        info["row"] = r + 1
-
-            _fill_row(
-                row_to_update,
-                strategy_value,
-                indicator_value,
-                sig_time,
-                place_time,
-                duration_txt,
+        if tid not in getattr(self.trades_table, "_row_by_trade", {}):
+            # если не было pending, добавим строку с базовой информацией
+            self.trades_table.add_pending(
+                trade_id=tid or "-",
+                signal_at=signal_at,
+                placed_at=placed_at,
+                strategy=strategy or "-",
+                indicator=indicator or "-",
+                symbol=symbol,
+                timeframe=timeframe,
+                direction=direction,
+                stake=float(stake),
+                duration=0.0,
+                percent=int(percent),
+                account_mode=acc,
             )
 
-            if was_sorting:
-                self.trades_table.setSortingEnabled(True)
-            self.trades_table.scrollToTop()
-
-        QTimer.singleShot(0, _do)
+        self.trades_table.set_result(tid or "-", profit, self.account_currency)
 
     def _fmt_runtime(self, seconds: float) -> str:
         s = int(max(0, round(seconds)))
