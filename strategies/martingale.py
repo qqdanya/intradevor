@@ -551,18 +551,6 @@ class MartingaleStrategy(StrategyBase):
         if self._use_any_timeframe:
             self.timeframe = sig_tf
             self.params["timeframe"] = self.timeframe
-        if self._use_any_symbol or self._use_any_timeframe:
-            raw_minutes = _minutes_from_timeframe(self.timeframe)
-            norm = normalize_sprint(self.symbol, raw_minutes)
-            if norm is None:
-                fallback = raw_minutes
-                norm = normalize_sprint(self.symbol, fallback) or fallback
-                if self.log:
-                    self.log(
-                        f"[{self.symbol}] ⚠ Минуты {raw_minutes} недопустимы. Использую {norm}."
-                    )
-            self._trade_minutes = int(norm)
-            self.params["minutes"] = self._trade_minutes
 
         from datetime import datetime
 
@@ -596,8 +584,6 @@ class MartingaleStrategy(StrategyBase):
             self._use_any_timeframe = tf_raw in (ALL_TF_LABEL, "*")
             self.timeframe = "*" if self._use_any_timeframe else tf
             self.params["timeframe"] = self.timeframe
-            if self.timeframe != "*" and "minutes" not in params:
-                self._trade_minutes = _minutes_from_timeframe(self.timeframe)
 
         if "account_currency" in params:
             want = str(params["account_currency"]).upper()
