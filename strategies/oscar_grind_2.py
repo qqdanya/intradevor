@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import math
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from core.http_async import HttpClient
 from core.intrade_api_async import (
@@ -17,6 +18,8 @@ from core.signal_waiter import wait_for_signal_versioned, peek_signal_state
 from strategies.base import StrategyBase
 from core.policy import normalize_sprint
 from core.money import format_amount
+
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 # Берём вспомогательные вещи из мартингейла, чтобы не дублировать
 from strategies.martingale import (
@@ -407,7 +410,10 @@ class OscarGrind2Strategy(StrategyBase):
                     and self._next_expire_dt is not None
                 ):
                     trade_seconds = max(
-                        0.0, (self._next_expire_dt - datetime.now()).total_seconds()
+                        0.0,
+                        (
+                            self._next_expire_dt - datetime.now(MOSCOW_TZ)
+                        ).total_seconds(),
                     )
                     expected_end_ts = self._next_expire_dt.timestamp()
                 else:
@@ -623,7 +629,7 @@ class OscarGrind2Strategy(StrategyBase):
         self._last_indicator = (meta or {}).get("indicator") or "-"
 
         ts = (meta or {}).get("next_timestamp")
-        self._next_expire_dt = ts.astimezone().replace(tzinfo=None) if ts else None
+        self._next_expire_dt = ts.astimezone(MOSCOW_TZ) if ts else None
 
         sig_symbol = (meta or {}).get("symbol") or self.symbol
         sig_tf = (meta or {}).get("timeframe") or self.timeframe
@@ -635,7 +641,7 @@ class OscarGrind2Strategy(StrategyBase):
 
         from datetime import datetime
 
-        self._last_signal_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+        self._last_signal_at_str = datetime.now(MOSCOW_TZ).strftime("%d.%m.%Y %H:%M:%S")
         return int(direction)
 
     def update_params(self, **params):
