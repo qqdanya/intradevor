@@ -24,6 +24,7 @@ from strategies.martingale import _minutes_from_timeframe
 from core.policy import normalize_sprint
 from core.money import format_money
 from core.logger import ts
+from gui.bot_add_dialog import ALL_TF_LABEL
 
 
 class StrategyControlDialog(QDialog):
@@ -122,7 +123,7 @@ class StrategyControlDialog(QDialog):
         self.trade_type = QComboBox()
         self.trade_type.addItems(["sprint", "classic"])
         self.trade_type.setCurrentText(str(getv("trade_type", "sprint")))
-        allowed_classic = {"M5", "M15", "M30", "H1", "H4"}
+        allowed_classic = {ALL_TF_LABEL, "M5", "M15", "M30", "H1", "H4"}
         if tf not in allowed_classic:
             idx = self.trade_type.findText("classic")
             if idx >= 0:
@@ -170,10 +171,10 @@ class StrategyControlDialog(QDialog):
             self.lock_direction.setRange(0, 1)
             self.lock_direction.setValue(1 if getv("lock_direction_to_first", True) else 0)
 
+            form.addRow("Тип торговли", self.trade_type)
             form.addRow("Базовая ставка", self.base_investment)
             form.addRow("Цель серии, прибыль", self.target_profit)
             form.addRow("Время сделки (мин)", self.minutes)
-            form.addRow("Тип торговли", self.trade_type)
             form.addRow("Макс. сделок в серии", self.max_steps)
             form.addRow("Повторов серии", self.repeat_count)
             form.addRow("Мин. баланс", self.min_balance)
@@ -201,9 +202,9 @@ class StrategyControlDialog(QDialog):
             self.min_percent.setRange(0, 100)
             self.min_percent.setValue(int(getv("min_percent", 70)))
 
+            form.addRow("Тип торговли", self.trade_type)
             form.addRow("Базовая ставка", self.base_investment)
             form.addRow("Время сделки (мин)", self.minutes)
-            form.addRow("Тип торговли", self.trade_type)
             form.addRow("Количество ставок", self.repeat_count)
             form.addRow("Мин. баланс", self.min_balance)
             form.addRow("Мин. процент", self.min_percent)
@@ -234,9 +235,9 @@ class StrategyControlDialog(QDialog):
             self.min_percent.setRange(0, 100)
             self.min_percent.setValue(int(getv("min_percent", 70)))
 
+            form.addRow("Тип торговли", self.trade_type)
             form.addRow("Базовая ставка", self.base_investment)
             form.addRow("Время сделки (мин)", self.minutes)
-            form.addRow("Тип торговли", self.trade_type)
             form.addRow("Макс. шагов", self.max_steps)
             form.addRow("Повторов серии", self.repeat_count)
             form.addRow("Мин. баланс", self.min_balance)
