@@ -334,8 +334,8 @@ class FibonacciStrategy(MartingaleStrategy):
                 else:
                     wait_seconds = float(wait_seconds)
 
+                placed_at_str = datetime.now().strftime("%d.%м.%Y %H:%M:%S")
                 if callable(self._on_trade_pending):
-                    placed_at_str = datetime.now().strftime("%d.%м.%Y %H:%M:%S")
                     try:
                         self._on_trade_pending(
                             trade_id=trade_id,
@@ -365,9 +365,6 @@ class FibonacciStrategy(MartingaleStrategy):
                 )
 
                 if callable(self._on_trade_result):
-                    from datetime import datetime
-
-                    placed_at_str = datetime.now().strftime("%d.%m.%Y %H:%М:%S")
                     try:
                         self._on_trade_result(
                             trade_id=trade_id,
