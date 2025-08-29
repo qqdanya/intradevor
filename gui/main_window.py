@@ -193,7 +193,8 @@ class MainWindow(QWidget):
             ]
         )
         hdr = self.bot_table.horizontalHeader()
-        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setStretchLastSection(False)
         self.bot_table.setAlternatingRowColors(True)
         self.bot_table.setSortingEnabled(False)
         self.bot_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
