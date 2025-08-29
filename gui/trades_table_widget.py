@@ -45,8 +45,8 @@ class TradesTableWidget(QTableWidget):
         self.setHorizontalHeaderLabels(self.COLS)
 
         hdr = self.horizontalHeader()
-        hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setStretchLastSection(False)
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        hdr.setStretchLastSection(True)
 
         self.setAlternatingRowColors(True)
         self.setSortingEnabled(False)

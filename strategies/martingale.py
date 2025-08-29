@@ -605,6 +605,10 @@ class MartingaleStrategy(StrategyBase):
             if self._use_any_timeframe:
                 self.timeframe = sig_tf
                 self.params["timeframe"] = self.timeframe
+                raw = _minutes_from_timeframe(self.timeframe)
+                norm = normalize_sprint(self.symbol, raw) or raw
+                self._trade_minutes = int(norm)
+                self.params["minutes"] = self._trade_minutes
 
             from datetime import datetime
 
@@ -640,6 +644,11 @@ class MartingaleStrategy(StrategyBase):
             self._use_any_timeframe = tf_raw in (ALL_TF_LABEL, "*")
             self.timeframe = "*" if self._use_any_timeframe else tf
             self.params["timeframe"] = self.timeframe
+            if "minutes" not in params:
+                raw = _minutes_from_timeframe(self.timeframe)
+                norm = normalize_sprint(self.symbol, raw) or raw
+                self._trade_minutes = int(norm)
+                self.params["minutes"] = self._trade_minutes
 
         if "account_currency" in params:
             want = str(params["account_currency"]).upper()
