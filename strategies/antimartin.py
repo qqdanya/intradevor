@@ -21,6 +21,7 @@ MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 ALL_SYMBOLS_LABEL = "Все валютные пары"
 ALL_TF_LABEL = "Все таймфреймы"
+CLASSIC_ALLOWED_TFS = {"M5", "M15", "M30", "H1", "H4"}
 
 DEFAULTS = {
     "base_investment": 100,
@@ -539,37 +540,53 @@ class AntiMartingaleStrategy(StrategyBase):
                 f"[{self.symbol}] ⏱ Задержка следующего прогноза ~{sec:.1f}s"
             )
 
-        coro = wait_for_signal_versioned(
-            self.symbol,
-            self.timeframe,
-            since_version=self._last_signal_ver,
-            check_pause=self.is_paused,
-            timeout=None,
-            raise_on_timeout=True,
-            grace_delay_sec=grace,
-            on_delay=_on_delay,
-            include_meta=True,
-        )
+        while True:
+            coro = wait_for_signal_versioned(
+                self.symbol,
+                self.timeframe,
+                since_version=self._last_signal_ver,
+                check_pause=self.is_paused,
+                timeout=None,
+                raise_on_timeout=True,
+                grace_delay_sec=grace,
+                on_delay=_on_delay,
+                include_meta=True,
+            )
 
-        direction, ver, meta = await self.wait_cancellable(coro, timeout=timeout)
-        self._last_signal_ver = ver
-        self._last_indicator = (meta or {}).get("indicator") or "-"
+            direction, ver, meta = await self.wait_cancellable(coro, timeout=timeout)
+            sig_symbol = (meta or {}).get("symbol") or self.symbol
+            sig_tf = ((meta or {}).get("timeframe") or self.timeframe).upper()
 
-        ts = (meta or {}).get("next_timestamp")
-        self._next_expire_dt = ts.astimezone(MOSCOW_TZ) if ts else None
+            if (
+                self._use_any_timeframe
+                and self._trade_type == "classic"
+                and sig_tf not in CLASSIC_ALLOWED_TFS
+            ):
+                self._last_signal_ver = ver
+                if self.log:
+                    self.log(
+                        f"[{sig_symbol}] ⚠ Таймфрейм {sig_tf} недоступен для Classic — пропуск."
+                    )
+                continue
 
-        sig_symbol = (meta or {}).get("symbol") or self.symbol
-        sig_tf = (meta or {}).get("timeframe") or self.timeframe
-        if self._use_any_symbol:
-            self.symbol = sig_symbol
-        if self._use_any_timeframe:
-            self.timeframe = sig_tf
-            self.params["timeframe"] = self.timeframe
+            self._last_signal_ver = ver
+            self._last_indicator = (meta or {}).get("indicator") or "-"
 
-        from datetime import datetime
+            ts = (meta or {}).get("next_timestamp")
+            self._next_expire_dt = ts.astimezone(MOSCOW_TZ) if ts else None
 
-        self._last_signal_at_str = datetime.now(MOSCOW_TZ).strftime("%d.%m.%Y %H:%M:%S")
-        return int(direction)
+            if self._use_any_symbol:
+                self.symbol = sig_symbol
+            if self._use_any_timeframe:
+                self.timeframe = sig_tf
+                self.params["timeframe"] = self.timeframe
+
+            from datetime import datetime
+
+            self._last_signal_at_str = datetime.now(MOSCOW_TZ).strftime(
+                "%d.%m.%Y %H:%M:%S"
+            )
+            return int(direction)
 
     def update_params(self, **params):
         super().update_params(**params)
