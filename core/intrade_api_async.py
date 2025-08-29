@@ -70,7 +70,7 @@ async def get_current_percent(
     option: str,
     minutes: int | str = 1,
     account_ccy: str = "RUB",
-    trade_type: str = "sprint",
+    trade_type: str = "Sprint",
 ) -> Optional[int]:
     """
     Совместимая версия: отправляет form-data как sync, возвращает int|None.
@@ -79,7 +79,7 @@ async def get_current_percent(
     payload = {
         "type": t,
         "currency_name": account_ccy,
-        "investment": str(investment),
+        "investment": str(int(investment)),
         "percent": "",
         "option": option.replace("/", ""),
     }
