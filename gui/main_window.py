@@ -690,6 +690,7 @@ class MainWindow(QWidget):
             duration=duration,
             percent=int(percent),
             account_mode=acc,
+            expected_end_ts=expected_end_ts,
         )
 
     def add_trade_result(

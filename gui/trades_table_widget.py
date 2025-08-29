@@ -1,7 +1,7 @@
 # gui/trades_table_widget.py
 from __future__ import annotations
 from PyQt6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor, QBrush
 from core.money import format_amount
 
@@ -54,6 +54,8 @@ class TradesTableWidget(QTableWidget):
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         # trade_id -> row
         self._row_by_trade: dict[str, int] = {}
+        # ожидание (trade_id -> {row, timer, expected_end_ts})
+        self._pending_rows: dict[str, dict] = {}
 
     def add_pending(
         self,
@@ -69,11 +71,29 @@ class TradesTableWidget(QTableWidget):
         account_mode: str,  # "ДЕМО"/"РЕАЛ"
         indicator: str = "-",  # НАЗВАНИЕ ИНДИКАТОРА
         strategy: str = "-",
+        expected_end_ts: float | None = None,
     ):
+        """Добавляет строку ожидания с таймером."""
+        from time import time as _now
+
         row = 0
         self.insertRow(row)
 
+        if expected_end_ts is None:
+            expected_end_ts = _now() + float(duration)
+
+        def _fmt_left(sec: float) -> str:
+            s = int(max(0, round(sec)))
+            h, r = divmod(s, 3600)
+            m, s = divmod(r, 60)
+            if h > 0:
+                return f"{h}:{m:02d}:{s:02d}"
+            if m > 0:
+                return f"{m}:{s:02d}"
+            return f"{s} с"
+
         dir_text = "ВВЕРХ" if int(direction) == 1 else "ВНИЗ"
+        left_now = max(0.0, expected_end_ts - _now())
         values = [
             signal_at,
             placed_at,
@@ -85,7 +105,7 @@ class TradesTableWidget(QTableWidget):
             format_amount(stake),
             f"{int(round(duration / 60))} мин",
             f"{percent}%",
-            "ожидание…",
+            f"Ожидание ({_fmt_left(left_now)})",
             account_mode,
         ]
         for col, val in enumerate(values):
@@ -94,15 +114,61 @@ class TradesTableWidget(QTableWidget):
                 it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.setItem(row, col, it)
 
+        yellow = QBrush(QColor("#fff4c2"))
+        for c in range(self.columnCount()):
+            it = self.item(row, c)
+            if it:
+                it.setBackground(yellow)
+
+        timer = QTimer(self)
+        timer.setInterval(1000)
+
+        def _tick():
+            left = expected_end_ts - _now()
+            info = self._pending_rows.get(trade_id)
+            if not info:
+                timer.stop()
+                return
+            cur_row = info.get("row")
+            if not isinstance(cur_row, int) or cur_row >= self.rowCount():
+                timer.stop()
+                return
+            item = self.item(cur_row, 10)
+            if item:
+                item.setText(f"Ожидание ({_fmt_left(left)})")
+            if left <= 0:
+                timer.stop()
+
+        timer.timeout.connect(_tick)
+        timer.start()
+
         # сдвигаем индексы ранее вставленных (мы вставили сверху)
         self._row_by_trade = {
             tid: (r + 1 if r >= row else r) for tid, r in self._row_by_trade.items()
         }
+        for info in self._pending_rows.values():
+            r = info.get("row")
+            if isinstance(r, int) and r >= row:
+                info["row"] = r + 1
         self._row_by_trade[trade_id] = row
+        self._pending_rows[trade_id] = {
+            "row": row,
+            "timer": timer,
+            "expected_end_ts": float(expected_end_ts),
+        }
 
     def set_result(
-        self, trade_id: str, profit: float | None, currency_suffix: str = ""
+        self, trade_id: str, profit: float | None, currency_suffix: str = "",
     ):
+        info = self._pending_rows.pop(trade_id, None)
+        if info:
+            timer = info.get("timer")
+            if isinstance(timer, QTimer):
+                try:
+                    timer.stop()
+                except Exception:
+                    pass
+
         if trade_id not in self._row_by_trade:
             return
         row = self._row_by_trade[trade_id]
