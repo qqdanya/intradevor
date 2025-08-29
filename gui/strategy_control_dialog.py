@@ -133,6 +133,7 @@ class StrategyControlDialog(QDialog):
 
         strategy_key = str(self.bot.strategy_kwargs.get("strategy_key", "")).lower()
         self.strategy_key = strategy_key
+        self.minutes = None
 
         if strategy_key in ("oscar_grind_1", "oscar_grind_2"):
             self.minutes = QSpinBox()
@@ -241,6 +242,13 @@ class StrategyControlDialog(QDialog):
             form.addRow("Мин. баланс", self.min_balance)
             form.addRow("Коэффициент", self.coefficient)
             form.addRow("Мин. процент", self.min_percent)
+
+        def _update_minutes_enabled(text: str):
+            if self.minutes is not None:
+                self.minutes.setEnabled(text != "classic")
+
+        self.trade_type.currentTextChanged.connect(_update_minutes_enabled)
+        _update_minutes_enabled(self.trade_type.currentText())
 
         # Кнопка «Сохранить настройки»
         settings_row = QWidget()
@@ -386,21 +394,23 @@ class StrategyControlDialog(QDialog):
     # ---- сохранение настроек ----
     def save_settings(self):
         symbol = str(self.bot.strategy_kwargs.get("symbol", ""))
+        trade_type = self.trade_type.currentText()
         m = int(self.minutes.value())
-        norm = normalize_sprint(symbol, m)
-
-        if norm is None:
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Icon.Warning)
-            box.setWindowTitle("Недопустимое время экспирации")
-            if symbol == "BTCUSDT":
-                box.setText("Для BTCUSDT время должно быть от 5 до 500 минут.")
-            else:
-                box.setText(
-                    "Для выбранной пары разрешено 1 или 3–500 минут (2 минуты — нельзя)."
-                )
-            box.open()
-            return
+        norm = m
+        if trade_type != "classic":
+            norm = normalize_sprint(symbol, m)
+            if norm is None:
+                box = QMessageBox(self)
+                box.setIcon(QMessageBox.Icon.Warning)
+                box.setWindowTitle("Недопустимое время экспирации")
+                if symbol == "BTCUSDT":
+                    box.setText("Для BTCUSDT время должно быть от 5 до 500 минут.")
+                else:
+                    box.setText(
+                        "Для выбранной пары разрешено 1 или 3–500 минут (2 минуты — нельзя)."
+                    )
+                box.open()
+                return
 
         if getattr(self, "strategy_key", "") in ("oscar_grind_1", "oscar_grind_2"):
             new_params = {
@@ -411,16 +421,18 @@ class StrategyControlDialog(QDialog):
                 "min_balance": self.min_balance.value(),
                 "min_percent": self.min_percent.value(),
                 "lock_direction_to_first": bool(self.lock_direction.value() == 1),
-                "minutes": int(norm),
             }
+            if trade_type != "classic":
+                new_params["minutes"] = int(norm)
         elif getattr(self, "strategy_key", "") == "fixed":
             new_params = {
                 "base_investment": self.base_investment.value(),
                 "repeat_count": self.repeat_count.value(),
                 "min_balance": self.min_balance.value(),
                 "min_percent": self.min_percent.value(),
-                "minutes": int(norm),
             }
+            if trade_type != "classic":
+                new_params["minutes"] = int(norm)
         else:
             new_params = {
                 "base_investment": self.base_investment.value(),
@@ -429,15 +441,17 @@ class StrategyControlDialog(QDialog):
                 "min_balance": self.min_balance.value(),
                 "coefficient": round(float(self.coefficient.value()), 2),
                 "min_percent": self.min_percent.value(),
-                "minutes": int(norm),
             }
-        new_params["trade_type"] = self.trade_type.currentText()
+            if trade_type != "classic":
+                new_params["minutes"] = int(norm)
+        new_params["trade_type"] = trade_type
 
         self.bot.strategy_kwargs.setdefault("params", {}).update(new_params)
         if self.bot.strategy and hasattr(self.bot.strategy, "update_params"):
             self.bot.strategy.update_params(**new_params)
 
-        self.minutes.setValue(int(norm))
+        if trade_type != "classic":
+            self.minutes.setValue(int(norm))
 
         formatted = []
         for k, v in new_params.items():
