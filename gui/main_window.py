@@ -691,6 +691,7 @@ class MainWindow(QWidget):
             percent=int(percent),
             account_mode=acc,
             expected_end_ts=expected_end_ts,
+            currency=self.account_currency,
         )
 
     def add_trade_result(
@@ -728,6 +729,7 @@ class MainWindow(QWidget):
                 duration=0.0,
                 percent=int(percent),
                 account_mode=acc,
+                currency=self.account_currency,
             )
 
         self.trades_table.set_result(tid or "-", profit, self.account_currency)
@@ -872,32 +874,30 @@ class MainWindow(QWidget):
         """
         from time import time as _now
 
-        wait_seconds = float(kw.get("wait_seconds", 0.0))
-        expected_end_ts = kw.get("expected_end_ts")
+        payload = dict(kw)
+        wait_seconds = float(payload.get("wait_seconds", 0.0))
+        expected_end_ts = payload.get("expected_end_ts")
         if expected_end_ts is None:
             expected_end_ts = _now() + wait_seconds
+        payload["expected_end_ts"] = float(expected_end_ts)
 
+        # В общую (главную) таблицу
+        key = bot.strategy_kwargs.get("strategy_key", "")
+        payload["strategy"] = self.strategy_label(key)
         try:
-            # В общую (главную) таблицу
-            key = bot.strategy_kwargs.get("strategy_key", "")
-            strat_label = self.strategy_label(key)
-            self.add_trade_pending(
-                **kw, expected_end_ts=expected_end_ts, strategy=strat_label
-            )
-        finally:
-            # Готовим полезную нагрузку с абсолютным дедлайном
-            payload = dict(kw)
-            payload["expected_end_ts"] = float(expected_end_ts)
+            self.add_trade_pending(**payload)
+        except Exception:
+            pass
 
-            # ⬇️ НОВОЕ: сохраняем в историю, чтобы StrategyControlDialog восстановил «ожидание»
-            self.bot_trade_history[bot].append(("pending", dict(payload)))
+        # ⬇️ НОВОЕ: сохраняем в историю, чтобы StrategyControlDialog восстановил «ожидание»
+        self.bot_trade_history[bot].append(("pending", dict(payload)))
 
-            # Уведомляем открытые окна конкретного бота
-            for cb in list(self.bot_trade_listeners.get(bot, [])):
-                try:
-                    cb("pending", payload)
-                except Exception:
-                    pass
+        # Уведомляем открытые окна конкретного бота
+        for cb in list(self.bot_trade_listeners.get(bot, [])):
+            try:
+                cb("pending", payload)
+            except Exception:
+                pass
 
     def on_bot_finished(self, bot):
         # Просто помечаем статус, оставляя строку в таблице — бот можно перезапустить
