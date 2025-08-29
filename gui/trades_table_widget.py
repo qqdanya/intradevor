@@ -3,7 +3,7 @@ from __future__ import annotations
 from PyQt6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor, QBrush
-from core.money import format_amount
+from core.money import format_amount, format_money
 
 
 class TradesTableWidget(QTableWidget):
@@ -72,6 +72,7 @@ class TradesTableWidget(QTableWidget):
         indicator: str = "-",  # НАЗВАНИЕ ИНДИКАТОРА
         strategy: str = "-",
         expected_end_ts: float | None = None,
+        currency: str | None = None,
     ):
         """Добавляет строку ожидания с таймером."""
         from time import time as _now
@@ -94,6 +95,11 @@ class TradesTableWidget(QTableWidget):
 
         dir_text = "ВВЕРХ" if int(direction) == 1 else "ВНИЗ"
         left_now = max(0.0, expected_end_ts - _now())
+        if currency:
+            stake_txt = format_money(stake, currency)
+        else:
+            stake_txt = format_amount(stake)
+
         values = [
             signal_at,
             placed_at,
@@ -102,7 +108,7 @@ class TradesTableWidget(QTableWidget):
             symbol,
             timeframe,
             dir_text,
-            format_amount(stake),
+            stake_txt,
             f"{int(round(duration / 60))} мин",
             f"{percent}%",
             f"Ожидание ({_fmt_left(left_now)})",
@@ -158,7 +164,7 @@ class TradesTableWidget(QTableWidget):
         }
 
     def set_result(
-        self, trade_id: str, profit: float | None, currency_suffix: str = "",
+        self, trade_id: str, profit: float | None, currency: str = "",
     ):
         info = self._pending_rows.pop(trade_id, None)
         if info:
@@ -183,9 +189,10 @@ class TradesTableWidget(QTableWidget):
             pl_item.setText("неизв.")
             return
 
-        text = format_amount(profit, show_plus=True)
-        if currency_suffix:
-            text += f" {currency_suffix}"
+        if currency:
+            text = format_money(profit, currency, show_plus=True)
+        else:
+            text = format_amount(profit, show_plus=True)
         pl_item.setText(text)
 
         # лёгкая подсветка всей строки
