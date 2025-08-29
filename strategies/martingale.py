@@ -487,6 +487,13 @@ class MartingaleStrategy(StrategyBase):
 
                 await self.sleep(0.2)
 
+                if self._trade_type == "classic" and self._next_expire_dt is not None:
+                    from datetime import timedelta
+
+                    self._next_expire_dt += timedelta(
+                        minutes=_minutes_from_timeframe(self.timeframe)
+                    )
+
             if not self._running:
                 break
 
