@@ -223,9 +223,6 @@ class FixedStakeStrategy(StrategyBase):
             wait_low = float(
                 self.params.get("wait_on_low_percent", DEFAULTS["wait_on_low_percent"])
             )
-            result_wait_s = float(
-                self.params.get("result_wait_s", DEFAULTS["result_wait_s"])
-            )
             sig_timeout = float(
                 self.params.get("signal_timeout_sec", DEFAULTS["signal_timeout_sec"])
             )
@@ -374,6 +371,21 @@ class FixedStakeStrategy(StrategyBase):
 
             trades_left -= 1
 
+            # определяем длительность сделки (для таймера и ожидания результата)
+            wait_seconds = self.params.get("result_wait_s")
+            if wait_seconds is None:
+                from datetime import datetime
+
+                if self._trade_type == "classic" and self._next_expire_dt is not None:
+                    wait_seconds = max(
+                        0.0,
+                        (self._next_expire_dt - datetime.now()).total_seconds(),
+                    )
+                else:
+                    wait_seconds = float(self._trade_minutes) * 60.0
+            else:
+                wait_seconds = float(wait_seconds)
+
             if callable(self._on_trade_pending):
                 from datetime import datetime
 
@@ -388,7 +400,7 @@ class FixedStakeStrategy(StrategyBase):
                         direction=status,
                         stake=float(stake),
                         percent=int(pct),
-                        wait_seconds=float(result_wait_s),
+                        wait_seconds=float(wait_seconds),
                         account_mode=account_mode,
                         indicator=self._last_indicator,
                     )
@@ -402,7 +414,7 @@ class FixedStakeStrategy(StrategyBase):
                 user_id=self.user_id,
                 user_hash=self.user_hash,
                 trade_id=trade_id,
-                wait_time=result_wait_s,
+                wait_time=wait_seconds,
             )
 
             if callable(self._on_trade_result):
