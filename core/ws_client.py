@@ -8,6 +8,7 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 import websockets
 from PyQt6.QtWidgets import QApplication, QMessageBox
@@ -15,6 +16,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 from core.signal_waiter import push_signal  # без изменения сигнатуры
 
 signal_log_callback = None
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 _TIMEFRAME_MAP = {
     "M1": 1,
@@ -98,10 +100,14 @@ def _parse_message(message: str) -> Optional[SignalMessage]:
         return None
 
     direction = _parse_direction(data.get("direction"))
-    timestamp = datetime.fromisoformat(dt_str)
+    timestamp = datetime.fromisoformat(dt_str).astimezone(MOSCOW_TZ)
 
     next_ts = _parse_dt_opt(data.get("next_datetime"))
+    if next_ts:
+        next_ts = next_ts.astimezone(MOSCOW_TZ)
     next2_ts = _parse_dt_opt(data.get("next2_datetime"))
+    if next2_ts:
+        next2_ts = next2_ts.astimezone(MOSCOW_TZ)
 
     return SignalMessage(
         symbol=symbol,
@@ -140,12 +146,12 @@ async def listen_to_signals() -> None:
                     )
 
                     # Лог: время без таймзоны (локально-наивное)
-                    dt_naive = sig.timestamp.replace(tzinfo=None)
+                    dt_naive = sig.timestamp.astimezone(MOSCOW_TZ).replace(tzinfo=None)
                     msg_dir = {1: "UP", 2: "DOWN", None: "none"}[sig.direction]
                     tail = ""
                     if sig.next_timestamp and sig.next2_timestamp:
-                        n1 = sig.next_timestamp.replace(tzinfo=None).strftime("%H:%M")
-                        n2 = sig.next2_timestamp.replace(tzinfo=None).strftime("%H:%M")
+                        n1 = sig.next_timestamp.astimezone(MOSCOW_TZ).strftime("%H:%M")
+                        n2 = sig.next2_timestamp.astimezone(MOSCOW_TZ).strftime("%H:%M")
                         tail = f" | next: {n1}, next2: {n2}"
                     _log(
                         f"[WS] {sig.symbol} / {sig.timeframe}. Прогноз: {msg_dir} от {sig.indicator}. "

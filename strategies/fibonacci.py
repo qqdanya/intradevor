@@ -5,6 +5,7 @@ import asyncio
 from typing import Optional
 
 from strategies.martingale import MartingaleStrategy, DEFAULTS as MG_DEFAULTS
+from zoneinfo import ZoneInfo
 from core.http_async import HttpClient
 from core.intrade_api_async import (
     get_balance_info,
@@ -14,6 +15,8 @@ from core.intrade_api_async import (
     is_demo_account,
 )
 from core.money import format_amount
+
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 # Переиспользуем функции ожидания сигнала и прочие методы из MartingaleStrategy
 # через наследование. Здесь определяем собственные значения по умолчанию
@@ -321,7 +324,10 @@ class FibonacciStrategy(MartingaleStrategy):
                     and self._next_expire_dt is not None
                 ):
                     trade_seconds = max(
-                        0.0, (self._next_expire_dt - datetime.now()).total_seconds()
+                        0.0,
+                        (
+                            self._next_expire_dt - datetime.now(MOSCOW_TZ)
+                        ).total_seconds(),
                     )
                     expected_end_ts = self._next_expire_dt.timestamp()
                 else:
