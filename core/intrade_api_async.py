@@ -77,14 +77,17 @@ async def get_current_percent(
     """
     t = "Classic" if str(trade_type).lower() == "classic" else "Sprint"
     payload = {
-        "type": t,
+        # "type": t,
+        "type": "Sprint",
         "currency_name": account_ccy,
-        "investment": str(int(investment)),
+        "investment": str(investment),
         "percent": "",
         "option": option.replace("/", ""),
     }
-    if str(trade_type).lower() != "classic":
-        payload["time"] = str(int(minutes))
+    # if str(trade_type).lower() == "sprint":
+    # payload["time"] = str(int(minutes)) админы пидарасы
+    payload["time"] = "1"
+
     print(payload)
     text = await client.post(PATH_PERCENT, data=payload, expect_json=False)
     print(text)
