@@ -170,6 +170,8 @@ class StrategyControlDialog(QDialog):
 
             self.double_entry = QCheckBox()
             self.double_entry.setChecked(bool(getv("double_entry", False)))
+            double_entry_label = QLabel("Двойной вход на свечу")
+            double_entry_label.mousePressEvent = lambda event: self.double_entry.toggle()
 
             form.addRow("Тип торговли", self.trade_type)
             form.addRow("Базовая ставка", self.base_investment)
@@ -179,7 +181,7 @@ class StrategyControlDialog(QDialog):
             form.addRow("Повторов серии", self.repeat_count)
             form.addRow("Мин. баланс", self.min_balance)
             form.addRow("Мин. процент", self.min_percent)
-            form.addRow("Двойной вход", self.double_entry)
+            form.addRow(double_entry_label, self.double_entry)
         elif strategy_key == "fixed":
             self.minutes = QSpinBox()
             self.minutes.setRange(5 if symbol == "BTCUSDT" else 1, 500)
