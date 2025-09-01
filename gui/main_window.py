@@ -65,16 +65,21 @@ class MainWindow(QWidget):
         theme_menu = self.menu_bar.addMenu("Тема")
         if qdarktheme:
             def _apply_theme(mode: str) -> None:
-                if hasattr(qdarktheme, "setup_theme"):
-                    qdarktheme.setup_theme(mode)
-                elif hasattr(qdarktheme, "load_stylesheet"):
-                    QApplication.instance().setStyleSheet(
-                        qdarktheme.load_stylesheet(mode)
-                    )
+                app = QApplication.instance()
+                if mode in ("light", "dark"):
+                    if hasattr(qdarktheme, "setup_theme"):
+                        qdarktheme.setup_theme(mode)
+                    elif hasattr(qdarktheme, "load_stylesheet"):
+                        app.setStyleSheet(qdarktheme.load_stylesheet(mode))
+                else:
+                    app.setPalette(app.style().standardPalette())
+                    app.setStyleSheet("")
+                config.set_theme(mode)
+                config.save_config()
 
             theme_menu.addAction("Светлая", lambda: _apply_theme("light"))
             theme_menu.addAction("Тёмная", lambda: _apply_theme("dark"))
-            theme_menu.addAction("Системная", lambda: _apply_theme("auto"))
+            theme_menu.addAction("Системная", lambda: _apply_theme("system"))
         else:
             theme_menu.setEnabled(False)
 

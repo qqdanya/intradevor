@@ -17,11 +17,15 @@ from core import config
 def run_gui():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
-    if qdarktheme:
+    theme = config.get_theme()
+    if qdarktheme and theme in ("light", "dark"):
         if hasattr(qdarktheme, "setup_theme"):
-            qdarktheme.setup_theme("auto")
+            qdarktheme.setup_theme(theme)
         elif hasattr(qdarktheme, "load_stylesheet"):
-            app.setStyleSheet(qdarktheme.load_stylesheet("auto"))
+            app.setStyleSheet(qdarktheme.load_stylesheet(theme))
+    else:
+        app.setPalette(app.style().standardPalette())
+        app.setStyleSheet("")
     font = QFont("Calibri", 10)
     app.setFont(font)
 
