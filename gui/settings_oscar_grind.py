@@ -3,7 +3,6 @@ from PyQt6.QtWidgets import (
     QDialog,
     QFormLayout,
     QSpinBox,
-    QDoubleSpinBox,
     QDialogButtonBox,
     QCheckBox,
     QLabel,
@@ -23,9 +22,6 @@ class OscarGrindSettingsDialog(QDialog):
 
         default_minutes = int(self.params.get("minutes", _minutes_from_timeframe(tf)))
         base_default = int(self.params.get("base_investment", 100))
-        target_default = self.params.get("target_profit", None)
-        if target_default in (None, 0):
-            target_default = base_default
 
         # Время экспирации
         self.minutes = QSpinBox()
@@ -37,10 +33,6 @@ class OscarGrindSettingsDialog(QDialog):
         self.base_investment.setRange(1, 50000)
         self.base_investment.setValue(base_default)
 
-        # Цель серии по прибыли (в валюте счёта)
-        self.target_profit = QSpinBox()
-        self.target_profit.setRange(1, 1_000_000)
-        self.target_profit.setValue(int(target_default))
 
         # Ограничители
         self.max_steps = QSpinBox()
@@ -68,7 +60,6 @@ class OscarGrindSettingsDialog(QDialog):
 
         form = QFormLayout()
         form.addRow("Базовая ставка (unit)", self.base_investment)
-        form.addRow("Цель серии, прибыль", self.target_profit)
         form.addRow("Время экспирации (мин)", self.minutes)
         form.addRow("Макс. сделок в серии", self.max_steps)
         form.addRow("Повторов серии", self.repeat_count)
@@ -96,7 +87,6 @@ class OscarGrindSettingsDialog(QDialog):
         return {
             "minutes": int(norm),
             "base_investment": int(self.base_investment.value()),
-            "target_profit": int(self.target_profit.value()),
             "max_steps": int(self.max_steps.value()),
             "repeat_count": int(self.repeat_count.value()),
             "min_balance": int(self.min_balance.value()),

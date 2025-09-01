@@ -23,14 +23,13 @@ class OscarGrind1Strategy(OscarGrind2Strategy):
         need: float,
         profit: float,
         cum_profit: float,
-        target_profit: float,
         log,
     ) -> float:
         if outcome == "win":
             next_stake = stake + base_unit
             log(
                 f"[{self.symbol}] ✅ WIN: profit={format_amount(profit)}. "
-                f"Накоплено {format_amount(cum_profit)}/{format_amount(target_profit)}. "
+                f"Накоплено {format_amount(cum_profit)}/{format_amount(base_unit)}. "
                 f"Следующая ставка = stake+unit → {format_amount(next_stake)}"
             )
         else:
