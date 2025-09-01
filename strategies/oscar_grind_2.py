@@ -48,7 +48,7 @@ DEFAULTS = {
     "result_wait_s": 60.0,
     "grace_delay_sec": 30.0,
     # Поведение серии: повторный вход после поражения
-    "double_entry": False,
+    "double_entry": True,
     "trade_type": "classic",
 }
 
