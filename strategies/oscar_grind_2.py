@@ -47,8 +47,8 @@ DEFAULTS = {
     "account_currency": "RUB",
     "result_wait_s": 60.0,
     "grace_delay_sec": 30.0,
-    # Поведение серии: фиксировать направление по первому сигналу (как в мартингейле)
-    "lock_direction_to_first": True,
+    # Поведение серии: повторный вход после поражения
+    "double_entry": False,
     "trade_type": "classic",
 }
 
@@ -240,10 +240,8 @@ class OscarGrind2Strategy(StrategyBase):
             sig_timeout = float(
                 self.params.get("signal_timeout_sec", DEFAULTS["signal_timeout_sec"])
             )
-            lock_dir = bool(
-                self.params.get(
-                    "lock_direction_to_first", DEFAULTS["lock_direction_to_first"]
-                )
+            double_entry = bool(
+                self.params.get("double_entry", DEFAULTS["double_entry"])
             )
             account_ccy = self._anchor_ccy
 
@@ -259,9 +257,8 @@ class OscarGrind2Strategy(StrategyBase):
             cum_profit = 0.0  # накопленный профиль серии (может уходить в минус)
             stake = base_unit  # текущая ставка (unit-кратная)
 
-            series_direction = (
-                None  # зафиксируем по первому сигналу (как в мартингейле)
-            )
+            series_direction = None  # направление текущей ставки
+            repeat_trade = False  # повторный вход после поражения
 
             # Основной цикл серии
             while self._running and step_idx < max_steps:
@@ -316,18 +313,15 @@ class OscarGrind2Strategy(StrategyBase):
                     )
                     self._low_payout_notified = False
 
-                # Получаем (или переиспользуем) направление
-                if series_direction is None or not lock_dir:
+                # Получаем направление, если ещё не задано
+                if series_direction is None:
                     self._status("ожидание сигнала")
                     log(
                         f"[{self.symbol}] ⏳ Ожидание сигнала на {self.timeframe} (шаг {step_idx + 1})..."
                     )
                     try:
                         direction = await self.wait_signal(timeout=sig_timeout)
-                        if lock_dir and series_direction is None:
-                            series_direction = 1 if int(direction) == 1 else 2
-                        else:
-                            series_direction = 1 if int(direction) == 1 else 2
+                        series_direction = 1 if int(direction) == 1 else 2
                     except asyncio.TimeoutError:
                         log(
                             f"[{self.symbol}] ⌛ Таймаут ожидания сигнала внутри серии — выхожу из серии."
@@ -528,6 +522,14 @@ class OscarGrind2Strategy(StrategyBase):
                 # Переходим к следующему шагу
                 stake = float(next_stake)
                 step_idx += 1
+                if repeat_trade:
+                    repeat_trade = False
+                    series_direction = None
+                else:
+                    if double_entry and outcome == "loss":
+                        repeat_trade = True
+                    else:
+                        series_direction = None
                 await self.sleep(0.2)
 
             if not self._running:
