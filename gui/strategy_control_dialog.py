@@ -147,10 +147,6 @@ class StrategyControlDialog(QDialog):
             self.base_investment.setRange(1, 50_000)
             self.base_investment.setValue(int(getv("base_investment", 100)))
 
-            tgt_default = int(getv("target_profit", getv("base_investment", 100)))
-            self.target_profit = QSpinBox()
-            self.target_profit.setRange(1, 1_000_000)
-            self.target_profit.setValue(tgt_default)
 
             self.max_steps = QSpinBox()
             self.max_steps.setRange(1, 100)
@@ -175,7 +171,6 @@ class StrategyControlDialog(QDialog):
 
             form.addRow("Тип торговли", self.trade_type)
             form.addRow("Базовая ставка", self.base_investment)
-            form.addRow("Цель серии, прибыль", self.target_profit)
             form.addRow("Время сделки (мин)", self.minutes)
             form.addRow("Макс. сделок в серии", self.max_steps)
             form.addRow("Повторов серии", self.repeat_count)
@@ -418,7 +413,6 @@ class StrategyControlDialog(QDialog):
         if getattr(self, "strategy_key", "") in ("oscar_grind_1", "oscar_grind_2"):
             new_params = {
                 "base_investment": self.base_investment.value(),
-                "target_profit": self.target_profit.value(),
                 "max_steps": self.max_steps.value(),
                 "repeat_count": self.repeat_count.value(),
                 "min_balance": self.min_balance.value(),

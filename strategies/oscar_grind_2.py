@@ -33,8 +33,6 @@ CLASSIC_ALLOWED_TFS = {"M5", "M15", "M30", "H1", "H4"}
 DEFAULTS = {
     # Базовая «единица» ставки (unit)
     "base_investment": 100,
-    # Цель серии по прибыли (в валюте счёта). По умолчанию == base_investment
-    "target_profit": None,  # если None — будет подставлено base_investment при инициализации
     # Ограничения/повторения
     "max_steps": 20,  # максимум сделок в серии
     "repeat_count": 10,  # сколько серий подряд выполнять
@@ -76,10 +74,6 @@ class OscarGrind2Strategy(StrategyBase):
         p = dict(DEFAULTS)
         if params:
             p.update(params)
-
-        # Если цель не задана — равна base_investment
-        if p.get("target_profit") in (None, 0):
-            p["target_profit"] = float(p.get("base_investment", 100))
 
         _symbol = (symbol or "").strip()
         _tf_raw = (timeframe or "").strip()
@@ -229,9 +223,7 @@ class OscarGrind2Strategy(StrategyBase):
 
             # Параметры серии
             base_unit = float(self.params.get("base_investment", 100))
-            target_profit = float(
-                self.params.get("target_profit", base_unit)
-            )  # цель профита в валюте счёта
+            target_profit = base_unit  # цель профита в валюте счёта
             max_steps = int(self.params.get("max_steps", DEFAULTS["max_steps"]))
             min_pct = int(self.params.get("min_percent", DEFAULTS["min_percent"]))
             wait_low = float(
@@ -515,7 +507,6 @@ class OscarGrind2Strategy(StrategyBase):
                     need=need,
                     profit=0.0 if profit is None else float(profit),
                     cum_profit=cum_profit,
-                    target_profit=target_profit,
                     log=log,
                 )
 
@@ -561,7 +552,6 @@ class OscarGrind2Strategy(StrategyBase):
         need: float,
         profit: float,
         cum_profit: float,
-        target_profit: float,
         log,
     ) -> float:
         k = pct / 100.0
@@ -570,7 +560,7 @@ class OscarGrind2Strategy(StrategyBase):
             next_stake = max(base_unit, min(stake + base_unit, float(next_req)))
             log(
                 f"[{self.symbol}] ✅ WIN: profit={format_amount(profit)}. "
-                f"Накоплено {format_amount(cum_profit)}/{format_amount(target_profit)}. "
+                f"Накоплено {format_amount(cum_profit)}/{format_amount(base_unit)}. "
                 f"Следующая ставка = min(stake+unit, req) → {format_amount(stake + base_unit)} / {format_amount(next_req)} = {format_amount(next_stake)}"
             )
         else:
@@ -725,11 +715,3 @@ class OscarGrind2Strategy(StrategyBase):
             self._trade_type = str(params["trade_type"]).lower()
             self.params["trade_type"] = self._trade_type
 
-        if "base_investment" in params and "target_profit" not in params:
-            # если юзер поменял unit, а цель оставил None — синхронизируем цель с unit
-            try:
-                unit = float(params["base_investment"])
-            except Exception:
-                unit = float(self.params.get("base_investment", 100))
-            if self.params.get("target_profit") in (None, 0):
-                self.params["target_profit"] = unit
