@@ -1,11 +1,16 @@
 from PyQt6.QtWidgets import (
     QDialog,
     QVBoxLayout,
+    QHBoxLayout,
     QComboBox,
     QDialogButtonBox,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QTextEdit,
 )
+from PyQt6.QtCore import Qt
 
 ALL_SYMBOLS_LABEL = "Все валютные пары"
 ALL_TF_LABEL = "Все таймфреймы"
@@ -30,12 +35,20 @@ class AddBotDialog(QDialog):
 
         # Сначала выбор алгоритма
         layout.addWidget(QLabel("Алгоритм:"))
-        self.strategy_combo = QComboBox()
+        algo_layout = QHBoxLayout()
+        self.strategy_list = QListWidget()
         for key in self.available_strategies.keys():
             label = self.strategy_labels.get(key, key)
-            self.strategy_combo.addItem(label, userData=key)
-        layout.addWidget(self.strategy_combo)
-        self.strategy_combo.currentIndexChanged.connect(self.on_strategy_change)
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, key)
+            self.strategy_list.addItem(item)
+        algo_layout.addWidget(self.strategy_list)
+        self.strategy_desc = QTextEdit()
+        self.strategy_desc.setReadOnly(True)
+        algo_layout.addWidget(self.strategy_desc)
+        layout.addLayout(algo_layout)
+        self.strategy_list.currentRowChanged.connect(self.on_strategy_change)
+        self.strategy_list.setCurrentRow(0)
 
         # Поиск валют
         layout.addWidget(QLabel("Поиск валютной пары:"))
@@ -88,7 +101,13 @@ class AddBotDialog(QDialog):
         self.on_strategy_change()
 
     def on_strategy_change(self, *_):
-        pass
+        key = self.selected_strategy
+        desc = ""
+        if key:
+            cls = self.available_strategies.get(key)
+            if cls and cls.__doc__:
+                desc = cls.__doc__.strip()
+        self.strategy_desc.setText(desc)
 
     @property
     def selected_symbol(self):
@@ -100,7 +119,10 @@ class AddBotDialog(QDialog):
 
     @property
     def selected_strategy(self):
-        return self.strategy_combo.currentData()
+        item = self.strategy_list.currentItem()
+        if item:
+            return item.data(Qt.ItemDataRole.UserRole)
+        return None
 
     def get_result(self):
         return self.selected_symbol, self.selected_strategy

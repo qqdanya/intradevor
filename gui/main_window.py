@@ -272,10 +272,11 @@ class MainWindow(QWidget):
             try:
                 demo = await is_demo_account(self.http_client)
                 self.is_demo = demo
-                amount, currency, display = await get_balance_info(
+                amount, currency, _ = await get_balance_info(
                     self.http_client, self.user_id, self.user_hash
                 )
                 self.account_currency = currency
+                display = format_money(amount, currency)
 
                 if self.is_demo and "(демо)" not in display:
                     display = f"{display} (демо)"
@@ -499,7 +500,7 @@ class MainWindow(QWidget):
         pending_ids = self.bot_pending_trades.pop(bot, set())
         for tid in pending_ids:
             try:
-                self.trades_table.set_result(str(tid), None, self.account_currency)
+                self.trades_table.remove_trade(str(tid))
             except Exception:
                 pass
         for mp in (
@@ -603,10 +604,11 @@ class MainWindow(QWidget):
 
             # Сразу перечитаем статус и баланс, чтобы UI обновился мгновенно
             self.is_demo = await is_demo_account(self.http_client)
-            amount, currency, display = await get_balance_info(
+            amount, currency, _ = await get_balance_info(
                 self.http_client, self.user_id, self.user_hash
             )
             self.account_currency = currency
+            display = format_money(amount, currency)
             if self.is_demo and "(демо)" not in display:
                 display = f"{display} (демо)"
             self.balance_label.setText(f"Баланс: {display}")
