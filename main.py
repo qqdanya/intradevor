@@ -18,7 +18,10 @@ def run_gui():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     if qdarktheme:
-        qdarktheme.setup_theme("auto")
+        if hasattr(qdarktheme, "setup_theme"):
+            qdarktheme.setup_theme("auto")
+        elif hasattr(qdarktheme, "load_stylesheet"):
+            app.setStyleSheet(qdarktheme.load_stylesheet("auto"))
     font = QFont("Calibri", 10)
     app.setFont(font)
 

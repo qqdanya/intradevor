@@ -64,9 +64,17 @@ class MainWindow(QWidget):
         font_menu.addAction("Выбрать...", self._choose_font)
         theme_menu = self.menu_bar.addMenu("Тема")
         if qdarktheme:
-            theme_menu.addAction("Светлая", lambda: qdarktheme.setup_theme("light"))
-            theme_menu.addAction("Тёмная", lambda: qdarktheme.setup_theme("dark"))
-            theme_menu.addAction("Системная", lambda: qdarktheme.setup_theme("auto"))
+            def _apply_theme(mode: str) -> None:
+                if hasattr(qdarktheme, "setup_theme"):
+                    qdarktheme.setup_theme(mode)
+                elif hasattr(qdarktheme, "load_stylesheet"):
+                    QApplication.instance().setStyleSheet(
+                        qdarktheme.load_stylesheet(mode)
+                    )
+
+            theme_menu.addAction("Светлая", lambda: _apply_theme("light"))
+            theme_menu.addAction("Тёмная", lambda: _apply_theme("dark"))
+            theme_menu.addAction("Системная", lambda: _apply_theme("auto"))
         else:
             theme_menu.setEnabled(False)
 
