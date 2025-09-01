@@ -57,7 +57,6 @@ class SignalMessage:
     indicator: str
     timestamp: datetime  # время свечи с сигналом (закрытая)
     next_timestamp: Optional[datetime] = None  # начало следующей ПОСЛЕ текущей
-    next2_timestamp: Optional[datetime] = None  # ещё через одну
 
 
 def _parse_direction(raw_dir: Any) -> Optional[int]:
@@ -105,9 +104,6 @@ def _parse_message(message: str) -> Optional[SignalMessage]:
     next_ts = _parse_dt_opt(data.get("next_datetime"))
     if next_ts:
         next_ts = next_ts.astimezone(MOSCOW_TZ)
-    next2_ts = _parse_dt_opt(data.get("next2_datetime"))
-    if next2_ts:
-        next2_ts = next2_ts.astimezone(MOSCOW_TZ)
 
     return SignalMessage(
         symbol=symbol,
@@ -116,7 +112,6 @@ def _parse_message(message: str) -> Optional[SignalMessage]:
         indicator=indicator,
         timestamp=timestamp,
         next_timestamp=next_ts,
-        next2_timestamp=next2_ts,
     )
 
 
@@ -149,10 +144,9 @@ async def listen_to_signals() -> None:
                     dt_naive = sig.timestamp.astimezone(MOSCOW_TZ).replace(tzinfo=None)
                     msg_dir = {1: "UP", 2: "DOWN", None: "none"}[sig.direction]
                     tail = ""
-                    if sig.next_timestamp and sig.next2_timestamp:
+                    if sig.next_timestamp:
                         n1 = sig.next_timestamp.astimezone(MOSCOW_TZ).strftime("%H:%M")
-                        n2 = sig.next2_timestamp.astimezone(MOSCOW_TZ).strftime("%H:%M")
-                        tail = f" | next: {n1}, next2: {n2}"
+                        tail = f" | next: {n1}"
                     _log(
                         f"[WS] {sig.symbol} / {sig.timeframe}. Прогноз: {msg_dir} от {sig.indicator}. "
                         f"Время свечи: {dt_naive.strftime('%H:%M')}{tail}"
