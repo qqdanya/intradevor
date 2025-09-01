@@ -19,6 +19,10 @@ from PyQt6.QtCore import Qt, QTimer
 from collections import defaultdict
 from functools import partial
 import asyncio
+try:
+    import qdarktheme
+except Exception:  # pragma: no cover - optional dependency
+    qdarktheme = None
 
 from core.money import format_money
 from core.logger import ts
@@ -58,6 +62,13 @@ class MainWindow(QWidget):
         self.menu_bar = QMenuBar(self)
         font_menu = self.menu_bar.addMenu("Шрифт")
         font_menu.addAction("Выбрать...", self._choose_font)
+        theme_menu = self.menu_bar.addMenu("Тема")
+        if qdarktheme:
+            theme_menu.addAction("Светлая", lambda: qdarktheme.setup_theme("light"))
+            theme_menu.addAction("Тёмная", lambda: qdarktheme.setup_theme("dark"))
+            theme_menu.addAction("Системная", lambda: qdarktheme.setup_theme("auto"))
+        else:
+            theme_menu.setEnabled(False)
 
         # === имя/версия приложения ===
         try:

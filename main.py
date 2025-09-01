@@ -3,6 +3,10 @@ import asyncio
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QFont
 from qasync import QEventLoop
+try:
+    import qdarktheme
+except Exception:  # pragma: no cover - optional dependency
+    qdarktheme = None
 
 from gui.main_window import MainWindow
 from core import config
@@ -13,6 +17,8 @@ from core import config
 def run_gui():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    if qdarktheme:
+        qdarktheme.setup_theme("auto")
     font = QFont("Calibri", 10)
     app.setFont(font)
 

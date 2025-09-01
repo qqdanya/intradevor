@@ -7,3 +7,4 @@ websockets
 qasync
 tzdata
 aiohttp
+qdarktheme
