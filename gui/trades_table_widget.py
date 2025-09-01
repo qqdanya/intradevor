@@ -208,3 +208,32 @@ class TradesTableWidget(QTableWidget):
             it = self.item(row, c)
             if it:
                 it.setBackground(QBrush(row_bg))
+
+    def remove_trade(self, trade_id: str):
+        """Удаляет сделку из таблицы по её идентификатору."""
+        info = self._pending_rows.pop(trade_id, None)
+        if info:
+            timer = info.get("timer")
+            if isinstance(timer, QTimer):
+                try:
+                    timer.stop()
+                except Exception:
+                    pass
+
+        row = self._row_by_trade.pop(trade_id, None)
+        if row is None:
+            return
+        if 0 <= row < self.rowCount():
+            self.removeRow(row)
+
+        # пересчитываем индексы после удаления строки
+        self._row_by_trade = {
+            tid: (r - 1 if r > row else r) for tid, r in self._row_by_trade.items()
+        }
+        for info in self._pending_rows.values():
+            r = info.get("row")
+            if isinstance(r, int):
+                if r == row:
+                    info["row"] = None
+                elif r > row:
+                    info["row"] = r - 1
