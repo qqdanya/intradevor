@@ -62,7 +62,7 @@ class OscarGrindSettingsDialog(QDialog):
 
         # Повторный вход при поражении
         self.double_entry = QCheckBox()
-        self.double_entry.setChecked(bool(self.params.get("double_entry", False)))
+        self.double_entry.setChecked(bool(self.params.get("double_entry", True)))
         double_entry_label = QLabel("Двойной вход на свечу")
         double_entry_label.mousePressEvent = lambda event: self.double_entry.toggle()
 
