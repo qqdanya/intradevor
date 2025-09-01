@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem,
     QHeaderView,
     QComboBox,
+    QCheckBox,
 )
 from PyQt6.QtGui import QColor, QBrush
 from PyQt6.QtCore import QTimer, Qt
@@ -167,9 +168,8 @@ class StrategyControlDialog(QDialog):
             self.min_percent.setRange(0, 100)
             self.min_percent.setValue(int(getv("min_percent", 70)))
 
-            self.lock_direction = QSpinBox()
-            self.lock_direction.setRange(0, 1)
-            self.lock_direction.setValue(1 if getv("lock_direction_to_first", True) else 0)
+            self.double_entry = QCheckBox()
+            self.double_entry.setChecked(bool(getv("double_entry", False)))
 
             form.addRow("Тип торговли", self.trade_type)
             form.addRow("Базовая ставка", self.base_investment)
@@ -179,7 +179,7 @@ class StrategyControlDialog(QDialog):
             form.addRow("Повторов серии", self.repeat_count)
             form.addRow("Мин. баланс", self.min_balance)
             form.addRow("Мин. процент", self.min_percent)
-            form.addRow("Фиксировать направление (0/1)", self.lock_direction)
+            form.addRow("Двойной вход", self.double_entry)
         elif strategy_key == "fixed":
             self.minutes = QSpinBox()
             self.minutes.setRange(5 if symbol == "BTCUSDT" else 1, 500)
@@ -421,7 +421,7 @@ class StrategyControlDialog(QDialog):
                 "repeat_count": self.repeat_count.value(),
                 "min_balance": self.min_balance.value(),
                 "min_percent": self.min_percent.value(),
-                "lock_direction_to_first": bool(self.lock_direction.value() == 1),
+                "double_entry": bool(self.double_entry.isChecked()),
             }
             if trade_type != "classic":
                 new_params["minutes"] = int(norm)
