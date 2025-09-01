@@ -123,13 +123,13 @@ def _parse_message(message: str) -> Optional[SignalMessage]:
 async def listen_to_signals() -> None:
     from core.config import ws_url
 
-    retry = 0
+    waiting_logged = False
     while True:
         try:
             async with websockets.connect(
                 ws_url, ping_interval=20, ping_timeout=10
             ) as websocket:
-                retry = 0
+                waiting_logged = False
                 _log("[WS] Подключено к WebSocket-серверу.")
                 async for message in websocket:
                     sig = _parse_message(message)
@@ -157,8 +157,8 @@ async def listen_to_signals() -> None:
                         f"[WS] {sig.symbol} / {sig.timeframe}. Прогноз: {msg_dir} от {sig.indicator}. "
                         f"Время свечи: {dt_naive.strftime('%H:%M')}{tail}"
                     )
-        except Exception as e:
-            delay = min(30, 2 ** min(retry, 5))
-            _log(f"[WS] Потеря соединения: {e}. Повтор через {delay}c")
-            await asyncio.sleep(delay)
-            retry += 1
+        except Exception:
+            if not waiting_logged:
+                _log("Ожидание подключения к WebSocket-серверу...")
+                waiting_logged = True
+            await asyncio.sleep(3)
