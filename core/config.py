@@ -25,6 +25,9 @@ try:
 except ValueError:
     FONT_SIZE = None
 
+# Тема оформления приложения: "light", "dark" или "system"
+THEME: str = os.getenv("THEME", "system")
+
 
 def _read_json(path: str) -> Dict[str, Any]:
     if not os.path.exists(path):
@@ -54,7 +57,7 @@ def load_config() -> None:
       3) Значения по умолчанию
     Если файла нет — он будет создан с текущими значениями (дефолты/окружение).
     """
-    global APP_NAME, APP_VERSION, domain, base_url, ws_url, FONT_FAMILY, FONT_SIZE
+    global APP_NAME, APP_VERSION, domain, base_url, ws_url, FONT_FAMILY, FONT_SIZE, THEME
 
     if not os.path.exists(_CONFIG_FILE):
         # создаём файл с текущими (дефолт/окружение) значениями
@@ -84,6 +87,9 @@ def load_config() -> None:
         except (TypeError, ValueError):
             pass
 
+    if "THEME" not in os.environ:
+        THEME = data.get("theme", THEME)
+
     base_url = f"https://{domain}"
 
 
@@ -101,6 +107,7 @@ def save_config() -> None:
             "ws_url": ws_url,
             "font_family": FONT_FAMILY,
             "font_size": FONT_SIZE,
+            "theme": THEME,
         }
     )
     _write_json(_CONFIG_FILE, data)
@@ -142,6 +149,10 @@ def get_font_size() -> int | None:
     return FONT_SIZE
 
 
+def get_theme() -> str:
+    return THEME
+
+
 # ===== Опционально: апдейтеры из кода =====
 def set_app_name(name: str) -> None:
     global APP_NAME
@@ -161,3 +172,8 @@ def set_font_family(name: str | None) -> None:
 def set_font_size(size: int | None) -> None:
     global FONT_SIZE
     FONT_SIZE = size
+
+
+def set_theme(theme: str) -> None:
+    global THEME
+    THEME = theme
