@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QDialogButtonBox,
     QCheckBox,
+    QLabel,
 )
 from strategies.martingale import _minutes_from_timeframe
 from core.policy import normalize_sprint
@@ -62,6 +63,8 @@ class OscarGrindSettingsDialog(QDialog):
         # Повторный вход при поражении
         self.double_entry = QCheckBox()
         self.double_entry.setChecked(bool(self.params.get("double_entry", False)))
+        double_entry_label = QLabel("Двойной вход на свечу")
+        double_entry_label.mousePressEvent = lambda event: self.double_entry.toggle()
 
         form = QFormLayout()
         form.addRow("Базовая ставка (unit)", self.base_investment)
@@ -71,7 +74,7 @@ class OscarGrindSettingsDialog(QDialog):
         form.addRow("Повторов серии", self.repeat_count)
         form.addRow("Мин. баланс", self.min_balance)
         form.addRow("Мин. процент", self.min_percent)
-        form.addRow("Двойной вход", self.double_entry)
+        form.addRow(double_entry_label, self.double_entry)
 
         btns = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
