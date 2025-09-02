@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QComboBox,
     QCheckBox,
+    QInputDialog,
 )
 from PyQt6.QtGui import QColor, QBrush
 from PyQt6.QtCore import QTimer, Qt
@@ -26,6 +27,7 @@ from core.policy import normalize_sprint
 from core.money import format_money
 from core.logger import ts
 from gui.bot_add_dialog import ALL_TF_LABEL
+from core.templates import load_templates, save_templates
 
 
 class StrategyControlDialog(QDialog):
@@ -248,12 +250,27 @@ class StrategyControlDialog(QDialog):
         self.trade_type.currentTextChanged.connect(_update_minutes_enabled)
         _update_minutes_enabled(self.trade_type.currentText())
 
-        # Кнопка «Сохранить настройки»
+        # ---- шаблоны ----
+        self.templates = load_templates(self.strategy_key)
+        template_row = QWidget()
+        th = QHBoxLayout(template_row)
+        self.template_combo = QComboBox()
+        for tmpl in self.templates:
+            self.template_combo.addItem(str(tmpl.get("name", "")))
+        self.btn_apply_template = QPushButton("Применить")
+        self.btn_apply_template.clicked.connect(self.apply_template)
+        th.addWidget(self.template_combo, 1)
+        th.addWidget(self.btn_apply_template)
+
+        # Кнопки сохранения/шаблонов
         settings_row = QWidget()
         sh = QHBoxLayout(settings_row)
-        self.btn_save_settings = QPushButton("💾 Сохранить настройки")
-        self.btn_save_settings.clicked.connect(self.save_settings)
+        self.btn_save_template = QPushButton("💾 Сохранить как шаблон")
+        self.btn_save_template.clicked.connect(self.save_template)
+        self.btn_save_settings = QPushButton("💾 Применить настройки")
+        self.btn_save_settings.clicked.connect(self.apply_settings)
         sh.addStretch(1)
+        sh.addWidget(self.btn_save_template)
         sh.addWidget(self.btn_save_settings)
 
         # ---------- Controls ----------
@@ -278,6 +295,7 @@ class StrategyControlDialog(QDialog):
         lv.setContentsMargins(0, 0, 0, 0)
         lv.setSpacing(8)
         lv.addWidget(self.log_edit, 1)
+        lv.addWidget(template_row)
         lv.addWidget(self.settings_box)
         lv.addWidget(settings_row)
         lv.addWidget(controls)
@@ -390,12 +408,12 @@ class StrategyControlDialog(QDialog):
             self.log_edit.append(ts(f"⚠ Ошибка удаления: {e}"))
 
     # ---- сохранение настроек ----
-    def save_settings(self):
+    def _collect_params(self):
         symbol = str(self.bot.strategy_kwargs.get("symbol", ""))
         trade_type = self.trade_type.currentText()
-        m = int(self.minutes.value())
+        m = int(self.minutes.value()) if self.minutes else 0
         norm = m
-        if trade_type != "classic":
+        if trade_type != "classic" and self.minutes is not None:
             norm = normalize_sprint(symbol, m)
             if norm is None:
                 box = QMessageBox(self)
@@ -408,7 +426,7 @@ class StrategyControlDialog(QDialog):
                         "Для выбранной пары разрешено 1 или 3–500 минут (2 минуты — нельзя)."
                     )
                 box.open()
-                return
+                return None
 
         if getattr(self, "strategy_key", "") in ("oscar_grind_1", "oscar_grind_2"):
             new_params = {
@@ -419,7 +437,7 @@ class StrategyControlDialog(QDialog):
                 "min_percent": self.min_percent.value(),
                 "double_entry": bool(self.double_entry.isChecked()),
             }
-            if trade_type != "classic":
+            if trade_type != "classic" and self.minutes is not None:
                 new_params["minutes"] = int(norm)
         elif getattr(self, "strategy_key", "") == "fixed":
             new_params = {
@@ -428,7 +446,7 @@ class StrategyControlDialog(QDialog):
                 "min_balance": self.min_balance.value(),
                 "min_percent": self.min_percent.value(),
             }
-            if trade_type != "classic":
+            if trade_type != "classic" and self.minutes is not None:
                 new_params["minutes"] = int(norm)
         else:
             new_params = {
@@ -439,16 +457,22 @@ class StrategyControlDialog(QDialog):
                 "coefficient": round(float(self.coefficient.value()), 2),
                 "min_percent": self.min_percent.value(),
             }
-            if trade_type != "classic":
+            if trade_type != "classic" and self.minutes is not None:
                 new_params["minutes"] = int(norm)
         new_params["trade_type"] = trade_type
+        return new_params
+
+    def apply_settings(self):
+        new_params = self._collect_params()
+        if new_params is None:
+            return
 
         self.bot.strategy_kwargs.setdefault("params", {}).update(new_params)
         if self.bot.strategy and hasattr(self.bot.strategy, "update_params"):
             self.bot.strategy.update_params(**new_params)
 
-        if trade_type != "classic":
-            self.minutes.setValue(int(norm))
+        if new_params.get("minutes") and self.minutes is not None:
+            self.minutes.setValue(int(new_params["minutes"]))
 
         formatted = []
         for k, v in new_params.items():
@@ -459,6 +483,61 @@ class StrategyControlDialog(QDialog):
         self.log_edit.append(
             ts("💾 Настройки сохранены: {" + ", ".join(formatted) + "}")
         )
+
+    def save_template(self):
+        new_params = self._collect_params()
+        if new_params is None:
+            return
+        templates = load_templates(self.strategy_key)
+        default_name = f"Шаблон {len(templates) + 1}"
+        name, ok = QInputDialog.getText(
+            self, "Сохранить как шаблон", "Название шаблона:", text=default_name
+        )
+        if not ok or not name:
+            return
+        replaced = False
+        for tmpl in templates:
+            if tmpl.get("name") == name:
+                tmpl["params"] = new_params
+                replaced = True
+                break
+        if not replaced:
+            templates.append({"name": name, "params": new_params})
+        save_templates(self.strategy_key, templates)
+        self.templates = templates
+        self.template_combo.clear()
+        for tmpl in self.templates:
+            self.template_combo.addItem(str(tmpl.get("name", "")))
+        idx = self.template_combo.findText(name)
+        if idx >= 0:
+            self.template_combo.setCurrentIndex(idx)
+
+    def apply_template(self):
+        idx = self.template_combo.currentIndex()
+        if idx < 0:
+            return
+        tmpl = self.templates[idx]
+        params = tmpl.get("params", {})
+        for k, v in params.items():
+            if k == "trade_type":
+                self.trade_type.setCurrentText(str(v))
+            elif k == "minutes" and self.minutes is not None:
+                self.minutes.setValue(int(v))
+            elif k == "base_investment" and hasattr(self, "base_investment"):
+                self.base_investment.setValue(int(v))
+            elif k == "max_steps" and hasattr(self, "max_steps"):
+                self.max_steps.setValue(int(v))
+            elif k == "repeat_count" and hasattr(self, "repeat_count"):
+                self.repeat_count.setValue(int(v))
+            elif k == "min_balance" and hasattr(self, "min_balance"):
+                self.min_balance.setValue(int(v))
+            elif k == "coefficient" and hasattr(self, "coefficient"):
+                self.coefficient.setValue(float(v))
+            elif k == "min_percent" and hasattr(self, "min_percent"):
+                self.min_percent.setValue(int(v))
+            elif k == "double_entry" and hasattr(self, "double_entry"):
+                self.double_entry.setChecked(bool(v))
+        self.apply_settings()
 
     # ---- хелперы: локальная таблица сделок ----
     def _fmt_money(self, value: float, ccy: str) -> str:
