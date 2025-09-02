@@ -312,8 +312,10 @@ class StrategyControlDialog(QDialog):
         rv = QVBoxLayout(right_panel)
         rv.setContentsMargins(0, 0, 0, 0)
         rv.setSpacing(8)
-        rv.addWidget(self.trades_table, 3)
-        rv.addWidget(self.log_edit, 1)
+        rv.addWidget(self.trades_table)
+        rv.addWidget(self.log_edit)
+        rv.setStretch(0, 1)
+        rv.setStretch(1, 1)
 
         top_split = QWidget()
         hs = QHBoxLayout(top_split)

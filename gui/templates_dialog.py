@@ -37,11 +37,8 @@ class TemplatesDialog(QDialog):
         self.strategy_list.currentRowChanged.connect(self._on_strategy_change)
         layout.addWidget(self.strategy_list)
 
-        # средняя колонка: шаблоны + кнопки
+        # средняя колонка: кнопки + шаблоны
         tmpl_column = QVBoxLayout()
-        self.list_widget = QListWidget(self)
-        self.list_widget.currentRowChanged.connect(self._show_template_settings)
-        tmpl_column.addWidget(self.list_widget, 1)
 
         btn_row = QWidget(self)
         bh = QHBoxLayout(btn_row)
@@ -61,6 +58,10 @@ class TemplatesDialog(QDialog):
         ):
             bh.addWidget(b)
         tmpl_column.addWidget(btn_row)
+
+        self.list_widget = QListWidget(self)
+        self.list_widget.currentRowChanged.connect(self._show_template_settings)
+        tmpl_column.addWidget(self.list_widget, 1)
         layout.addLayout(tmpl_column)
 
         # правая область: настройки выбранного шаблона
