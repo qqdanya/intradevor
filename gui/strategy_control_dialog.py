@@ -70,7 +70,7 @@ class StrategyControlDialog(QDialog):
         hh.addWidget(self.lbl_timeframe)
         hh.addStretch(1)
 
-        # ---------- ЛОГ (слева) ----------
+        # ---------- ЛОГ (справа) ----------
         self.log_edit = QTextEdit()
         self.log_edit.setReadOnly(True)
         self.log_edit.setPlaceholderText("Лог этой стратегии…")
@@ -272,10 +272,13 @@ class StrategyControlDialog(QDialog):
         # добавить форму после строки шаблонов
         box_v.addLayout(form)
 
-        # кнопка сохранения шаблона внутри groupbox
+        # кнопки сохранения/применения шаблона внутри groupbox
         tmpl_btn_row = QWidget()
         tbh = QHBoxLayout(tmpl_btn_row)
         tbh.addStretch(1)
+        self.btn_save_settings = QPushButton("💾 Применить настройки")
+        self.btn_save_settings.clicked.connect(self.apply_settings)
+        tbh.addWidget(self.btn_save_settings)
         self.btn_save_template = QPushButton("💾 Сохранить как шаблон")
         self.btn_save_template.clicked.connect(self.save_template)
         tbh.addWidget(self.btn_save_template)
@@ -284,8 +287,6 @@ class StrategyControlDialog(QDialog):
         # ---------- Controls ----------
         controls = QWidget()
         ch = QHBoxLayout(controls)
-        self.btn_save_settings = QPushButton("💾 Применить настройки")
-        self.btn_save_settings.clicked.connect(self.apply_settings)
         self.btn_toggle = QPushButton("🚀 Старт")
         self.btn_stop = QPushButton("⏹ Стоп")
         self.btn_delete = QPushButton("× Удалить")
@@ -295,26 +296,31 @@ class StrategyControlDialog(QDialog):
         self.btn_delete.clicked.connect(self._do_delete)
 
         ch.addStretch(1)
-        ch.addWidget(self.btn_save_settings)
         ch.addWidget(self.btn_toggle)
         ch.addWidget(self.btn_stop)
         ch.addWidget(self.btn_delete)
 
-        # ---------- Главный блок: слева лог+настройки, справа таблица ----------
+        # ---------- Главный блок: слева настройки, справа таблица+лог ----------
         left_panel = QWidget()
         lv = QVBoxLayout(left_panel)
         lv.setContentsMargins(0, 0, 0, 0)
         lv.setSpacing(8)
-        lv.addWidget(self.log_edit, 1)
         lv.addWidget(self.settings_box)
         lv.addWidget(controls)
+
+        right_panel = QWidget()
+        rv = QVBoxLayout(right_panel)
+        rv.setContentsMargins(0, 0, 0, 0)
+        rv.setSpacing(8)
+        rv.addWidget(self.trades_table, 3)
+        rv.addWidget(self.log_edit, 1)
 
         top_split = QWidget()
         hs = QHBoxLayout(top_split)
         hs.setContentsMargins(0, 0, 0, 0)
         hs.setSpacing(8)
         hs.addWidget(left_panel, 1)
-        hs.addWidget(self.trades_table, 1)
+        hs.addWidget(right_panel, 1)
 
         # ---------- Layout ----------
         layout = QVBoxLayout(self)
