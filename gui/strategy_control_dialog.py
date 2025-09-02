@@ -27,7 +27,12 @@ from core.policy import normalize_sprint
 from core.money import format_money
 from core.logger import ts
 from gui.bot_add_dialog import ALL_TF_LABEL
-from core.templates import load_templates, save_templates
+from core.templates import (
+    load_templates,
+    save_templates,
+    load_last_template,
+    save_last_template,
+)
 
 
 class StrategyControlDialog(QDialog):
@@ -276,17 +281,11 @@ class StrategyControlDialog(QDialog):
         tbh.addWidget(self.btn_save_template)
         box_v.addWidget(tmpl_btn_row)
 
-        # Кнопка применения настроек (снаружи)
-        settings_row = QWidget()
-        sh = QHBoxLayout(settings_row)
-        self.btn_save_settings = QPushButton("💾 Применить настройки")
-        self.btn_save_settings.clicked.connect(self.apply_settings)
-        sh.addStretch(1)
-        sh.addWidget(self.btn_save_settings)
-
         # ---------- Controls ----------
         controls = QWidget()
         ch = QHBoxLayout(controls)
+        self.btn_save_settings = QPushButton("💾 Применить настройки")
+        self.btn_save_settings.clicked.connect(self.apply_settings)
         self.btn_toggle = QPushButton("🚀 Старт")
         self.btn_stop = QPushButton("⏹ Стоп")
         self.btn_delete = QPushButton("× Удалить")
@@ -296,6 +295,7 @@ class StrategyControlDialog(QDialog):
         self.btn_delete.clicked.connect(self._do_delete)
 
         ch.addStretch(1)
+        ch.addWidget(self.btn_save_settings)
         ch.addWidget(self.btn_toggle)
         ch.addWidget(self.btn_stop)
         ch.addWidget(self.btn_delete)
@@ -307,7 +307,6 @@ class StrategyControlDialog(QDialog):
         lv.setSpacing(8)
         lv.addWidget(self.log_edit, 1)
         lv.addWidget(self.settings_box)
-        lv.addWidget(settings_row)
         lv.addWidget(controls)
 
         top_split = QWidget()
@@ -328,6 +327,14 @@ class StrategyControlDialog(QDialog):
         self.timer.setInterval(200)
         self.timer.timeout.connect(self._refresh_status_and_buttons)
         self.timer.start()
+
+        last_name = load_last_template(self.strategy_key)
+        if last_name:
+            idx = self.template_combo.findText(str(last_name))
+            if idx >= 0:
+                self.template_combo.setCurrentIndex(idx)
+                self.apply_template()
+
         self._refresh_status_and_buttons()
 
         # === Подписка на сделки для КОНКРЕТНОГО бота ===
@@ -521,6 +528,7 @@ class StrategyControlDialog(QDialog):
         idx = self.template_combo.findText(name)
         if idx >= 0:
             self.template_combo.setCurrentIndex(idx)
+            save_last_template(self.strategy_key, name)
 
     def apply_template(self):
         idx = self.template_combo.currentIndex()
@@ -548,6 +556,7 @@ class StrategyControlDialog(QDialog):
             elif k == "double_entry" and hasattr(self, "double_entry"):
                 self.double_entry.setChecked(bool(v))
         self.apply_settings()
+        save_last_template(self.strategy_key, str(tmpl.get("name", "")))
 
     # ---- хелперы: локальная таблица сделок ----
     def _fmt_money(self, value: float, ccy: str) -> str:
