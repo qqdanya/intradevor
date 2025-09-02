@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
 from typing import List, Dict
 
 from core.templates import load_templates, save_templates
+from gui.settings_factory import get_settings_dialog_cls
 
 
 class TemplatesDialog(QDialog):
@@ -38,15 +39,24 @@ class TemplatesDialog(QDialog):
         self.btn_add = QPushButton("Добавить", self)
         self.btn_rename = QPushButton("Переименовать", self)
         self.btn_delete = QPushButton("Удалить", self)
+        self.btn_edit = QPushButton("Настройки", self)
         self.btn_up = QPushButton("Вверх", self)
         self.btn_down = QPushButton("Вниз", self)
-        for b in (self.btn_add, self.btn_rename, self.btn_delete, self.btn_up, self.btn_down):
+        for b in (
+            self.btn_add,
+            self.btn_rename,
+            self.btn_delete,
+            self.btn_edit,
+            self.btn_up,
+            self.btn_down,
+        ):
             bh.addWidget(b)
         layout.addWidget(btn_row)
 
         self.btn_add.clicked.connect(self._add_template)
         self.btn_rename.clicked.connect(self._rename_template)
         self.btn_delete.clicked.connect(self._delete_template)
+        self.btn_edit.clicked.connect(self._edit_template)
         self.btn_up.clicked.connect(self._move_up)
         self.btn_down.clicked.connect(self._move_down)
 
@@ -69,10 +79,30 @@ class TemplatesDialog(QDialog):
     def _default_name(self) -> str:
         return f"Шаблон {len(self.templates) + 1}"
 
+    def _edit_params(self, params: Dict) -> Dict | None:
+        """Open settings dialog for current strategy and return params or None."""
+        strategy_key = self._current_strategy()
+        strategy_cls = self.main.available_strategies.get(strategy_key)
+        dlg_cls = get_settings_dialog_cls(strategy_cls) if strategy_cls else None
+        if not dlg_cls:
+            return params
+        params = dict(params)
+        params.setdefault("timeframe", "M1")
+        params.setdefault("symbol", "")
+        dlg = dlg_cls(params, parent=self)
+        if dlg.exec():
+            return dlg.get_params()
+        return None
+
     def _add_template(self) -> None:
-        name, ok = QInputDialog.getText(self, "Новый шаблон", "Название:", text=self._default_name())
+        name, ok = QInputDialog.getText(
+            self, "Новый шаблон", "Название:", text=self._default_name()
+        )
         if ok and name:
-            self.templates.append({"name": name, "params": {}})
+            params = self._edit_params({})
+            if params is None:
+                return
+            self.templates.append({"name": name, "params": params})
             self._save()
             self._load_templates(self._current_strategy())
 
@@ -87,6 +117,20 @@ class TemplatesDialog(QDialog):
             self._save()
             self._load_templates(self._current_strategy())
             self.list_widget.setCurrentRow(row)
+
+    def _edit_template(self) -> None:
+        row = self.list_widget.currentRow()
+        if row < 0:
+            return
+        tmpl = self.templates[row]
+        params = tmpl.get("params", {})
+        new_params = self._edit_params(params)
+        if new_params is None:
+            return
+        tmpl["params"] = new_params
+        self._save()
+        self._load_templates(self._current_strategy())
+        self.list_widget.setCurrentRow(row)
 
     def _delete_template(self) -> None:
         row = self.list_widget.currentRow()

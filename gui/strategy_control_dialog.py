@@ -108,7 +108,8 @@ class StrategyControlDialog(QDialog):
 
         # ---------- Настройки (inline) ----------
         self.settings_box = QGroupBox("Настройки стратегии")
-        form = QFormLayout(self.settings_box)
+        box_v = QVBoxLayout(self.settings_box)
+        form = QFormLayout()
 
         params = {}
         if self.bot.strategy and getattr(self.bot.strategy, "params", None):
@@ -138,6 +139,19 @@ class StrategyControlDialog(QDialog):
         strategy_key = str(self.bot.strategy_kwargs.get("strategy_key", "")).lower()
         self.strategy_key = strategy_key
         self.minutes = None
+
+        # ---- шаблоны ----
+        self.templates = load_templates(self.strategy_key)
+        template_row = QWidget()
+        th = QHBoxLayout(template_row)
+        self.template_combo = QComboBox()
+        for tmpl in self.templates:
+            self.template_combo.addItem(str(tmpl.get("name", "")))
+        self.btn_apply_template = QPushButton("Применить")
+        self.btn_apply_template.clicked.connect(self.apply_template)
+        th.addWidget(self.template_combo, 1)
+        th.addWidget(self.btn_apply_template)
+        box_v.addWidget(template_row)
 
         if strategy_key in ("oscar_grind_1", "oscar_grind_2"):
             self.minutes = QSpinBox()
@@ -250,27 +264,24 @@ class StrategyControlDialog(QDialog):
         self.trade_type.currentTextChanged.connect(_update_minutes_enabled)
         _update_minutes_enabled(self.trade_type.currentText())
 
-        # ---- шаблоны ----
-        self.templates = load_templates(self.strategy_key)
-        template_row = QWidget()
-        th = QHBoxLayout(template_row)
-        self.template_combo = QComboBox()
-        for tmpl in self.templates:
-            self.template_combo.addItem(str(tmpl.get("name", "")))
-        self.btn_apply_template = QPushButton("Применить")
-        self.btn_apply_template.clicked.connect(self.apply_template)
-        th.addWidget(self.template_combo, 1)
-        th.addWidget(self.btn_apply_template)
+        # добавить форму после строки шаблонов
+        box_v.addLayout(form)
 
-        # Кнопки сохранения/шаблонов
-        settings_row = QWidget()
-        sh = QHBoxLayout(settings_row)
+        # кнопка сохранения шаблона внутри groupbox
+        tmpl_btn_row = QWidget()
+        tbh = QHBoxLayout(tmpl_btn_row)
+        tbh.addStretch(1)
         self.btn_save_template = QPushButton("💾 Сохранить как шаблон")
         self.btn_save_template.clicked.connect(self.save_template)
+        tbh.addWidget(self.btn_save_template)
+        box_v.addWidget(tmpl_btn_row)
+
+        # Кнопка применения настроек (снаружи)
+        settings_row = QWidget()
+        sh = QHBoxLayout(settings_row)
         self.btn_save_settings = QPushButton("💾 Применить настройки")
         self.btn_save_settings.clicked.connect(self.apply_settings)
         sh.addStretch(1)
-        sh.addWidget(self.btn_save_template)
         sh.addWidget(self.btn_save_settings)
 
         # ---------- Controls ----------
@@ -295,7 +306,6 @@ class StrategyControlDialog(QDialog):
         lv.setContentsMargins(0, 0, 0, 0)
         lv.setSpacing(8)
         lv.addWidget(self.log_edit, 1)
-        lv.addWidget(template_row)
         lv.addWidget(self.settings_box)
         lv.addWidget(settings_row)
         lv.addWidget(controls)
@@ -481,7 +491,7 @@ class StrategyControlDialog(QDialog):
             else:
                 formatted.append(f"'{k}': {v}")
         self.log_edit.append(
-            ts("💾 Настройки сохранены: {" + ", ".join(formatted) + "}")
+            ts("💾 Настройки применены: {" + ", ".join(formatted) + "}")
         )
 
     def save_template(self):
