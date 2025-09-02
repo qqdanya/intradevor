@@ -58,7 +58,6 @@ def _minutes_from_timeframe(tf: str) -> int:
 
 
 class FixedStakeStrategy(StrategyBase):
-    """Простая стратегия: ставит фиксированную ставку на каждый сигнал."""
 
     def __init__(
         self,
