@@ -31,6 +31,7 @@ from core import config
 from gui.bot_add_dialog import AddBotDialog, ALL_SYMBOLS_LABEL
 from gui.risk_dialog import RiskDialog
 from gui.trades_table_widget import TradesTableWidget
+from gui.templates_dialog import TemplatesDialog
 from core.session import (
     create_http_client_from_browser_cookies,
     refresh_http_client_cookies,
@@ -82,6 +83,9 @@ class MainWindow(QWidget):
             theme_menu.addAction("Системная", lambda: _apply_theme("system"))
         else:
             theme_menu.setEnabled(False)
+
+        # Управление шаблонами стратегий
+        self.menu_bar.addAction("Шаблоны стратегий", self._open_templates_dialog)
 
         # === имя/версия приложения ===
         try:
@@ -342,6 +346,10 @@ class MainWindow(QWidget):
         config.set_font_family(font.family())
         config.set_font_size(font.pointSize())
         config.save_config()
+
+    def _open_templates_dialog(self):
+        dlg = TemplatesDialog(self)
+        dlg.exec()
 
     # -------------------- bots --------------------
     def show_add_bot_dialog(self):
