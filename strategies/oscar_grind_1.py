@@ -6,12 +6,6 @@ from core.money import format_amount
 
 
 class OscarGrind1Strategy(OscarGrind2Strategy):
-    """Классическая стратегия Oscar Grind.
-
-    В этом варианте после выигрыша следующая ставка всегда
-    увеличивается на величину базовой ставки (unit) без ограничения
-    по достижению целевой прибыли серии.
-    """
 
     def _next_stake(
         self,

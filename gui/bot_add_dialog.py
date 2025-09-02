@@ -12,6 +12,8 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 
+from gui.strategy_descriptions import STRATEGY_DESCRIPTIONS
+
 ALL_SYMBOLS_LABEL = "Все валютные пары"
 ALL_TF_LABEL = "Все таймфреймы"
 
@@ -102,12 +104,8 @@ class AddBotDialog(QDialog):
 
     def on_strategy_change(self, *_):
         key = self.selected_strategy
-        desc = ""
-        if key:
-            cls = self.available_strategies.get(key)
-            if cls and cls.__doc__:
-                desc = cls.__doc__.strip()
-        self.strategy_desc.setText(desc)
+        desc = STRATEGY_DESCRIPTIONS.get(key, "")
+        self.strategy_desc.setText(desc.strip())
 
     @property
     def selected_symbol(self):
