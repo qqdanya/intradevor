@@ -295,10 +295,10 @@ class StrategyControlDialog(QDialog):
         self.btn_stop.clicked.connect(self._do_stop)
         self.btn_delete.clicked.connect(self._do_delete)
 
+        ch.addWidget(self.btn_toggle, alignment=Qt.AlignmentFlag.AlignTop)
+        ch.addWidget(self.btn_stop, alignment=Qt.AlignmentFlag.AlignTop)
+        ch.addWidget(self.btn_delete, alignment=Qt.AlignmentFlag.AlignTop)
         ch.addStretch(1)
-        ch.addWidget(self.btn_toggle)
-        ch.addWidget(self.btn_stop)
-        ch.addWidget(self.btn_delete)
 
         # ---------- Главный блок: слева настройки, справа таблица+лог ----------
         left_panel = QWidget()
