@@ -240,9 +240,10 @@ class OscarGrind2Strategy(StrategyBase):
 
             # Состояние серии Oscar Grind
             step_idx = 0
-            cum_profit = 0.0  # накопленный профиль серии (может уходить в минус)
+            cum_profit = 0.0  # накопленный профит серии (может уходить в минус)
             stake = base_unit  # текущая ставка (unit-кратная)
 
+            series_started = False  # серия начинается только с первой убыточной сделки
             series_direction = None  # направление текущей ставки
             repeat_trade = False  # повторный вход после поражения
 
@@ -468,19 +469,38 @@ class OscarGrind2Strategy(StrategyBase):
                     except Exception:
                         pass
 
-                # Обновим накопленный профит
+                # Определим исход сделки
                 if profit is None:
                     log(f"[{self.symbol}] ⚠ Результат неизвестен — считаем как LOSS.")
-                    cum_profit -= float(stake)
+                    profit_val = -float(stake)
                     outcome = "loss"
                 else:
-                    cum_profit += float(profit)
-                    if profit > 0.0:
+                    profit_val = float(profit)
+                    if profit_val > 0.0:
                         outcome = "win"
-                    elif profit == 0.0:
+                    elif profit_val == 0.0:
                         outcome = "refund"
                     else:
                         outcome = "loss"
+
+                # До первой убыточной сделки серия не стартует
+                if not series_started:
+                    if outcome == "loss":
+                        series_started = True
+                        cum_profit += profit_val
+                    else:
+                        if outcome == "win":
+                            log(
+                                f"[{self.symbol}] ✅ WIN до старта серии — ожидаем первую убыточную сделку."
+                            )
+                        else:
+                            log(
+                                f"[{self.symbol}] ↩️ REFUND до старта серии — ожидаем первую убыточную сделку."
+                            )
+                        stake = base_unit
+                        continue
+                else:
+                    cum_profit += profit_val
 
                 # Проверим цель
                 if cum_profit >= target_profit:
@@ -499,7 +519,7 @@ class OscarGrind2Strategy(StrategyBase):
                     base_unit=base_unit,
                     pct=pct,
                     need=need,
-                    profit=0.0 if profit is None else float(profit),
+                    profit=0.0 if profit is None else float(profit_val),
                     cum_profit=cum_profit,
                     log=log,
                 )
