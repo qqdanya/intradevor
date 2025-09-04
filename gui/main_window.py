@@ -238,6 +238,7 @@ class MainWindow(QWidget):
         self.bot_runtime_sec: dict[Bot, float] = defaultdict(float)
         self.bot_last_tick: dict[Bot, float] = {}
         self.bot_pause_buttons: dict[Bot, QPushButton] = {}
+        self.bot_stop_buttons: dict[Bot, QPushButton] = {}
 
         # Тикер для апдейта "Время работы"
         self._bots_timer = QTimer(self)
@@ -453,15 +454,20 @@ class MainWindow(QWidget):
             ctrl_widget = QWidget()
             hl = QHBoxLayout(ctrl_widget)
             hl.setContentsMargins(0, 0, 0, 0)
-            btn_pause = QPushButton("Пауза", self)
+            btn_pause = QPushButton("⏸", self)
             btn_pause.setEnabled(False)
             btn_pause.clicked.connect(partial(self._toggle_pause_clicked, bot))
-            btn_del = QPushButton("Удалить", self)
+            btn_stop = QPushButton("⏹", self)
+            btn_stop.setEnabled(False)
+            btn_stop.clicked.connect(partial(self.stop_bot, bot))
+            btn_del = QPushButton("✖", self)
             btn_del.clicked.connect(partial(self.delete_bot, bot))
             hl.addWidget(btn_pause)
+            hl.addWidget(btn_stop)
             hl.addWidget(btn_del)
             self.bot_table.setCellWidget(row, 8, ctrl_widget)
             self.bot_pause_buttons[bot] = btn_pause
+            self.bot_stop_buttons[bot] = btn_stop
 
             self.bot_runtime_sec[bot] = 0.0
             self.bot_last_tick[bot] = asyncio.get_running_loop().time()
@@ -481,6 +487,9 @@ class MainWindow(QWidget):
     def stop_bot(self, bot):
         bot.stop()
         self.on_bot_finished(bot)
+        btn = self.bot_stop_buttons.get(bot)
+        if btn:
+            btn.setEnabled(False)
 
     def toggle_pause(self, bot, paused: bool):
         has_started = getattr(bot, "has_started", None)
@@ -518,7 +527,7 @@ class MainWindow(QWidget):
         self.toggle_pause(bot, not paused)
         btn = self.bot_pause_buttons.get(bot)
         if btn:
-            btn.setText("Пауза" if paused else "Продолжить")
+            btn.setText("⏸" if paused else "▶")
 
     def delete_bot(self, bot):
         row = self.bot_rows.pop(bot, None)
@@ -549,6 +558,7 @@ class MainWindow(QWidget):
         ):
             mp.pop(bot, None)
         self.bot_pause_buttons.pop(bot, None)
+        self.bot_stop_buttons.pop(bot, None)
         key = bot.strategy_kwargs.get("strategy_key", "")
         sym = bot.strategy_kwargs.get("symbol")
         label = self.strategy_label(key)
@@ -842,7 +852,11 @@ class MainWindow(QWidget):
             btn = self.bot_pause_buttons.get(bot)
             if btn:
                 btn.setEnabled(started)
-                btn.setText("Продолжить" if paused else "Пауза")
+                btn.setText("▶" if paused else "⏸")
+
+            btn_stop = self.bot_stop_buttons.get(bot)
+            if btn_stop:
+                btn_stop.setEnabled(started)
 
     def _set_bot_status(self, bot, status: str):
         """Колбэк от стратегии: 'ожидание сигнала' / 'делает ставку' / 'ожидание результата'.

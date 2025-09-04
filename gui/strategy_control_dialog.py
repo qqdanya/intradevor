@@ -18,8 +18,9 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QCheckBox,
     QInputDialog,
+    QSizePolicy,
 )
-from PyQt6.QtGui import QColor, QBrush
+from PyQt6.QtGui import QColor, QBrush, QTextCursor
 from PyQt6.QtCore import QTimer, Qt
 from core.money import format_amount
 from strategies.martingale import _minutes_from_timeframe
@@ -75,13 +76,22 @@ class StrategyControlDialog(QDialog):
         self.log_edit.setReadOnly(True)
         self.log_edit.setPlaceholderText("Лог этой стратегии…")
 
+        def _add_log(text: str) -> None:
+            """Вставить строку лога в начало (снизу вверх)."""
+            t = text if str(text).startswith("[") else ts(str(text))
+            cursor = self.log_edit.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.Start)
+            self.log_edit.setTextCursor(cursor)
+            self.log_edit.insertPlainText(t + "\n")
+
+        self._add_log = _add_log
+
         # История старых логов
-        for line in self.main.bot_logs.get(self.bot, []):
-            self.log_edit.append(line if str(line).startswith("[") else ts(str(line)))
+        for line in reversed(self.main.bot_logs.get(self.bot, [])):
+            self._add_log(line)
+
         # Подписка на новые логи
-        self._log_listener = lambda text: self.log_edit.append(
-            text if str(text).startswith("[") else ts(str(text))
-        )
+        self._log_listener = lambda text: self._add_log(text)
         self.main.bot_log_listeners.setdefault(self.bot, []).append(self._log_listener)
 
         # ---------- ТАБЛИЦА СДЕЛОК (справа) ----------
@@ -291,14 +301,16 @@ class StrategyControlDialog(QDialog):
         self.btn_stop = QPushButton("⏹ Стоп")
         self.btn_delete = QPushButton("× Удалить")
 
+        for b in (self.btn_toggle, self.btn_stop, self.btn_delete):
+            b.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
         self.btn_toggle.clicked.connect(self._do_toggle)
         self.btn_stop.clicked.connect(self._do_stop)
         self.btn_delete.clicked.connect(self._do_delete)
 
-        ch.addWidget(self.btn_toggle, alignment=Qt.AlignmentFlag.AlignTop)
-        ch.addWidget(self.btn_stop, alignment=Qt.AlignmentFlag.AlignTop)
-        ch.addWidget(self.btn_delete, alignment=Qt.AlignmentFlag.AlignTop)
-        ch.addStretch(1)
+        ch.addWidget(self.btn_toggle)
+        ch.addWidget(self.btn_stop)
+        ch.addWidget(self.btn_delete)
 
         # ---------- Главный блок: слева настройки, справа таблица+лог ----------
         left_panel = QWidget()
@@ -405,32 +417,32 @@ class StrategyControlDialog(QDialog):
                 self.main.bot_trade_history[self.bot].clear()
                 self.main.reset_bot(self.bot)
                 self.bot.start()
-                self.log_edit.append(ts("🚀 Старт стратегии."))
+                self._add_log(ts("🚀 Старт стратегии."))
             elif paused:
                 self.bot.resume()
-                self.log_edit.append(ts("▶ Продолжено."))
+                self._add_log(ts("▶ Продолжено."))
             else:
                 self.bot.pause()
-                self.log_edit.append(ts("⏸ Пауза."))
+                self._add_log(ts("⏸ Пауза."))
         except Exception as e:
-            self.log_edit.append(ts(f"⚠ Ошибка управления: {e}"))
+            self._add_log(ts(f"⚠ Ошибка управления: {e}"))
 
     def _do_stop(self):
         try:
             self.bot.stop()
-            self.log_edit.append(ts("⏹ Остановлено."))
+            self._add_log(ts("⏹ Остановлено."))
             self.btn_toggle.setEnabled(False)
             self.btn_stop.setEnabled(False)
             self.btn_delete.setEnabled(True)
         except Exception as e:
-            self.log_edit.append(ts(f"⚠ Ошибка остановки: {e}"))
+            self._add_log(ts(f"⚠ Ошибка остановки: {e}"))
 
     def _do_delete(self):
         try:
             self.main.delete_bot(self.bot)
             self.close()
         except Exception as e:
-            self.log_edit.append(ts(f"⚠ Ошибка удаления: {e}"))
+            self._add_log(ts(f"⚠ Ошибка удаления: {e}"))
 
     # ---- сохранение настроек ----
     def _collect_params(self):
@@ -505,7 +517,7 @@ class StrategyControlDialog(QDialog):
                 formatted.append(f"'{k}': {format_amount(v)}")
             else:
                 formatted.append(f"'{k}': {v}")
-        self.log_edit.append(
+        self._add_log(
             ts("💾 Настройки применены: {" + ", ".join(formatted) + "}")
         )
 
@@ -817,7 +829,7 @@ class StrategyControlDialog(QDialog):
                 self._add_trade_result_local(**data)
         except Exception as e:
             # пусть ошибка в UI не роняет окно
-            self.log_edit.append(ts(f"⚠ Ошибка обновления таблицы сделок: {e}"))
+            self._add_log(ts(f"⚠ Ошибка обновления таблицы сделок: {e}"))
 
     # ---- жизнь/смерть окна ----
     def closeEvent(self, e):
