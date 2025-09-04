@@ -406,7 +406,7 @@ class FixedStakeStrategy(StrategyBase):
             else:
                 wait_seconds = float(wait_seconds)
 
-            placed_at_str = datetime.now().strftime("%d.%м.%Y %H:%M:%S")
+            placed_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
             if callable(self._on_trade_pending):
                 try:
                     self._on_trade_pending(

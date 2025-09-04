@@ -419,7 +419,7 @@ class OscarGrind2Strategy(StrategyBase):
                     wait_seconds = float(wait_seconds)
 
                 # GUI: ожидаем результат (две метки времени)
-                placed_at_str = datetime.now().strftime("%d.%м.%Y %H:%M:%S")
+                placed_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
                 if callable(self._on_trade_pending):
                     try:
                         self._on_trade_pending(
