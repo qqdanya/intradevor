@@ -77,17 +77,14 @@ class StrategyControlDialog(QDialog):
         self.log_edit.setPlaceholderText("Лог этой стратегии…")
 
         def _add_log(text: str) -> None:
-            """Вставить строку лога в начало (снизу вверх)."""
+            """Добавить строку лога (сверху вниз)."""
             t = text if str(text).startswith("[") else ts(str(text))
-            cursor = self.log_edit.textCursor()
-            cursor.movePosition(QTextCursor.MoveOperation.Start)
-            self.log_edit.setTextCursor(cursor)
-            self.log_edit.insertPlainText(t + "\n")
+            self.log_edit.append(t)
 
         self._add_log = _add_log
 
         # История старых логов
-        for line in reversed(self.main.bot_logs.get(self.bot, [])):
+        for line in self.main.bot_logs.get(self.bot, []):
             self._add_log(line)
 
         # Подписка на новые логи
@@ -159,6 +156,7 @@ class StrategyControlDialog(QDialog):
         self.templates = load_templates(self.strategy_key)
         template_row = QWidget()
         th = QHBoxLayout(template_row)
+        th.addWidget(QLabel("Шаблон:"))
         self.template_combo = QComboBox()
         for tmpl in self.templates:
             self.template_combo.addItem(str(tmpl.get("name", "")))
@@ -285,17 +283,20 @@ class StrategyControlDialog(QDialog):
         # кнопки сохранения/применения шаблона внутри groupbox
         tmpl_btn_row = QWidget()
         tbh = QHBoxLayout(tmpl_btn_row)
-        tbh.addStretch(1)
         self.btn_save_settings = QPushButton("💾 Применить настройки")
         self.btn_save_settings.clicked.connect(self.apply_settings)
-        tbh.addWidget(self.btn_save_settings)
         self.btn_save_template = QPushButton("💾 Сохранить как шаблон")
         self.btn_save_template.clicked.connect(self.save_template)
-        tbh.addWidget(self.btn_save_template)
+        for b in (self.btn_save_settings, self.btn_save_template):
+            b.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            tbh.addWidget(b, 1)
         box_v.addWidget(tmpl_btn_row)
 
         # ---------- Controls ----------
         controls = QWidget()
+        controls.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
         ch = QHBoxLayout(controls)
         self.btn_toggle = QPushButton("🚀 Старт")
         self.btn_stop = QPushButton("⏹ Стоп")
@@ -319,6 +320,7 @@ class StrategyControlDialog(QDialog):
         lv.setSpacing(8)
         lv.addWidget(self.settings_box)
         lv.addWidget(controls)
+        lv.addStretch(1)
 
         right_panel = QWidget()
         rv = QVBoxLayout(right_panel)
