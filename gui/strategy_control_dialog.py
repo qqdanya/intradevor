@@ -1,5 +1,6 @@
 # gui/strategy_control_dialog.py
 from PyQt6.QtWidgets import (
+    QDialog,
     QVBoxLayout,
     QHBoxLayout,
     QLabel,
@@ -35,7 +36,7 @@ from core.templates import (
 )
 
 
-class StrategyControlDialog(QWidget):
+class StrategyControlDialog(QDialog):
     """
     Единое окно: статус + пер-ботовый лог + ВСТРОЕННЫЕ НАСТРОЙКИ + управление
     + СПРАВА таблица сделок этого бота.
@@ -299,7 +300,7 @@ class StrategyControlDialog(QWidget):
         ch = QHBoxLayout(controls)
         self.btn_toggle = QPushButton("🚀 Старт")
         self.btn_stop = QPushButton("⏹ Стоп")
-        self.btn_delete = QPushButton("❌ Удалить бота")
+        self.btn_delete = QPushButton("❌ Удалить")
 
         for b in (self.btn_toggle, self.btn_stop, self.btn_delete):
             b.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
