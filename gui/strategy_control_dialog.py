@@ -283,7 +283,7 @@ class StrategyControlDialog(QDialog):
         # кнопки сохранения/применения шаблона внутри groupbox
         tmpl_btn_row = QWidget()
         tbh = QHBoxLayout(tmpl_btn_row)
-        self.btn_save_settings = QPushButton("💾 Применить настройки")
+        self.btn_save_settings = QPushButton("✅ Применить настройки")
         self.btn_save_settings.clicked.connect(self.apply_settings)
         self.btn_save_template = QPushButton("💾 Сохранить как шаблон")
         self.btn_save_template.clicked.connect(self.save_template)
@@ -300,7 +300,7 @@ class StrategyControlDialog(QDialog):
         ch = QHBoxLayout(controls)
         self.btn_toggle = QPushButton("🚀 Старт")
         self.btn_stop = QPushButton("⏹ Стоп")
-        self.btn_delete = QPushButton("× Удалить")
+        self.btn_delete = QPushButton("❌ Удалить")
 
         for b in (self.btn_toggle, self.btn_stop, self.btn_delete):
             b.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
