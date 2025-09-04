@@ -482,7 +482,7 @@ class MainWindow(QWidget):
         from gui.strategy_control_dialog import StrategyControlDialog
 
         dlg = StrategyControlDialog(self, bot, parent=self)
-        dlg.show()
+        dlg.exec()
 
     def stop_bot(self, bot):
         bot.stop()
