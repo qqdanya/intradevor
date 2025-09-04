@@ -44,15 +44,15 @@ class TemplatesDialog(QDialog):
         bh = QHBoxLayout(btn_row)
         self.btn_add = QPushButton("Добавить", self)
         self.btn_rename = QPushButton("Переименовать", self)
-        self.btn_delete = QPushButton("Удалить", self)
         self.btn_save = QPushButton("Сохранить", self)
+        self.btn_delete = QPushButton("Удалить", self)
         self.btn_up = QPushButton("Вверх", self)
         self.btn_down = QPushButton("Вниз", self)
         for b in (
             self.btn_add,
             self.btn_rename,
-            self.btn_delete,
             self.btn_save,
+            self.btn_delete,
             self.btn_up,
             self.btn_down,
         ):
