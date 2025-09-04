@@ -150,7 +150,7 @@ class AntiMartingaleStrategy(StrategyBase):
         try:
             self._anchor_is_demo = await is_demo_account(self.http_client)
             mode_txt = "ДЕМО" if self._anchor_is_demo else "РЕАЛ"
-            log(f"[{self.symbol}] Якорный режим счёта: {mode_txt}")
+            log(f"[{self.symbol}] Режим счёта: {mode_txt}")
         except Exception as e:
             log(f"[{self.symbol}] ⚠ Не удалось определить режим счёта при старте: {e}")
             self._anchor_is_demo = False
@@ -160,7 +160,7 @@ class AntiMartingaleStrategy(StrategyBase):
                 self.http_client, self.user_id, self.user_hash
             )
             log(
-                f"[{self.symbol}] Баланс: {display} ({format_amount(amount)}), текущая валюта: {cur_ccy}, якорь: {self._anchor_ccy}"
+                f"[{self.symbol}] Баланс: {display} ({format_amount(amount)}), текущая валюта: {cur_ccy}"
             )
         except Exception as e:
             log(f"[{self.symbol}] ⚠ Не удалось получить баланс при старте: {e}")
@@ -180,7 +180,7 @@ class AntiMartingaleStrategy(StrategyBase):
                 self._last_signal_ver = st.get("version", 0) or 0
                 if self.log:
                     self.log(
-                        f"[{self.symbol}] Заякорена версия сигнала: v{self._last_signal_ver}"
+                        f"[{self.symbol}] Версия сигнала: v{self._last_signal_ver}"
                     )
             else:
                 self._last_signal_ver = 0
