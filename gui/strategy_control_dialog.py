@@ -1,7 +1,6 @@
 # gui/strategy_control_dialog.py
-import json
-import math
 from PyQt6.QtWidgets import (
+    QDialog,
     QVBoxLayout,
     QHBoxLayout,
     QLabel,
@@ -23,6 +22,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QColor, QBrush, QTextCursor
 from PyQt6.QtCore import QTimer, Qt
+from core.money import format_amount
 from strategies.martingale import _minutes_from_timeframe
 from core.policy import normalize_sprint
 from core.money import format_money
@@ -36,16 +36,15 @@ from core.templates import (
 )
 
 
-class StrategyControlDialog(QWidget):
+class StrategyControlDialog(QDialog):
     """
     Единое окно: статус + пер-ботовый лог + ВСТРОЕННЫЕ НАСТРОЙКИ + управление
     + СПРАВА таблица сделок этого бота.
     """
 
     def __init__(self, main_window, bot, parent=None):
-        super().__init__(parent, Qt.WindowType.Window)
+        super().__init__(parent)
         self.setWindowTitle("Управление стратегией")
-        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self.main = main_window
         self.bot = bot
 
@@ -521,56 +520,22 @@ class StrategyControlDialog(QWidget):
         if new_params is None:
             return
 
+        self.bot.strategy_kwargs.setdefault("params", {}).update(new_params)
+        if self.bot.strategy and hasattr(self.bot.strategy, "update_params"):
+            self.bot.strategy.update_params(**new_params)
+
         if new_params.get("minutes") and self.minutes is not None:
             self.minutes.setValue(int(new_params["minutes"]))
 
-        params_storage = self.bot.strategy_kwargs.setdefault("params", {})
-
-        changed_params = {}
-        for key, value in new_params.items():
-            if not self._values_equal(params_storage.get(key), value):
-                changed_params[key] = value
-
-        if not changed_params:
-            return
-
-        params_storage.update(changed_params)
-
-        if self.bot.strategy and hasattr(self.bot.strategy, "update_params"):
-            self.bot.strategy.update_params(**changed_params)
-
-        snapshot = json.dumps(
-            params_storage,
-            ensure_ascii=False,
-            separators=(", ", ": "),
-            sort_keys=True,
-            default=self._json_fallback,
+        formatted = []
+        for k, v in new_params.items():
+            if isinstance(v, float):
+                formatted.append(f"'{k}': {format_amount(v)}")
+            else:
+                formatted.append(f"'{k}': {v}")
+        self._add_log(
+            ts("💾 Настройки применены: {" + ", ".join(formatted) + "}")
         )
-        self._add_log(ts(f"💾 Настройки применены: {snapshot}"))
-
-    @staticmethod
-    def _values_equal(old, new) -> bool:
-        if isinstance(old, bool) or isinstance(new, bool):
-            return bool(old) == bool(new)
-        try:
-            if isinstance(old, (int, float)) or isinstance(new, (int, float)):
-                return math.isclose(
-                    float(old), float(new), rel_tol=1e-9, abs_tol=1e-9
-                )
-        except (TypeError, ValueError):
-            return False
-        return old == new
-
-    @staticmethod
-    def _json_fallback(obj):
-        if callable(obj):
-            name = getattr(obj, "__qualname__", getattr(obj, "__name__", None))
-            if name:
-                return f"<callable {name}>"
-            return "<callable>"
-        if isinstance(obj, set):
-            return sorted(str(item) for item in obj)
-        return str(obj)
 
     def save_template(self):
         new_params = self._collect_params()
