@@ -253,6 +253,15 @@ class StrategyControlDialog(QDialog):
             self.min_balance = QSpinBox()
             self.min_balance.setRange(1, 10_000_000)
             self.min_balance.setValue(int(getv("min_balance", 100)))
+
+            if strategy_key not in ("fibonacci", "fib", "fibo"):
+                self.coefficient = QDoubleSpinBox()
+                self.coefficient.setRange(1.0, 10.0)
+                self.coefficient.setSingleStep(0.1)
+                self.coefficient.setValue(float(getv("coefficient", 2.0)))
+            else:
+                self.coefficient = None  # чтобы дальше не падало
+
             self.coefficient = QDoubleSpinBox()
             self.coefficient.setRange(1.0, 10.0)
             self.coefficient.setSingleStep(0.1)
@@ -350,12 +359,17 @@ class StrategyControlDialog(QDialog):
         self.timer.timeout.connect(self._refresh_status_and_buttons)
         self.timer.start()
 
-        last_name = load_last_template(self.strategy_key)
-        if last_name:
-            idx = self.template_combo.findText(str(last_name))
-            if idx >= 0:
-                self.template_combo.setCurrentIndex(idx)
-                self.apply_template()
+        # если у бота есть свои параметры — используем их
+        if self.bot.strategy_kwargs.get("params"):
+            self.apply_settings()
+        else:
+            # иначе грузим последний использованный шаблон
+            last_name = load_last_template(self.strategy_key)
+            if last_name:
+                idx = self.template_combo.findText(str(last_name))
+                if idx >= 0:
+                    self.template_combo.setCurrentIndex(idx)
+                    self.apply_template()
 
         self._refresh_status_and_buttons()
 

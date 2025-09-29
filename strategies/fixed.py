@@ -58,7 +58,6 @@ def _minutes_from_timeframe(tf: str) -> int:
 
 
 class FixedStakeStrategy(StrategyBase):
-
     def __init__(
         self,
         http_client: HttpClient,
@@ -150,7 +149,7 @@ class FixedStakeStrategy(StrategyBase):
         try:
             self._anchor_is_demo = await is_demo_account(self.http_client)
             mode_txt = "ДЕМО" if self._anchor_is_demo else "РЕАЛ"
-            log(f"[{self.symbol}] Якорный режим счёта: {mode_txt}")
+            log(f"[{self.symbol}] Режим счёта: {mode_txt}")
         except Exception as e:
             log(f"[{self.symbol}] ⚠ Не удалось определить режим счёта при старте: {e}")
             self._anchor_is_demo = False
@@ -160,7 +159,7 @@ class FixedStakeStrategy(StrategyBase):
                 self.http_client, self.user_id, self.user_hash
             )
             log(
-                f"[{self.symbol}] Баланс: {display} ({format_amount(amount)}), текущая валюта: {cur_ccy}, якорь: {self._anchor_ccy}"
+                f"[{self.symbol}] Баланс: {display} ({format_amount(amount)}), текущая валюта: {cur_ccy}"
             )
         except Exception as e:
             log(f"[{self.symbol}] ⚠ Не удалось получить баланс при старте: {e}")
@@ -209,9 +208,7 @@ class FixedStakeStrategy(StrategyBase):
             except Exception:
                 bal = 0.0
 
-            min_balance = float(
-                self.params.get("min_balance", DEFAULTS["min_balance"])
-            )
+            min_balance = float(self.params.get("min_balance", DEFAULTS["min_balance"]))
             if bal < min_balance:
                 log(
                     f"[{self.symbol}] ⛔ Баланс ниже минимума ({format_amount(bal)} < {format_amount(min_balance)}). Ожидание..."
@@ -234,15 +231,11 @@ class FixedStakeStrategy(StrategyBase):
             status = None
             if self.symbol == "*":
                 self._status("ожидание сигнала")
-                log(
-                    f"[{self.symbol}] ⏳ Ожидание сигнала на {self.timeframe}..."
-                )
+                log(f"[{self.symbol}] ⏳ Ожидание сигнала на {self.timeframe}...")
                 try:
                     direction = await self.wait_signal(timeout=sig_timeout)
                 except asyncio.TimeoutError:
-                    log(
-                        f"[{self.symbol}] ⌛ Таймаут ожидания сигнала — повтор."
-                    )
+                    log(f"[{self.symbol}] ⌛ Таймаут ожидания сигнала — повтор.")
                     await self.sleep(1.0)
                     continue
                 status = 1 if int(direction) == 1 else 2
@@ -261,9 +254,7 @@ class FixedStakeStrategy(StrategyBase):
 
             if pct is None:
                 self._status("ожидание процента")
-                log(
-                    f"[{self.symbol}] ⚠ Не получили % выплаты. Пауза и повтор."
-                )
+                log(f"[{self.symbol}] ⚠ Не получили % выплаты. Пауза и повтор.")
                 await self.sleep(1.0)
                 continue
 
@@ -289,16 +280,12 @@ class FixedStakeStrategy(StrategyBase):
 
             if status is None:
                 self._status("ожидание сигнала")
-                log(
-                    f"[{self.symbol}] ⏳ Ожидание сигнала на {self.timeframe}..."
-                )
+                log(f"[{self.symbol}] ⏳ Ожидание сигнала на {self.timeframe}...")
 
                 try:
                     direction = await self.wait_signal(timeout=sig_timeout)
                 except asyncio.TimeoutError:
-                    log(
-                        f"[{self.symbol}] ⌛ Таймаут ожидания сигнала — повтор."
-                    )
+                    log(f"[{self.symbol}] ⌛ Таймаут ожидания сигнала — повтор.")
                     await self.sleep(1.0)
                     continue
 
@@ -311,9 +298,7 @@ class FixedStakeStrategy(StrategyBase):
             except Exception:
                 cur_balance = None
 
-            min_floor = float(
-                self.params.get("min_balance", DEFAULTS["min_balance"])
-            )
+            min_floor = float(self.params.get("min_balance", DEFAULTS["min_balance"]))
             if cur_balance is None or (cur_balance - stake) < min_floor:
                 log(
                     f"[{self.symbol}] 🛑 Сделка {format_amount(stake)} {account_ccy} может опустить баланс ниже {format_amount(min_floor)}"
@@ -391,9 +376,7 @@ class FixedStakeStrategy(StrategyBase):
             if self._trade_type == "classic" and self._next_expire_dt is not None:
                 trade_seconds = max(
                     0.0,
-                    (
-                        self._next_expire_dt - datetime.now(MOSCOW_TZ)
-                    ).total_seconds(),
+                    (self._next_expire_dt - datetime.now(MOSCOW_TZ)).total_seconds(),
                 )
                 expected_end_ts = self._next_expire_dt.timestamp()
             else:
@@ -457,13 +440,9 @@ class FixedStakeStrategy(StrategyBase):
             if profit is None:
                 log(f"[{self.symbol}] ⚠ Результат неизвестен")
             elif profit >= 0:
-                log(
-                    f"[{self.symbol}] ✅ Результат: {format_amount(profit)}"
-                )
+                log(f"[{self.symbol}] ✅ Результат: {format_amount(profit)}")
             else:
-                log(
-                    f"[{self.symbol}] ❌ Результат: {format_amount(profit)}"
-                )
+                log(f"[{self.symbol}] ❌ Результат: {format_amount(profit)}")
 
             await self.sleep(0.2)
 
@@ -526,9 +505,7 @@ class FixedStakeStrategy(StrategyBase):
 
             from datetime import datetime
 
-            self._last_signal_at_str = datetime.now().strftime(
-                "%d.%m.%Y %H:%M:%S"
-            )
+            self._last_signal_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
             return int(direction)
 
     def update_params(self, **params):
@@ -606,4 +583,3 @@ class FixedStakeStrategy(StrategyBase):
             await self.sleep(1.0)
             return False
         return True
-

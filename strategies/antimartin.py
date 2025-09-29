@@ -58,7 +58,6 @@ def _minutes_from_timeframe(tf: str) -> int:
 
 
 class AntiMartingaleStrategy(StrategyBase):
-
     def __init__(
         self,
         http_client: HttpClient,
@@ -150,7 +149,7 @@ class AntiMartingaleStrategy(StrategyBase):
         try:
             self._anchor_is_demo = await is_demo_account(self.http_client)
             mode_txt = "ДЕМО" if self._anchor_is_demo else "РЕАЛ"
-            log(f"[{self.symbol}] Якорный режим счёта: {mode_txt}")
+            log(f"[{self.symbol}] Режим счёта: {mode_txt}")
         except Exception as e:
             log(f"[{self.symbol}] ⚠ Не удалось определить режим счёта при старте: {e}")
             self._anchor_is_demo = False
@@ -160,7 +159,7 @@ class AntiMartingaleStrategy(StrategyBase):
                 self.http_client, self.user_id, self.user_hash
             )
             log(
-                f"[{self.symbol}] Баланс: {display} ({format_amount(amount)}), текущая валюта: {cur_ccy}, якорь: {self._anchor_ccy}"
+                f"[{self.symbol}] Баланс: {display} ({format_amount(amount)}), текущая валюта: {cur_ccy}"
             )
         except Exception as e:
             log(f"[{self.symbol}] ⚠ Не удалось получить баланс при старте: {e}")
@@ -396,10 +395,7 @@ class AntiMartingaleStrategy(StrategyBase):
                 # определяем длительность сделки (для таймера и ожидания результата)
                 from datetime import datetime
 
-                if (
-                    self._trade_type == "classic"
-                    and self._next_expire_dt is not None
-                ):
+                if self._trade_type == "classic" and self._next_expire_dt is not None:
                     trade_seconds = max(
                         0.0,
                         (
@@ -593,9 +589,7 @@ class AntiMartingaleStrategy(StrategyBase):
 
             from datetime import datetime
 
-            self._last_signal_at_str = datetime.now().strftime(
-                "%d.%m.%Y %H:%M:%S"
-            )
+            self._last_signal_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
             return int(direction)
 
     def update_params(self, **params):

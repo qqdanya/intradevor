@@ -6,7 +6,6 @@ from core.money import format_amount
 
 
 class OscarGrind1Strategy(OscarGrind2Strategy):
-
     def _next_stake(
         self,
         *,
@@ -39,4 +38,3 @@ class OscarGrind1Strategy(OscarGrind2Strategy):
                     f"Следующая ставка остаётся {format_amount(next_stake)}."
                 )
         return float(next_stake)
-

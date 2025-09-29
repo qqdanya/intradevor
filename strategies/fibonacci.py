@@ -34,7 +34,6 @@ def _fib(n: int) -> int:
 
 
 class FibonacciStrategy(MartingaleStrategy):
-
     def __init__(
         self,
         http_client: HttpClient,
@@ -70,7 +69,7 @@ class FibonacciStrategy(MartingaleStrategy):
         try:
             self._anchor_is_demo = await is_demo_account(self.http_client)
             mode_txt = "ДЕМО" if self._anchor_is_demo else "РЕАЛ"
-            log(f"[{self.symbol}] Якорный режим счёта: {mode_txt}")
+            log(f"[{self.symbol}] Режим счёта: {mode_txt}")
         except Exception as e:  # pragma: no cover - сеть
             log(f"[{self.symbol}] ⚠ Не удалось определить режим счёта при старте: {e}")
             self._anchor_is_demo = False
@@ -80,7 +79,7 @@ class FibonacciStrategy(MartingaleStrategy):
                 self.http_client, self.user_id, self.user_hash
             )
             log(
-                f"[{self.symbol}] Баланс: {display} ({format_amount(amount)}), текущая валюта: {cur_ccy}, якорь: {self._anchor_ccy}"
+                f"[{self.symbol}] Баланс: {display} ({format_amount(amount)}), текущая валюта: {cur_ccy}"
             )
         except Exception as e:  # pragma: no cover - сеть
             log(f"[{self.symbol}] ⚠ Не удалось получить баланс при старте: {e}")
@@ -132,9 +131,7 @@ class FibonacciStrategy(MartingaleStrategy):
             except Exception:  # pragma: no cover
                 bal = 0.0
 
-            min_balance = float(
-                self.params.get("min_balance", DEFAULTS["min_balance"])
-            )
+            min_balance = float(self.params.get("min_balance", DEFAULTS["min_balance"]))
             if bal < min_balance:
                 log(
                     f"[{self.symbol}] ⛔ Баланс ниже минимума ({format_amount(bal)} < {format_amount(min_balance)}). Ожидание..."
@@ -145,14 +142,10 @@ class FibonacciStrategy(MartingaleStrategy):
             base = float(
                 self.params.get("base_investment", DEFAULTS["base_investment"])
             )
-            max_steps = int(
-                self.params.get("max_steps", DEFAULTS["max_steps"])
-            )
+            max_steps = int(self.params.get("max_steps", DEFAULTS["max_steps"]))
             min_pct = int(self.params.get("min_percent", DEFAULTS["min_percent"]))
             wait_low = float(
-                self.params.get(
-                    "wait_on_low_percent", DEFAULTS["wait_on_low_percent"]
-                )
+                self.params.get("wait_on_low_percent", DEFAULTS["wait_on_low_percent"])
             )
             sig_timeout = float(
                 self.params.get("signal_timeout_sec", DEFAULTS["signal_timeout_sec"])
@@ -324,10 +317,7 @@ class FibonacciStrategy(MartingaleStrategy):
                 # определяем длительность сделки (для таймера и ожидания результата)
                 from datetime import datetime
 
-                if (
-                    self._trade_type == "classic"
-                    and self._next_expire_dt is not None
-                ):
+                if self._trade_type == "classic" and self._next_expire_dt is not None:
                     trade_seconds = max(
                         0.0,
                         (

@@ -27,6 +27,7 @@ from strategies.martingale import (
     ALL_SYMBOLS_LABEL,
     ALL_TF_LABEL,
 )
+
 CLASSIC_ALLOWED_TFS = {"M5", "M15", "M30", "H1", "H4"}
 
 
@@ -52,7 +53,6 @@ DEFAULTS = {
 
 
 class OscarGrind2Strategy(StrategyBase):
-
     def __init__(
         self,
         http_client: HttpClient,
@@ -146,7 +146,7 @@ class OscarGrind2Strategy(StrategyBase):
         try:
             self._anchor_is_demo = await is_demo_account(self.http_client)
             mode_txt = "ДЕМО" if self._anchor_is_demo else "РЕАЛ"
-            log(f"[{self.symbol}] Якорный режим счёта: {mode_txt}")
+            log(f"[{self.symbol}] Режим счёта: {mode_txt}")
         except Exception as e:
             log(f"[{self.symbol}] ⚠ Не удалось определить режим счёта при старте: {e}")
             self._anchor_is_demo = False
@@ -157,7 +157,7 @@ class OscarGrind2Strategy(StrategyBase):
                 self.http_client, self.user_id, self.user_hash
             )
             log(
-                f"[{self.symbol}] Баланс: {display} ({format_amount(amount)}), текущая валюта: {cur_ccy}, якорь: {self._anchor_ccy}"
+                f"[{self.symbol}] Баланс: {display} ({format_amount(amount)}), текущая валюта: {cur_ccy}"
             )
         except Exception as e:
             log(f"[{self.symbol}] ⚠ Не удалось получить баланс при старте: {e}")
@@ -398,10 +398,7 @@ class OscarGrind2Strategy(StrategyBase):
                 # определяем длительность сделки (для таймера и ожидания результата)
                 from datetime import datetime
 
-                if (
-                    self._trade_type == "classic"
-                    and self._next_expire_dt is not None
-                ):
+                if self._trade_type == "classic" and self._next_expire_dt is not None:
                     trade_seconds = max(
                         0.0,
                         (
@@ -678,9 +675,7 @@ class OscarGrind2Strategy(StrategyBase):
 
             from datetime import datetime
 
-            self._last_signal_at_str = datetime.now().strftime(
-                "%d.%m.%Y %H:%M:%S"
-            )
+            self._last_signal_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
             return int(direction)
 
     def update_params(self, **params):
@@ -728,4 +723,3 @@ class OscarGrind2Strategy(StrategyBase):
         if "trade_type" in params:
             self._trade_type = str(params["trade_type"]).lower()
             self.params["trade_type"] = self._trade_type
-

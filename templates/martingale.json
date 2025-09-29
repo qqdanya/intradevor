@@ -1,0 +1,50 @@
+[
+  {
+    "name": "Шаблон 1",
+    "params": {
+      "minutes": 1,
+      "base_investment": 200,
+      "max_steps": 5,
+      "repeat_count": 10,
+      "min_balance": 100,
+      "coefficient": 2.0,
+      "min_percent": 70
+    }
+  },
+  {
+    "name": "Шаблон 2",
+    "params": {
+      "minutes": 1,
+      "base_investment": 222,
+      "max_steps": 5,
+      "repeat_count": 10,
+      "min_balance": 100,
+      "coefficient": 2.0,
+      "min_percent": 70
+    }
+  },
+  {
+    "name": "Шаблон 3",
+    "params": {
+      "minutes": 1,
+      "base_investment": 300,
+      "max_steps": 5,
+      "repeat_count": 10,
+      "min_balance": 100,
+      "coefficient": 2.0,
+      "min_percent": 70
+    }
+  },
+  {
+    "name": "Шаблон 4",
+    "params": {
+      "base_investment": 250,
+      "max_steps": 5,
+      "repeat_count": 10,
+      "min_balance": 100,
+      "coefficient": 2.0,
+      "min_percent": 70,
+      "trade_type": "classic"
+    }
+  }
+]
