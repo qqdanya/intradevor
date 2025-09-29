@@ -24,8 +24,15 @@ def show_critical_error(text: str):
 # ---- cookies helpers ---------------------------------------------------------
 
 
-# путь к cookies.pkl всегда относительно корня проекта
-COOKIES_FILE = Path(__file__).resolve().parent.parent / "cookies.pkl"
+def _default_cookies_file() -> Path:
+    """Определить путь для cookies.pkl в зависимости от режима запуска."""
+    if getattr(sys, "frozen", False):  # PyInstaller onefile/onedir
+        return Path(sys.executable).resolve().parent / "cookies.pkl"
+    return Path(__file__).resolve().parent.parent / "cookies.pkl"
+
+
+# путь к cookies.pkl — рядом с exe в собранной версии, либо рядом с исходниками
+COOKIES_FILE = _default_cookies_file()
 
 
 def _cookies_for_domain(domain: str) -> Dict[str, str]:
@@ -115,6 +122,7 @@ def _cookies_via_chromedriver(login_url: str) -> Dict[str, str]:
 
 def save_cookies(cookies: Dict[str, str], path: Path = COOKIES_FILE) -> None:
     """Persist cookies to ``path``."""
+    path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("wb") as fh:
         pickle.dump(cookies, fh)
 
