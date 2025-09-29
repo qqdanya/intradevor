@@ -1,6 +1,7 @@
 # strategies/base.py
 from __future__ import annotations
 import asyncio
+import json
 from typing import Any, Awaitable, Optional
 
 
@@ -130,13 +131,19 @@ class StrategyBase:
 
     # --- live settings ---
     def update_params(self, **params):
+        if not params:
+            return
+
         self.params.update(params)
         if hasattr(self, "log") and self.log:
             pretty = {
                 k: (round(v, 8) if isinstance(v, float) else v)
                 for k, v in params.items()
             }
-            self.log(f"[{self.symbol}] ⚙ Параметры обновлены: {pretty}")
+            payload = json.dumps(
+                pretty, ensure_ascii=False, separators=(", ", ": "), sort_keys=True
+            )
+            self.log(f"[{self.symbol}] ⚙ Параметры обновлены: {payload}")
 
     def get_param(self, key, default=None):
         return self.params.get(key, default)
