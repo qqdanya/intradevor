@@ -239,7 +239,6 @@ class MainWindow(QWidget):
         self.bot_last_tick: dict[Bot, float] = {}
         self.bot_pause_buttons: dict[Bot, QPushButton] = {}
         self.bot_stop_buttons: dict[Bot, QPushButton] = {}
-        self._strategy_windows: dict[Bot, QWidget] = {}
 
         # Тикер для апдейта "Время работы"
         self._bots_timer = QTimer(self)
@@ -482,26 +481,8 @@ class MainWindow(QWidget):
     def open_strategy_control_dialog(self, bot):
         from gui.strategy_control_dialog import StrategyControlDialog
 
-        existing = self._strategy_windows.get(bot)
-        if existing:
-            try:
-                existing.showNormal()
-                existing.raise_()
-                existing.activateWindow()
-                return
-            except RuntimeError:
-                self._strategy_windows.pop(bot, None)
-
         dlg = StrategyControlDialog(self, bot, parent=self)
-
-        def _cleanup(*_):
-            self._strategy_windows.pop(bot, None)
-
-        dlg.destroyed.connect(_cleanup)
-        self._strategy_windows[bot] = dlg
-        dlg.show()
-        dlg.raise_()
-        dlg.activateWindow()
+        dlg.exec()
 
     def stop_bot(self, bot):
         bot.stop()
