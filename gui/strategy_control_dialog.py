@@ -356,9 +356,10 @@ class StrategyControlDialog(QWidget):
         self.timer.timeout.connect(self._refresh_status_and_buttons)
         self.timer.start()
 
-        # если у бота есть свои параметры — используем их
-        if self.bot.strategy_kwargs.get("params"):
-            self.apply_settings()
+        # если у бота есть свои параметры — заполняем поля, но не переобновляем их
+        existing_params = self.bot.strategy_kwargs.get("params")
+        if existing_params:
+            self._update_inputs_from_params(existing_params)
         else:
             # иначе грузим последний использованный шаблон
             last_name = load_last_template(self.strategy_key)
@@ -564,12 +565,7 @@ class StrategyControlDialog(QWidget):
             self.template_combo.setCurrentIndex(idx)
             save_last_template(self.strategy_key, name)
 
-    def apply_template(self):
-        idx = self.template_combo.currentIndex()
-        if idx < 0:
-            return
-        tmpl = self.templates[idx]
-        params = tmpl.get("params", {})
+    def _update_inputs_from_params(self, params: dict[str, object]) -> None:
         for k, v in params.items():
             if k == "trade_type":
                 self.trade_type.setCurrentText(str(v))
@@ -593,6 +589,14 @@ class StrategyControlDialog(QWidget):
                 self.min_percent.setValue(int(v))
             elif k == "double_entry" and hasattr(self, "double_entry"):
                 self.double_entry.setChecked(bool(v))
+
+    def apply_template(self):
+        idx = self.template_combo.currentIndex()
+        if idx < 0:
+            return
+        tmpl = self.templates[idx]
+        params = tmpl.get("params", {})
+        self._update_inputs_from_params(params)
         self.apply_settings()
         save_last_template(self.strategy_key, str(tmpl.get("name", "")))
 
