@@ -1,6 +1,5 @@
 # gui/strategy_control_dialog.py
 from PyQt6.QtWidgets import (
-    QDialog,
     QVBoxLayout,
     QHBoxLayout,
     QLabel,
@@ -36,7 +35,7 @@ from core.templates import (
 )
 
 
-class StrategyControlDialog(QDialog):
+class StrategyControlDialog(QWidget):
     """
     Единое окно: статус + пер-ботовый лог + ВСТРОЕННЫЕ НАСТРОЙКИ + управление
     + СПРАВА таблица сделок этого бота.
@@ -45,6 +44,8 @@ class StrategyControlDialog(QDialog):
     def __init__(self, main_window, bot, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Управление стратегией")
+        self.setWindowFlag(Qt.WindowType.WindowMinimizeButtonHint, True)
+        self.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint, True)
         self.main = main_window
         self.bot = bot
 
@@ -260,12 +261,7 @@ class StrategyControlDialog(QDialog):
                 self.coefficient.setSingleStep(0.1)
                 self.coefficient.setValue(float(getv("coefficient", 2.0)))
             else:
-                self.coefficient = None  # чтобы дальше не падало
-
-            self.coefficient = QDoubleSpinBox()
-            self.coefficient.setRange(1.0, 10.0)
-            self.coefficient.setSingleStep(0.1)
-            self.coefficient.setValue(float(getv("coefficient", 2.0)))
+                self.coefficient = None
             self.min_percent = QSpinBox()
             self.min_percent.setRange(0, 100)
             self.min_percent.setValue(int(getv("min_percent", 70)))
@@ -276,7 +272,8 @@ class StrategyControlDialog(QDialog):
             form.addRow("Макс. шагов", self.max_steps)
             form.addRow("Повторов серии", self.repeat_count)
             form.addRow("Мин. баланс", self.min_balance)
-            form.addRow("Коэффициент", self.coefficient)
+            if self.coefficient is not None:
+                form.addRow("Коэффициент", self.coefficient)
             form.addRow("Мин. процент", self.min_percent)
 
         def _update_minutes_enabled(text: str):
@@ -507,9 +504,10 @@ class StrategyControlDialog(QDialog):
                 "max_steps": self.max_steps.value(),
                 "repeat_count": self.repeat_count.value(),
                 "min_balance": self.min_balance.value(),
-                "coefficient": round(float(self.coefficient.value()), 2),
                 "min_percent": self.min_percent.value(),
             }
+            if getattr(self, "coefficient", None) is not None:
+                new_params["coefficient"] = round(float(self.coefficient.value()), 2)
             if trade_type != "classic" and self.minutes is not None:
                 new_params["minutes"] = int(norm)
         new_params["trade_type"] = trade_type
@@ -585,7 +583,11 @@ class StrategyControlDialog(QDialog):
                 self.repeat_count.setValue(int(v))
             elif k == "min_balance" and hasattr(self, "min_balance"):
                 self.min_balance.setValue(int(v))
-            elif k == "coefficient" and hasattr(self, "coefficient"):
+            elif (
+                k == "coefficient"
+                and hasattr(self, "coefficient")
+                and self.coefficient is not None
+            ):
                 self.coefficient.setValue(float(v))
             elif k == "min_percent" and hasattr(self, "min_percent"):
                 self.min_percent.setValue(int(v))
