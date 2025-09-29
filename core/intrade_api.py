@@ -1,13 +1,29 @@
 import asyncio
 import re
+
 from bs4 import BeautifulSoup
+
 from core import config
+from core.money import format_amount
 from core.policy import (
     DEFAULT_ACCOUNT_CCY,
     clamp_stake,
     normalize_sprint,
 )
-from core.money import format_amount
+
+_SPACE_RE = re.compile(r"\s+")
+_NUMERIC_RE = re.compile(r"[^0-9,\.\-]")
+
+_CURRENCY_DEFINITIONS = {
+    "RUB": {
+        "symbols": ("₽",),
+        "keywords": ("руб", "rub", "rur"),
+    },
+    "USD": {
+        "symbols": ("$",),
+        "keywords": ("usd", "дол", "dollar"),
+    },
+}
 
 BALANCE_URL = f"{config.base_url}/balance.php"
 TRADE_URL = f"{config.base_url}/ajax5_new.php"
@@ -34,57 +50,69 @@ def set_risk(session, user_id, user_hash, risk_min, risk_max):
     return r.ok
 
 
+def _normalise_whitespace(text: str) -> str:
+    cleaned = (
+        text.replace("\xa0", " ")
+        .replace("\u202f", " ")
+        .replace("\u2212", "-")
+    )
+    return _SPACE_RE.sub(" ", cleaned).strip()
+
+
+def _detect_currency(raw: str, lower: str) -> tuple[str | None, str]:
+    for code, meta in _CURRENCY_DEFINITIONS.items():
+        symbols = meta["symbols"]
+        keywords = meta["keywords"]
+        if any(sym and sym in raw for sym in symbols):
+            return code, symbols[0]
+        if any(keyword in lower for keyword in keywords):
+            return code, symbols[0]
+    return None, ""
+
+
+def _normalise_numeric(raw: str) -> str:
+    compact = raw.replace(" ", "")
+    numeric = _NUMERIC_RE.sub("", compact)
+    if not numeric:
+        return "0"
+
+    has_comma = "," in numeric
+    has_dot = "." in numeric
+
+    if has_comma and not has_dot:
+        return numeric.replace(",", ".")
+    if has_comma and has_dot:
+        last_comma = numeric.rfind(",")
+        last_dot = numeric.rfind(".")
+        if last_comma > last_dot:
+            # comma is decimal separator -> remove dots (thousands)
+            return numeric.replace(".", "").replace(",", ".")
+        return numeric.replace(",", "")
+    return numeric
+
+
+def _format_display(amount: float, symbol: str) -> str:
+    display_amount = f"{amount:,.2f}".replace(",", " ")
+    return f"{display_amount} {symbol}".rstrip() if symbol else display_amount
+
+
 def _parse_balance_text(text: str):
     """
     Возвращает (amount: float, currency: str|None, display: str)
     Пример входа: "12 345,67 ₽" или "$1234.56" или "12 345.67 руб."
     """
-    raw = (text or "").strip()
-    # Однотипные пробелы
-    raw_norm = re.sub(r"\s+", " ", raw)
 
-    # Определяем валюту
+    raw_norm = _normalise_whitespace(text or "")
     lower = raw_norm.lower()
-    currency = None
-    symbol = ""
-    if "₽" in raw_norm or "руб" in lower or "rub" in lower:
-        currency = "RUB"
-        symbol = "₽"
-    elif "$" in raw_norm or "usd" in lower or "дол" in lower:
-        currency = "USD"
-        symbol = "$"
+    currency, symbol = _detect_currency(raw_norm, lower)
 
-    # Достаём числовую часть (оставляем цифры и , . -)
-    # Сначала уберём пробелы/nbsp, чтобы не мешали
-    compact = raw_norm.replace("\xa0", " ").replace(" ", "")
-    numeric = re.sub(r"[^0-9,.\-]", "", compact)
-
-    # Приводим к стандартному float:
-    # - если есть только запятая -> считаем её десятичной
-    # - если есть и точка и запятая -> считаем, что последний из них — десятичный,
-    #   второй — разделитель тысяч (убираем)
-    num_std = numeric
-    if "," in numeric and "." not in numeric:
-        num_std = numeric.replace(",", ".")
-    elif "," in numeric and "." in numeric:
-        last_comma = numeric.rfind(",")
-        last_dot = numeric.rfind(".")
-        if last_comma > last_dot:
-            # десятичная запятая
-            num_std = numeric.replace(".", "").replace(",", ".")
-        else:
-            # десятичная точка
-            num_std = numeric.replace(",", "")
-
+    numeric = _normalise_numeric(raw_norm)
     try:
-        amount = float(num_std)
-    except Exception:
+        amount = float(numeric)
+    except ValueError:
         amount = 0.0
 
-    # Красивое строковое представление: пробелы как разделитель тысяч + 2 знака
-    display_amount = f"{amount:,.2f}".replace(",", " ")
-    display = f"{display_amount} {symbol}".rstrip() if symbol else display_amount
-
+    display = _format_display(amount, symbol)
     return amount, currency, display
 
 
@@ -138,7 +166,9 @@ def get_current_percent(
     Получить текущий процент под заданную ставку/время/символ.
     minutes/ccy необязательны — оставлены для совместимости.
     """
-    t = "Classic" if str(trade_type).lower() == "classic" else "sprint"
+    trade_type_str = str(trade_type).strip()
+    trade_type_lower = trade_type_str.lower()
+    t = "Classic" if trade_type_lower == "classic" else "sprint"
     payload = {
         "type": t,
         "currency_name": account_ccy,  # раньше было жестко "RUB"
@@ -146,7 +176,7 @@ def get_current_percent(
         "percent": "",
         "option": option,
     }
-    if str(trade_type).lower() != "classic":
+    if trade_type_lower != "classic":
         payload["time"] = str(int(minutes))
     r = session.post(PERCENT_URL, data=payload)
     try:
@@ -175,7 +205,10 @@ def place_trade(
     strict=False -> ставка будет поджата к лимитам, но недопустимое время спринта всё равно запрещаем.
     """
 
-    if str(trade_type).lower() == "classic":
+    trade_type_str = str(trade_type).strip()
+    trade_type_lower = trade_type_str.lower()
+
+    if trade_type_lower == "classic":
         time_value = str(minutes)
     else:
         # ---- Валидация времени спринта
@@ -231,7 +264,7 @@ def place_trade(
         "investment": investment,
         "time": time_value,
         "date": date,
-        "trade_type": str(trade_type),
+        "trade_type": trade_type_str,
         "status": str(status),
     }
     r = session.post(TRADE_URL, data=payload)
