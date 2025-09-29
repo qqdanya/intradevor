@@ -147,6 +147,7 @@ class MainWindow(QWidget):
         self.bot_trade_history = defaultdict(list)
         self.bot_pending_trades = defaultdict(set)
         self.bot_last_phase: dict[Bot, str] = {}
+        self.strategy_windows: dict[Bot, "StrategyControlDialog"] = {}
 
         self.user_id_label = QLabel("user_id: loading...")
         self.user_hash_label = QLabel("user_hash: loading...")
@@ -481,8 +482,22 @@ class MainWindow(QWidget):
     def open_strategy_control_dialog(self, bot):
         from gui.strategy_control_dialog import StrategyControlDialog
 
-        dlg = StrategyControlDialog(self, bot, parent=self)
-        dlg.exec()
+        existing = self.strategy_windows.get(bot)
+        if existing is not None:
+            existing.showNormal()
+            existing.raise_()
+            existing.activateWindow()
+            return
+
+        dlg = StrategyControlDialog(self, bot)
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        self.strategy_windows[bot] = dlg
+
+        def _cleanup(*_):
+            self.strategy_windows.pop(bot, None)
+
+        dlg.destroyed.connect(_cleanup)
+        dlg.show()
 
     def stop_bot(self, bot):
         bot.stop()
