@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from typing import Any, Callable, Optional, Type
 
 
@@ -46,43 +47,28 @@ class Bot:
         try:
             await self._strategy.run()
         except asyncio.CancelledError:
-            try:
-                self._strategy.stop()
-            except Exception:
-                pass
+            self._call_strategy_method("stop")
             raise
         finally:
             # аккуратно закрываем per-bot HttpClient, если он есть
-            try:
-                client = getattr(self._strategy, "http_client", None)
-                if client is not None:
-                    close_coro = getattr(client, "aclose", None) or getattr(
-                        client, "close", None
-                    )
-                    if callable(close_coro):
-                        await close_coro()
-            except Exception:
-                pass
+            await self._close_http_client()
 
             self._started = False
             self.on_finish()
 
     def stop(self) -> None:
         """Остановить стратегию и отменить асинхронную задачу."""
-        if self._strategy:
-            self._strategy.stop()
+        self._call_strategy_method("stop")
         if self._task and not self._task.done():
             self._task.cancel()
 
     def pause(self) -> None:
         """Поставить стратегию на паузу, если она поддерживает паузу."""
-        if self._strategy:
-            self._strategy.pause()
+        self._call_strategy_method("pause")
 
     def resume(self) -> None:
         """Возобновить стратегию после паузы."""
-        if self._strategy:
-            self._strategy.resume()
+        self._call_strategy_method("resume")
 
     def is_running(self) -> bool:
         """Проверить, выполняется ли задача стратегии."""
@@ -96,3 +82,36 @@ class Bot:
     def strategy(self) -> Optional[Any]:
         """Возвращает инстанс стратегии (если запущен)."""
         return self._strategy
+
+    def _call_strategy_method(self, name: str) -> None:
+        """Вызвать метод стратегии, если он существует и вызываем."""
+        if not self._strategy:
+            return
+        method = getattr(self._strategy, name, None)
+        if callable(method):
+            try:
+                method()
+            except Exception:
+                pass
+
+    async def _close_http_client(self) -> None:
+        """Закрыть HttpClient стратегии, если он задан."""
+        if not self._strategy:
+            return
+        client = getattr(self._strategy, "http_client", None)
+        if client is None:
+            return
+
+        close_callable = getattr(client, "aclose", None)
+        if close_callable is None:
+            close_callable = getattr(client, "close", None)
+
+        if not callable(close_callable):
+            return
+
+        try:
+            result = close_callable()
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            pass
