@@ -292,6 +292,14 @@ class OscarGrind2Strategy(StrategyBase):
                             f"[{self.symbol}] ℹ Низкий payout {pct}% < {min_pct}% — ждём..."
                         )
                         self._low_payout_notified = True
+                    if self._trade_type == "classic" and series_direction is not None:
+                        if self.log:
+                            self.log(
+                                f"[{self.symbol}] ⏸ Classic: сбрасываю направление из-за длительного ожидания payout."
+                            )
+                        series_direction = None
+                        self._next_expire_dt = None
+                        self._last_signal_at_str = None
                     await self.sleep(wait_low)
                     continue
                 if self._low_payout_notified:
