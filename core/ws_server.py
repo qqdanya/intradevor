@@ -5,24 +5,17 @@ from datetime import datetime
 
 HOST = "0.0.0.0"
 PORT = 8080
-
 connected = set()
 
-DIRECTIONS = {
-    0: "none",
-    1: "up",
-    2: "down",
-    3: "both",
-}
+DIRECTIONS = {0: "none", 1: "up", 2: "down", 3: "both"}
 
 
-def log(message: str) -> None:
-    """Печать с текущей датой и временем."""
-    now = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-    print(f"[{now}] {message}")
+def log(msg: str) -> None:
+    """Печатает сообщение с меткой времени."""
+    print(f"[{datetime.now().strftime('%d.%m.%Y %H:%M:%S')}] {msg}")
 
 
-def parse_time(s: str):
+def parse_iso(s: str):
     """Безопасный парсер ISO-времени."""
     try:
         return datetime.fromisoformat(s)
@@ -31,16 +24,9 @@ def parse_time(s: str):
 
 
 async def handle(ws):
-    # Очистим старые мертвые соединения (без использования .closed)
-    for c in list(connected):
-        try:
-            if not c.open:
-                connected.discard(c)
-        except Exception:
-            connected.discard(c)
-
-    connected.add(ws)
+    """Обрабатывает подключение одного клиента."""
     ip, port = ws.remote_address
+    connected.add(ws)
     log(f"[+] Клиент подключился: {ip}:{port}")
 
     try:
@@ -48,46 +34,53 @@ async def handle(ws):
             try:
                 data = json.loads(raw)
             except Exception as e:
-                log(f"[!] Ошибка JSON: {e} | raw={raw}")
+                log(f"[!] Ошибка JSON: {e} | raw={raw[:100]}")
                 continue
 
-            # === HELLO от эксперта ===
+            # === HELLO ===
             if data.get("type") == "hello":
                 acc = data.get("account", "?")
                 log(f"[HELLO] account={acc}")
                 await ws.send('{"type":"pong"}')
                 continue
 
-            # === Ответ на пинг от эксперта ===
+            # === PING ===
             if data.get("type") == "ping":
                 await ws.send('{"type":"pong"}')
+                log(f"[PONG→] {ip}:{port} (ответ на ping)")
                 continue
 
-            # === Сигнал от эксперта ===
+            # === SIGNAL ===
             if "symbol" in data and "direction" in data:
                 sym = data.get("symbol", "N/A")
                 tf = data.get("timeframe", "N/A")
                 ind = data.get("indicator", "N/A")
-                dir_code = data.get("direction", 0)
+                dir_code = int(data.get("direction", 0))
                 direction = DIRECTIONS.get(dir_code, f"unk({dir_code})")
 
-                log(f"[SIGNAL] {sym} {tf} → {direction} | ind={ind}")
+                # задержка
+                bar_time = parse_iso(data.get("datetime"))
+                detect_time = parse_iso(data.get("detected_time"))
+                delay = None
+                if bar_time and detect_time:
+                    delay = (detect_time - bar_time).total_seconds()
 
-            # === Рассылаем сигнал всем остальным клиентам ===
-            for c in list(connected):
-                if c is ws:
-                    continue
-                try:
-                    await asyncio.wait_for(c.send(raw), timeout=1.0)
-                except Exception as e:
-                    log(f"[!] Ошибка отправки клиенту {c.remote_address}: {e}")
-                    connected.discard(c)
+                delay_str = f" | задержка={delay:.1f}с" if delay else ""
+                log(f"[SIGNAL] {sym} {tf} → {direction} | ind={ind}{delay_str}")
+
+                # Рассылка другим клиентам
+                for c in list(connected):
+                    if c is ws:
+                        continue
+                    try:
+                        await asyncio.wait_for(c.send(raw), timeout=1.0)
+                    except Exception:
+                        connected.discard(c)
 
     except websockets.exceptions.ConnectionClosed as e:
-        ip, port = ws.remote_address
-        log(f"[-] Клиент отключился: {ip}:{port} | code={e.code} reason={e.reason}")
+        log(f"[-] Клиент отключился: {ip}:{port} | code={e.code} reason={e.reason or ''}")
     except Exception as e:
-        log(f"[!] Ошибка в обработчике: {type(e).__name__} — {e}")
+        log(f"[!] Ошибка в обработчике ({ip}:{port}): {type(e).__name__} — {e}")
     finally:
         connected.discard(ws)
         log(f"[i] Клиент отключен ({ip}:{port})")
@@ -95,33 +88,32 @@ async def handle(ws):
 
 async def main():
     log(f"WebSocket-сервер запущен на ws://{HOST}:{PORT}")
-    try:
-        async with websockets.serve(
-            handle,
-            HOST,
-            PORT,
-            compression=None,    # отключаем permessage-deflate
-            ping_interval=None,  # MT4 сам шлёт heartbeats
-            ping_timeout=None,
-        ):
-            await asyncio.Future()  # сервер работает вечно
-    except OSError as e:
-        # Порт занят
-        if e.errno == 10048:
-            alt_port = PORT + 1
-            log(f"[!] Порт {PORT} занят, пробуем ws://{HOST}:{alt_port}")
-            async with websockets.serve(
-                handle,
-                HOST,
-                alt_port,
-                compression=None,
-                ping_interval=None,
-                ping_timeout=None,
-            ):
-                await asyncio.Future()
-        else:
-            raise
+
+    async with websockets.serve(
+        handle,
+        HOST,
+        PORT,
+        compression=None,
+        ping_interval=None,  # отключаем авто-ping
+        ping_timeout=None,
+        max_size=2**20,
+    ):
+        # держим сервер активным и чистим старые подключения
+        while True:
+            for c in list(connected):
+                # Новая проверка для websockets 13+
+                if c.state.name != "OPEN":
+                    connected.discard(c)
+            await asyncio.sleep(5)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except OSError as e:
+        if e.errno == 10048:
+            alt = PORT + 1
+            log(f"[!] Порт {PORT} занят, пробуем ws://{HOST}:{alt}")
+            asyncio.run(websockets.serve(handle, HOST, alt))
+        else:
+            raise
