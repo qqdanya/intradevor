@@ -1,0 +1,10 @@
+pyqt6
+requests
+beautifulsoup4
+browser-cookie3
+selenium
+websockets
+qasync
+tzdata
+aiohttp
+pyqtdarktheme

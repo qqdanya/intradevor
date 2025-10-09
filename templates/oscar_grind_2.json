@@ -1,0 +1,14 @@
+[
+  {
+    "name": "Шаблон 1",
+    "params": {
+      "base_investment": 100,
+      "max_steps": 20,
+      "repeat_count": 10,
+      "min_balance": 100,
+      "min_percent": 70,
+      "double_entry": true,
+      "trade_type": "classic"
+    }
+  }
+]
