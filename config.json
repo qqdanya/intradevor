@@ -1,0 +1,9 @@
+{
+    "app_name": "Intradevor",
+    "app_version": "1.0.0",
+    "domain": "intrade27.bar",
+    "ws_url": "ws://192.168.56.101:8080",
+    "font_family": null,
+    "font_size": null,
+    "theme": "system"
+}

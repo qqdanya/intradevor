@@ -461,7 +461,7 @@ class MainWindow(QWidget):
             btn_stop = QPushButton("⏹", self)
             btn_stop.setEnabled(False)
             btn_stop.clicked.connect(partial(self.stop_bot, bot))
-            btn_del = QPushButton("✖", self)
+            btn_del = QPushButton("❌", self)
             btn_del.clicked.connect(partial(self.delete_bot, bot))
             hl.addWidget(btn_pause)
             hl.addWidget(btn_stop)

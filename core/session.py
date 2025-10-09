@@ -38,12 +38,17 @@ COOKIES_FILE = _default_cookies_file()
 def _cookies_for_domain(domain: str) -> Dict[str, str]:
     """
     Безопасно собираем (name -> value) из поддерживаемых браузеров,
-    НЕ вызывая browser_cookie3.load() (который пытается дергать все, включая Arc и т.п.).
+    перебирая все профили (Default, Profile 1, Profile 2, ...).
+    Избегаем browser_cookie3.load(), чтобы не дергать ненужные браузеры (Arc и т.п.).
     """
+    import os
+    import sys
     import browser_cookie3 as bc3
+    from pathlib import Path
 
     cookies: Dict[str, str] = {}
 
+    # список браузеров и их загрузчиков
     loaders = [
         ("chrome", bc3.chrome),
         ("chromium", bc3.chromium),
@@ -54,18 +59,62 @@ def _cookies_for_domain(domain: str) -> Dict[str, str]:
         ("firefox", bc3.firefox),
     ]
 
-    for name, loader in loaders:
-        try:
-            jar = loader(domain_name=domain)  # таргетировано по домену
-        except Exception:
-            # тихо игнорируем браузеры, где нет профиля/ключей/путей и т.д.
-            continue
+    # стандартные подпапки профилей для chromium-браузеров
+    common_profiles = ["Default", "Profile 1", "Profile 2", "Profile 3"]
 
-        # объединяем куки из этого браузера
-        for c in jar:
-            c_dom = getattr(c, "domain", "") or ""
-            if domain in c_dom:
-                cookies[c.name] = c.value
+    # возможные базовые каталоги профилей для Windows и Linux
+    possible_paths = [
+        Path(os.getenv("LOCALAPPDATA", "")) / "Google/Chrome/User Data",
+        Path(os.getenv("LOCALAPPDATA", "")) / "Microsoft/Edge/User Data",
+        Path(os.getenv("LOCALAPPDATA", "")) / "BraveSoftware/Brave-Browser/User Data",
+        Path(os.getenv("LOCALAPPDATA", "")) / "Vivaldi/User Data",
+        Path(os.getenv("LOCALAPPDATA", "")) / "Opera Software/Opera Stable",
+        Path.home() / ".config/google-chrome",
+        Path.home() / ".config/chromium",
+        Path.home() / ".config/BraveSoftware/Brave-Browser",
+        Path.home() / ".config/vivaldi",
+        Path.home() / ".config/opera",
+    ]
+
+    for name, loader in loaders:
+        found_any = False
+        # Сначала пробуем стандартный вызов без указания профиля
+        try:
+            jar = loader(domain_name=domain)
+            if jar:
+                found_any = True
+                for c in jar:
+                    if domain in (getattr(c, "domain", "") or ""):
+                        cookies[c.name] = c.value
+        except Exception:
+            pass
+
+        # Далее перебор профилей, если это chromium-подобный браузер
+        if name in ["chrome", "chromium", "brave", "vivaldi", "edge", "opera"]:
+            for base_path in possible_paths:
+                if not base_path.exists():
+                    continue
+                for profile_dir in base_path.iterdir():
+                    if not profile_dir.is_dir():
+                        continue
+                    if (
+                        profile_dir.name not in common_profiles
+                        and not profile_dir.name.startswith("Profile")
+                    ):
+                        continue
+                    try:
+                        jar = loader(domain_name=domain, profile=profile_dir.name)
+                        if jar:
+                            found_any = True
+                            for c in jar:
+                                if domain in (getattr(c, "domain", "") or ""):
+                                    cookies[c.name] = c.value
+                    except Exception:
+                        continue
+
+        if found_any and cookies:
+            # если уже нашли куки, можно не продолжать остальные браузеры
+            break
 
     return cookies
 
