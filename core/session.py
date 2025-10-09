@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import pickle
+import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, Tuple
@@ -37,85 +38,41 @@ COOKIES_FILE = _default_cookies_file()
 
 def _cookies_for_domain(domain: str) -> Dict[str, str]:
     """
-    Безопасно собираем (name -> value) из поддерживаемых браузеров,
-    перебирая все профили (Default, Profile 1, Profile 2, ...).
-    Избегаем browser_cookie3.load(), чтобы не дергать ненужные браузеры (Arc и т.п.).
+    Извлекает куки. Если программа запущена как PyInstaller exe (Windows),
+    то вызывает внешний скрипт extract_cookies.py.
     """
-    import os
-    import sys
-    import browser_cookie3 as bc3
     from pathlib import Path
+    import pickle
 
-    cookies: Dict[str, str] = {}
+    # путь к cookies.pkl (тот же, что у тебя уже используется)
+    path = COOKIES_FILE
 
-    # список браузеров и их загрузчиков
-    loaders = [
-        ("chrome", bc3.chrome),
-        ("chromium", bc3.chromium),
-        ("brave", bc3.brave),
-        ("vivaldi", bc3.vivaldi),
-        ("edge", bc3.edge),
-        ("opera", bc3.opera),
-        ("firefox", bc3.firefox),
-    ]
-
-    # стандартные подпапки профилей для chromium-браузеров
-    common_profiles = ["Default", "Profile 1", "Profile 2", "Profile 3"]
-
-    # возможные базовые каталоги профилей для Windows и Linux
-    possible_paths = [
-        Path(os.getenv("LOCALAPPDATA", "")) / "Google/Chrome/User Data",
-        Path(os.getenv("LOCALAPPDATA", "")) / "Microsoft/Edge/User Data",
-        Path(os.getenv("LOCALAPPDATA", "")) / "BraveSoftware/Brave-Browser/User Data",
-        Path(os.getenv("LOCALAPPDATA", "")) / "Vivaldi/User Data",
-        Path(os.getenv("LOCALAPPDATA", "")) / "Opera Software/Opera Stable",
-        Path.home() / ".config/google-chrome",
-        Path.home() / ".config/chromium",
-        Path.home() / ".config/BraveSoftware/Brave-Browser",
-        Path.home() / ".config/vivaldi",
-        Path.home() / ".config/opera",
-    ]
-
-    for name, loader in loaders:
-        found_any = False
-        # Сначала пробуем стандартный вызов без указания профиля
+    # если запущено из PyInstaller exe — использовать внешний скрипт
+    if getattr(sys, "frozen", False) and sys.platform == "win32":
         try:
-            jar = loader(domain_name=domain)
-            if jar:
-                found_any = True
-                for c in jar:
-                    if domain in (getattr(c, "domain", "") or ""):
-                        cookies[c.name] = c.value
-        except Exception:
-            pass
+            script_path = Path(sys.executable).resolve().parent / "extract_cookies.py"
+            if not script_path.exists():
+                print(f"[WARN] extract_cookies.py not found at {script_path}")
+                return {}
+            print(f"[INFO] Running external extractor: {script_path}")
+            subprocess.run(["python", str(script_path), domain], check=True)
+            if path.exists():
+                print("[INFO] External extractor created cookies.pkl")
+                return pickle.load(open(path, "rb"))
+        except Exception as e:
+            print(f"[ERROR] External cookie extraction failed: {e}")
+            return {}
 
-        # Далее перебор профилей, если это chromium-подобный браузер
-        if name in ["chrome", "chromium", "brave", "vivaldi", "edge", "opera"]:
-            for base_path in possible_paths:
-                if not base_path.exists():
-                    continue
-                for profile_dir in base_path.iterdir():
-                    if not profile_dir.is_dir():
-                        continue
-                    if (
-                        profile_dir.name not in common_profiles
-                        and not profile_dir.name.startswith("Profile")
-                    ):
-                        continue
-                    try:
-                        jar = loader(domain_name=domain, profile=profile_dir.name)
-                        if jar:
-                            found_any = True
-                            for c in jar:
-                                if domain in (getattr(c, "domain", "") or ""):
-                                    cookies[c.name] = c.value
-                    except Exception:
-                        continue
-
-        if found_any and cookies:
-            # если уже нашли куки, можно не продолжать остальные браузеры
-            break
-
+    # иначе — обычное поведение (в разработке на Linux / Python)
+    import browser_cookie3 as bc3
+    cookies: Dict[str, str] = {}
+    try:
+        jar = bc3.chrome(domain_name=domain)
+        for c in jar:
+            if domain in (getattr(c, "domain", "") or ""):
+                cookies[c.name] = c.value
+    except Exception as e:
+        print(f"[WARN] browser_cookie3 failed: {e}")
     return cookies
 
 
