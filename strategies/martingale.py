@@ -20,6 +20,9 @@ from core.policy import normalize_sprint
 
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
+CLASSIC_SIGNAL_MAX_AGE_SEC = 120.0
+SPRINT_SIGNAL_MAX_AGE_SEC = 5.0
+
 ALL_SYMBOLS_LABEL = "Все валютные пары"
 ALL_TF_LABEL = "Все таймфреймы"
 CLASSIC_ALLOWED_TFS = {"M5", "M15", "M30", "H1", "H4"}
@@ -136,6 +139,7 @@ class MartingaleStrategy(StrategyBase):
             None  # <=== НОВОЕ: время прихода сигнала
         )
         self._next_expire_dt = None
+        self._last_signal_monotonic: Optional[float] = None
 
         anchor = str(
             self.params.get("account_currency", DEFAULTS["account_currency"])
@@ -192,6 +196,7 @@ class MartingaleStrategy(StrategyBase):
 
         while self._running and series_left > 0:
             self._last_signal_at_str = None
+            self._last_signal_monotonic = None
             await self._pause_point()
 
             if self._use_any_symbol:
@@ -252,6 +257,19 @@ class MartingaleStrategy(StrategyBase):
                     continue
                 if not await self._ensure_anchor_account_mode():
                     continue
+
+                max_age = self._max_signal_age_seconds()
+                if max_age > 0 and self._last_signal_monotonic is not None:
+                    age = asyncio.get_running_loop().time() - self._last_signal_monotonic
+                    if age > max_age:
+                        log(
+                            f"[{self.symbol}] ⚠ Сигнал устарел ({age:.1f}s > {max_age:.0f}s). Ждём новый."
+                        )
+                        self._status("ожидание сигнала")
+                        self._last_signal_monotonic = None
+                        series_direction = None
+                        await self.sleep(0.1)
+                        continue
 
                 if series_direction is None and self.symbol == "*":
                     self._status("ожидание сигнала")
@@ -565,7 +583,7 @@ class MartingaleStrategy(StrategyBase):
                 grace_delay_sec=grace,
                 on_delay=_on_delay,
                 include_meta=True,
-                max_age_sec=(120.0 if self._trade_type == "classic" else 0.0),
+                max_age_sec=self._max_signal_age_seconds(),
             )
 
             direction, ver, meta = await self.wait_cancellable(coro, timeout=timeout)
@@ -603,6 +621,10 @@ class MartingaleStrategy(StrategyBase):
             from datetime import datetime
 
             self._last_signal_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+            try:
+                self._last_signal_monotonic = asyncio.get_running_loop().time()
+            except RuntimeError:
+                self._last_signal_monotonic = None
             return int(direction)
 
     def update_params(self, **params):
@@ -650,3 +672,10 @@ class MartingaleStrategy(StrategyBase):
         if "trade_type" in params:
             self._trade_type = str(params["trade_type"]).lower()
             self.params["trade_type"] = self._trade_type
+
+    def _max_signal_age_seconds(self) -> float:
+        if self._trade_type == "classic":
+            return CLASSIC_SIGNAL_MAX_AGE_SEC
+        if self._trade_type == "sprint":
+            return SPRINT_SIGNAL_MAX_AGE_SEC
+        return 0.0
