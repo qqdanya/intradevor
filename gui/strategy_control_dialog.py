@@ -167,8 +167,8 @@ class StrategyControlDialog(QWidget):
         th.addWidget(self.btn_apply_template)
         box_v.addWidget(template_row)
 
-        self.parallel_trades = QCheckBox("Искать новые сигналы во время ожидания")
-        self.parallel_trades.setChecked(bool(getv("allow_parallel_trades", False)))
+        self.parallel_trades = QCheckBox("Обрабатывать множество сигналов")
+        self.parallel_trades.setChecked(bool(getv("allow_parallel_trades", True)))
 
         if strategy_key in ("oscar_grind_1", "oscar_grind_2"):
             self.minutes = QSpinBox()
