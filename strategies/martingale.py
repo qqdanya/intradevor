@@ -40,6 +40,7 @@ DEFAULTS = {
     "result_wait_s": 60.0,
     "grace_delay_sec": 30.0,
     "trade_type": "classic",
+    "allow_parallel_trades": True,
 }
 
 
@@ -140,6 +141,11 @@ class MartingaleStrategy(StrategyBase):
         )
         self._next_expire_dt = None
         self._last_signal_monotonic: Optional[float] = None
+
+        self._allow_parallel_trades = bool(
+            self.params.get("allow_parallel_trades", True)
+        )
+        self.params["allow_parallel_trades"] = self._allow_parallel_trades
 
         anchor = str(
             self.params.get("account_currency", DEFAULTS["account_currency"])
@@ -672,6 +678,10 @@ class MartingaleStrategy(StrategyBase):
         if "trade_type" in params:
             self._trade_type = str(params["trade_type"]).lower()
             self.params["trade_type"] = self._trade_type
+
+        if "allow_parallel_trades" in params:
+            self._allow_parallel_trades = bool(params["allow_parallel_trades"])
+            self.params["allow_parallel_trades"] = self._allow_parallel_trades
 
     def _max_signal_age_seconds(self) -> float:
         if self._trade_type == "classic":
