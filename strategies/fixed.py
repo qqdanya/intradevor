@@ -38,7 +38,7 @@ DEFAULTS = {
     "result_wait_s": 60.0,
     "grace_delay_sec": 30.0,
     "trade_type": "classic",
-    "allow_parallel_trades": False,
+    "allow_parallel_trades": True,
 }
 
 
@@ -122,7 +122,7 @@ class FixedStakeStrategy(StrategyBase):
         self._on_status = self.params.get("on_status")
 
         self._allow_parallel_trades = bool(
-            self.params.get("allow_parallel_trades", False)
+            self.params.get("allow_parallel_trades", True)
         )
         self.params["allow_parallel_trades"] = self._allow_parallel_trades
 
