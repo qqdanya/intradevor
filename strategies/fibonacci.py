@@ -336,12 +336,14 @@ class FibonacciStrategy(MartingaleStrategy):
                     wait_seconds = float(wait_seconds)
 
                 placed_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+                trade_symbol = self.symbol
+                trade_timeframe = self.timeframe
                 if callable(self._on_trade_pending):
                     try:
                         self._on_trade_pending(
                             trade_id=trade_id,
-                            symbol=self.symbol,
-                            timeframe=self.timeframe,
+                            symbol=trade_symbol,
+                            timeframe=trade_timeframe,
                             signal_at=self._last_signal_at_str,
                             placed_at=placed_at_str,
                             direction=status,
@@ -355,33 +357,30 @@ class FibonacciStrategy(MartingaleStrategy):
                     except Exception:
                         pass
 
-                self._status("ожидание результата")
+                self._register_pending_trade(trade_id, trade_symbol, trade_timeframe)
 
-                profit = await check_trade_result(
-                    self.http_client,
-                    user_id=self.user_id,
-                    user_hash=self.user_hash,
+                ctx = dict(
                     trade_id=trade_id,
-                    wait_time=wait_seconds,
+                    wait_seconds=float(wait_seconds),
+                    placed_at=placed_at_str,
+                    signal_at=self._last_signal_at_str,
+                    symbol=trade_symbol,
+                    timeframe=trade_timeframe,
+                    direction=status,
+                    stake=float(stake),
+                    percent=int(pct),
+                    account_mode=account_mode,
+                    indicator=self._last_indicator,
                 )
 
-                if callable(self._on_trade_result):
-                    try:
-                        self._on_trade_result(
-                            trade_id=trade_id,
-                            symbol=self.symbol,
-                            timeframe=self.timeframe,
-                            signal_at=self._last_signal_at_str,
-                            placed_at=placed_at_str,
-                            direction=status,
-                            stake=float(stake),
-                            percent=int(pct),
-                            profit=(None if profit is None else float(profit)),
-                            account_mode=account_mode,
-                            indicator=self._last_indicator,
-                        )
-                    except Exception:
-                        pass
+                if self._allow_parallel_trades:
+                    task = asyncio.create_task(
+                        self._wait_for_trade_result(**ctx)
+                    )
+                    self._launch_trade_result_task(task)
+                    profit = await task
+                else:
+                    profit = await self._wait_for_trade_result(**ctx)
 
                 if profit is None:
                     log(f"[{self.symbol}] ⚠ Результат неизвестен — считаем как LOSS.")
@@ -422,4 +421,9 @@ class FibonacciStrategy(MartingaleStrategy):
                 log(f"[{self.symbol}] ▶ Осталось серий: {series_left}")
 
         self._running = False
+
+        if self._pending_tasks:
+            await asyncio.gather(*list(self._pending_tasks), return_exceptions=True)
+            self._pending_tasks.clear()
+
         (self.log or (lambda s: None))(f"[{self.symbol}] Завершение стратегии.")
