@@ -681,11 +681,22 @@ class FixedStakeStrategy(StrategyBase):
             self.params["trade_type"] = self._trade_type
 
     def _max_signal_age_seconds(self) -> float:
+        base = 0.0
         if self._trade_type == "classic":
-            return CLASSIC_SIGNAL_MAX_AGE_SEC
-        if self._trade_type == "sprint":
-            return SPRINT_SIGNAL_MAX_AGE_SEC
-        return 0.0
+            base = CLASSIC_SIGNAL_MAX_AGE_SEC
+        elif self._trade_type == "sprint":
+            base = SPRINT_SIGNAL_MAX_AGE_SEC
+
+        if not self._allow_parallel_trades:
+            return base
+
+        wait_window = float(self.params.get("result_wait_s") or 0.0)
+        if wait_window <= 0.0:
+            wait_window = float(self._trade_minutes) * 60.0
+        else:
+            wait_window = max(wait_window, float(self._trade_minutes) * 60.0)
+
+        return max(base, wait_window + 5.0)
 
     async def _ensure_anchor_currency(self) -> bool:
         try:
