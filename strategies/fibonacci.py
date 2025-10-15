@@ -355,30 +355,33 @@ class FibonacciStrategy(MartingaleStrategy):
                     except Exception:
                         pass
 
-                self._register_pending_trade(trade_id, self.symbol, self.timeframe)
+                self._status("ожидание результата")
 
-                wait_ctx = dict(
+                profit = await check_trade_result(
+                    self.http_client,
+                    user_id=self.user_id,
+                    user_hash=self.user_hash,
                     trade_id=trade_id,
-                    wait_seconds=float(wait_seconds),
-                    placed_at=placed_at_str,
-                    signal_at=self._last_signal_at_str,
-                    symbol=self.symbol,
-                    timeframe=self.timeframe,
-                    direction=status,
-                    stake=float(stake),
-                    percent=int(pct),
-                    account_mode=account_mode,
-                    indicator=self._last_indicator,
+                    wait_time=wait_seconds,
                 )
 
-                if self._allow_parallel_trades:
-                    task = asyncio.create_task(
-                        self._wait_for_trade_result(log=log, **wait_ctx)
-                    )
-                    self._launch_trade_result_task(task)
-                    profit = await task
-                else:
-                    profit = await self._wait_for_trade_result(log=log, **wait_ctx)
+                if callable(self._on_trade_result):
+                    try:
+                        self._on_trade_result(
+                            trade_id=trade_id,
+                            symbol=self.symbol,
+                            timeframe=self.timeframe,
+                            signal_at=self._last_signal_at_str,
+                            placed_at=placed_at_str,
+                            direction=status,
+                            stake=float(stake),
+                            percent=int(pct),
+                            profit=(None if profit is None else float(profit)),
+                            account_mode=account_mode,
+                            indicator=self._last_indicator,
+                        )
+                    except Exception:
+                        pass
 
                 if profit is None:
                     log(f"[{self.symbol}] ⚠ Результат неизвестен — считаем как LOSS.")
@@ -417,10 +420,6 @@ class FibonacciStrategy(MartingaleStrategy):
                     next_start_step = 1
                 series_left -= 1
                 log(f"[{self.symbol}] ▶ Осталось серий: {series_left}")
-
-        if self._pending_tasks:
-            await asyncio.gather(*list(self._pending_tasks), return_exceptions=True)
-            self._pending_tasks.clear()
 
         self._running = False
         (self.log or (lambda s: None))(f"[{self.symbol}] Завершение стратегии.")
