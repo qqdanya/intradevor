@@ -167,6 +167,9 @@ class StrategyControlDialog(QWidget):
         th.addWidget(self.btn_apply_template)
         box_v.addWidget(template_row)
 
+        self.parallel_trades = QCheckBox("Искать новые сигналы во время ожидания")
+        self.parallel_trades.setChecked(bool(getv("allow_parallel_trades", False)))
+
         if strategy_key in ("oscar_grind_1", "oscar_grind_2"):
             self.minutes = QSpinBox()
             self.minutes.setRange(5 if symbol == "BTCUSDT" else 1, 500)
@@ -275,6 +278,10 @@ class StrategyControlDialog(QWidget):
             if self.coefficient is not None:
                 form.addRow("Коэффициент", self.coefficient)
             form.addRow("Мин. процент", self.min_percent)
+
+        parallel_label = QLabel("Параллельные сделки")
+        parallel_label.mousePressEvent = lambda event: self.parallel_trades.toggle()
+        form.addRow(parallel_label, self.parallel_trades)
 
         def _update_minutes_enabled(text: str):
             if self.minutes is not None:
@@ -512,6 +519,7 @@ class StrategyControlDialog(QWidget):
             if trade_type != "classic" and self.minutes is not None:
                 new_params["minutes"] = int(norm)
         new_params["trade_type"] = trade_type
+        new_params["allow_parallel_trades"] = self.parallel_trades.isChecked()
         return new_params
 
     def apply_settings(self):
@@ -589,6 +597,8 @@ class StrategyControlDialog(QWidget):
                 self.min_percent.setValue(int(v))
             elif k == "double_entry" and hasattr(self, "double_entry"):
                 self.double_entry.setChecked(bool(v))
+            elif k == "allow_parallel_trades" and hasattr(self, "parallel_trades"):
+                self.parallel_trades.setChecked(bool(v))
 
     def apply_template(self):
         idx = self.template_combo.currentIndex()
