@@ -783,8 +783,26 @@ class MartingaleStrategy(StrategyBase):
             self.params["allow_parallel_trades"] = self._allow_parallel_trades
 
     def _max_signal_age_seconds(self) -> float:
+        base = 0.0
         if self._trade_type == "classic":
-            return CLASSIC_SIGNAL_MAX_AGE_SEC
-        if self._trade_type == "sprint":
-            return SPRINT_SIGNAL_MAX_AGE_SEC
-        return 0.0
+            base = CLASSIC_SIGNAL_MAX_AGE_SEC
+        elif self._trade_type == "sprint":
+            base = SPRINT_SIGNAL_MAX_AGE_SEC
+
+        if not self._allow_parallel_trades:
+            return base
+
+        # При параллельной обработке сигнал мог прийти, пока стратегия ждала
+        # результат предыдущей сделки. Чтобы не потерять такой сигнал, пока
+        # он ещё актуален, расширяем допустимый возраст до длительности
+        # текущей сделки (trade_minutes) + небольшой запас. Это особенно важно
+        # для работы по всем инструментам, когда сразу несколько сигналов
+        # приходят в один момент.
+        wait_window = float(self.params.get("result_wait_s") or 0.0)
+        if wait_window <= 0.0:
+            wait_window = float(self._trade_minutes) * 60.0
+        else:
+            wait_window = max(wait_window, float(self._trade_minutes) * 60.0)
+
+        # Небольшой запас (5 секунд) на сетевые задержки.
+        return max(base, wait_window + 5.0)
