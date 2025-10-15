@@ -4,6 +4,8 @@ from PyQt6.QtWidgets import (
     QSpinBox,
     QDoubleSpinBox,
     QDialogButtonBox,
+    QCheckBox,
+    QLabel,
 )
 from strategies.martingale import _minutes_from_timeframe
 from core.policy import normalize_sprint
@@ -51,6 +53,13 @@ class MartingaleSettingsDialog(QDialog):
         self.min_percent.setRange(0, 100)
         self.min_percent.setValue(self.params.get("min_percent", 70))
 
+        self.parallel_trades = QCheckBox()
+        self.parallel_trades.setChecked(
+            bool(self.params.get("allow_parallel_trades", True))
+        )
+        parallel_label = QLabel("Обрабатывать множество сигналов")
+        parallel_label.mousePressEvent = lambda event: self.parallel_trades.toggle()
+
         form = QFormLayout()
         form.addRow("Базовая ставка", self.base_investment)
         form.addRow("Время экспирации (мин)", self.minutes)
@@ -59,6 +68,7 @@ class MartingaleSettingsDialog(QDialog):
         form.addRow("Мин. баланс", self.min_balance)
         form.addRow("Коэффициент", self.coefficient)
         form.addRow("Мин. процент", self.min_percent)
+        form.addRow(parallel_label, self.parallel_trades)
 
         btns = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -85,4 +95,5 @@ class MartingaleSettingsDialog(QDialog):
             "min_balance": self.min_balance.value(),
             "coefficient": self.coefficient.value(),
             "min_percent": self.min_percent.value(),
+            "allow_parallel_trades": bool(self.parallel_trades.isChecked()),
         }

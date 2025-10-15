@@ -58,6 +58,13 @@ class OscarGrindSettingsDialog(QDialog):
         double_entry_label = QLabel("Двойной вход на свечу")
         double_entry_label.mousePressEvent = lambda event: self.double_entry.toggle()
 
+        self.parallel_trades = QCheckBox()
+        self.parallel_trades.setChecked(
+            bool(self.params.get("allow_parallel_trades", True))
+        )
+        parallel_label = QLabel("Обрабатывать множество сигналов")
+        parallel_label.mousePressEvent = lambda event: self.parallel_trades.toggle()
+
         form = QFormLayout()
         form.addRow("Базовая ставка (unit)", self.base_investment)
         form.addRow("Время экспирации (мин)", self.minutes)
@@ -66,6 +73,7 @@ class OscarGrindSettingsDialog(QDialog):
         form.addRow("Мин. баланс", self.min_balance)
         form.addRow("Мин. процент", self.min_percent)
         form.addRow(double_entry_label, self.double_entry)
+        form.addRow(parallel_label, self.parallel_trades)
 
         btns = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -92,4 +100,5 @@ class OscarGrindSettingsDialog(QDialog):
             "min_balance": int(self.min_balance.value()),
             "min_percent": int(self.min_percent.value()),
             "double_entry": bool(self.double_entry.isChecked()),
+            "allow_parallel_trades": bool(self.parallel_trades.isChecked()),
         }
