@@ -167,7 +167,7 @@ class StrategyControlDialog(QWidget):
         th.addWidget(self.btn_apply_template)
         box_v.addWidget(template_row)
 
-        self.parallel_trades = QCheckBox("Обрабатывать множество сигналов")
+        self.parallel_trades = QCheckBox()
         self.parallel_trades.setChecked(bool(getv("allow_parallel_trades", True)))
 
         if strategy_key in ("oscar_grind_1", "oscar_grind_2"):
@@ -279,7 +279,7 @@ class StrategyControlDialog(QWidget):
                 form.addRow("Коэффициент", self.coefficient)
             form.addRow("Мин. процент", self.min_percent)
 
-        parallel_label = QLabel("Параллельные сделки")
+        parallel_label = QLabel("Обрабатывать множество сигналов")
         parallel_label.mousePressEvent = lambda event: self.parallel_trades.toggle()
         form.addRow(parallel_label, self.parallel_trades)
 
