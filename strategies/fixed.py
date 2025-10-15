@@ -38,6 +38,7 @@ DEFAULTS = {
     "result_wait_s": 60.0,
     "grace_delay_sec": 30.0,
     "trade_type": "classic",
+    "allow_parallel_trades": False,
 }
 
 
@@ -120,6 +121,14 @@ class FixedStakeStrategy(StrategyBase):
         self._on_trade_pending = self.params.get("on_trade_pending")
         self._on_status = self.params.get("on_status")
 
+        self._allow_parallel_trades = bool(
+            self.params.get("allow_parallel_trades", False)
+        )
+        self.params["allow_parallel_trades"] = self._allow_parallel_trades
+
+        self._pending_tasks: set[asyncio.Task] = set()
+        self._pending_for_status: dict[str, tuple[str, str]] = {}
+
         def _status(msg: str):
             cb = self._on_status
             if callable(cb):
@@ -145,6 +154,107 @@ class FixedStakeStrategy(StrategyBase):
 
         self._anchor_is_demo: Optional[bool] = None
         self._low_payout_notified = False
+
+    # --- управление ожиданиями ---
+    def _update_pending_status(self) -> None:
+        if not self._pending_for_status:
+            self._status("ожидание сигнала")
+            return
+
+        parts = []
+        for symbol, timeframe in self._pending_for_status.values():
+            sym = str(symbol or "-")
+            tf = str(timeframe or "-")
+            parts.append(f"{sym} {tf}")
+        if not parts:
+            self._status("ожидание сигнала")
+            return
+
+        shown = parts[:3]
+        extra = len(parts) - len(shown)
+        text = ", ".join(shown)
+        if extra > 0:
+            text += f" +{extra}"
+        self._status(f"ожидание результата: {text}")
+
+    def _register_pending_trade(self, trade_id: str, symbol: str, timeframe: str) -> None:
+        self._pending_for_status[str(trade_id)] = (symbol, timeframe)
+        self._update_pending_status()
+
+    def _unregister_pending_trade(self, trade_id: str) -> None:
+        self._pending_for_status.pop(str(trade_id), None)
+        self._update_pending_status()
+
+    async def _wait_for_trade_result(
+        self,
+        *,
+        trade_id: str,
+        wait_seconds: float,
+        placed_at: str,
+        signal_at: Optional[str],
+        symbol: str,
+        timeframe: str,
+        direction: int,
+        stake: float,
+        percent: int,
+        account_mode: Optional[str],
+        indicator: str,
+        log,
+    ) -> None:
+        try:
+            profit = await check_trade_result(
+                self.http_client,
+                user_id=self.user_id,
+                user_hash=self.user_hash,
+                trade_id=trade_id,
+                wait_time=wait_seconds,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log(f"[{symbol}] ⚠ Ошибка получения результата сделки {trade_id}: {e}")
+            profit = None
+
+        if callable(self._on_trade_result):
+            try:
+                self._on_trade_result(
+                    trade_id=trade_id,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    signal_at=signal_at,
+                    placed_at=placed_at,
+                    direction=direction,
+                    stake=float(stake),
+                    percent=int(percent),
+                    profit=(None if profit is None else float(profit)),
+                    account_mode=account_mode,
+                    indicator=indicator,
+                )
+            except Exception:
+                pass
+
+        if profit is None:
+            log(f"[{symbol}] ⚠ Результат неизвестен")
+        elif profit >= 0:
+            log(f"[{symbol}] ✅ Результат: {format_amount(profit)}")
+        else:
+            log(f"[{symbol}] ❌ Результат: {format_amount(profit)}")
+
+        self._unregister_pending_trade(trade_id)
+
+    def _launch_trade_result_task(self, task: asyncio.Task) -> None:
+        self._pending_tasks.add(task)
+
+        def _cleanup(fut: asyncio.Future) -> None:
+            self._pending_tasks.discard(task)
+
+        task.add_done_callback(_cleanup)
+
+    def stop(self):
+        for task in list(self._pending_tasks):
+            task.cancel()
+        self._pending_for_status.clear()
+        super().stop()
 
     async def run(self) -> None:
         self._running = True
@@ -407,12 +517,14 @@ class FixedStakeStrategy(StrategyBase):
                 wait_seconds = float(wait_seconds)
 
             placed_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+            trade_symbol = self.symbol
+            trade_timeframe = self.timeframe
             if callable(self._on_trade_pending):
                 try:
                     self._on_trade_pending(
                         trade_id=trade_id,
-                        symbol=self.symbol,
-                        timeframe=self.timeframe,
+                        symbol=trade_symbol,
+                        timeframe=trade_timeframe,
                         signal_at=self._last_signal_at_str,
                         placed_at=placed_at_str,
                         direction=status,
@@ -426,44 +538,38 @@ class FixedStakeStrategy(StrategyBase):
                 except Exception:
                     pass
 
-            self._status("ожидание результата")
+            self._register_pending_trade(trade_id, trade_symbol, trade_timeframe)
 
-            profit = await check_trade_result(
-                self.http_client,
-                user_id=self.user_id,
-                user_hash=self.user_hash,
+            ctx = dict(
                 trade_id=trade_id,
-                wait_time=wait_seconds,
+                wait_seconds=float(wait_seconds),
+                placed_at=placed_at_str,
+                signal_at=self._last_signal_at_str,
+                symbol=trade_symbol,
+                timeframe=trade_timeframe,
+                direction=status,
+                stake=float(stake),
+                percent=int(pct),
+                account_mode=account_mode,
+                indicator=self._last_indicator,
             )
 
-            if callable(self._on_trade_result):
-                try:
-                    self._on_trade_result(
-                        trade_id=trade_id,
-                        symbol=self.symbol,
-                        timeframe=self.timeframe,
-                        signal_at=self._last_signal_at_str,
-                        placed_at=placed_at_str,
-                        direction=status,
-                        stake=float(stake),
-                        percent=int(pct),
-                        profit=(None if profit is None else float(profit)),
-                        account_mode=account_mode,
-                        indicator=self._last_indicator,
-                    )
-                except Exception:
-                    pass
-
-            if profit is None:
-                log(f"[{self.symbol}] ⚠ Результат неизвестен")
-            elif profit >= 0:
-                log(f"[{self.symbol}] ✅ Результат: {format_amount(profit)}")
+            if self._allow_parallel_trades:
+                task = asyncio.create_task(
+                    self._wait_for_trade_result(log=log, **ctx)
+                )
+                self._launch_trade_result_task(task)
+                await self.sleep(0.2)
             else:
-                log(f"[{self.symbol}] ❌ Результат: {format_amount(profit)}")
-
-            await self.sleep(0.2)
+                await self._wait_for_trade_result(log=log, **ctx)
+                await self.sleep(0.2)
 
         self._running = False
+
+        if self._pending_tasks:
+            await asyncio.gather(*list(self._pending_tasks), return_exceptions=True)
+            self._pending_tasks.clear()
+
         (self.log or (lambda s: None))(f"[{self.symbol}] Завершение стратегии.")
 
     async def wait_signal(self, *, timeout: float) -> int:
