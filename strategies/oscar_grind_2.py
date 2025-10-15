@@ -52,6 +52,7 @@ DEFAULTS = {
     # Поведение серии: повторный вход после поражения
     "double_entry": True,
     "trade_type": "classic",
+    "allow_parallel_trades": True,
 }
 
 
@@ -132,6 +133,11 @@ class OscarGrind2Strategy(StrategyBase):
         self._last_signal_at_str: Optional[str] = None
         self._next_expire_dt = None
         self._last_signal_monotonic: Optional[float] = None
+
+        self._allow_parallel_trades = bool(
+            self.params.get("allow_parallel_trades", True)
+        )
+        self.params["allow_parallel_trades"] = self._allow_parallel_trades
 
         anchor = str(
             self.params.get("account_currency", DEFAULTS["account_currency"])
@@ -745,6 +751,10 @@ class OscarGrind2Strategy(StrategyBase):
         if "trade_type" in params:
             self._trade_type = str(params["trade_type"]).lower()
             self.params["trade_type"] = self._trade_type
+
+        if "allow_parallel_trades" in params:
+            self._allow_parallel_trades = bool(params["allow_parallel_trades"])
+            self.params["allow_parallel_trades"] = self._allow_parallel_trades
 
     def _max_signal_age_seconds(self) -> float:
         if self._trade_type == "classic":
