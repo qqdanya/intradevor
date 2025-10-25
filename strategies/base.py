@@ -1,7 +1,8 @@
 # strategies/base.py
 from __future__ import annotations
 import asyncio
-from typing import Any, Awaitable, Optional
+from collections.abc import Awaitable, Callable
+from typing import Any, Optional
 
 
 class StrategyBase:
@@ -22,6 +23,16 @@ class StrategyBase:
 
         # Задача стратегии (для статусов)
         self._task: Optional[asyncio.Task] = None
+
+        # Очередь сигналов и обслуживающая задача
+        self._signal_queue: Optional[asyncio.Queue] = None
+        self._signal_listener_task: Optional[asyncio.Task] = None
+        self._signal_listener_fetcher: Optional[
+            Callable[[Optional[int]], Awaitable[tuple[int, int, Any]]]
+        ] = None
+        self._signal_listener_func_key: Optional[Any] = None
+        self._signal_listener_config: Optional[Any] = None
+        self._signal_queue_since_version: Optional[int] = None
 
     async def run(self):
         raise NotImplementedError("Стратегия не реализована.")
@@ -55,6 +66,8 @@ class StrategyBase:
         self._stop_event.set()
         self._pause_event.set()
         self._emit_status("завершен")
+        if self._signal_listener_task and not self._signal_listener_task.done():
+            self._signal_listener_task.cancel()
         # отменяем задачу, если мы её создавали
         if self._task and not self._task.done():
             self._task.cancel()
@@ -140,3 +153,123 @@ class StrategyBase:
 
     def get_param(self, key, default=None):
         return self.params.get(key, default)
+
+    # --- signal queue helpers -------------------------------------------------
+
+    def _signal_queue_capacity(self) -> int:
+        """Максимальный размер очереди сигналов."""
+        return 32
+
+    def _handle_signal_listener_error(self, exc: Exception) -> None:
+        cb = getattr(self, "log", None)
+        if callable(cb):
+            try:
+                cb(f"[{self.symbol}] ⚠ Ошибка очереди сигналов: {exc}")
+            except Exception:
+                pass
+
+    async def _cancel_signal_listener(self) -> None:
+        if self._signal_listener_task:
+            self._signal_listener_task.cancel()
+            try:
+                await asyncio.gather(
+                    self._signal_listener_task, return_exceptions=True
+                )
+            except Exception:
+                pass
+        self._signal_listener_task = None
+        self._signal_listener_fetcher = None
+        self._signal_listener_func_key = None
+        self._signal_listener_config = None
+        self._signal_queue_since_version = None
+        if self._signal_queue is not None:
+            try:
+                while True:
+                    self._signal_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+        self._signal_queue = None
+
+    async def _signal_listener_loop(self) -> None:
+        queue = self._signal_queue
+        fetcher = self._signal_listener_fetcher
+        since_version = self._signal_queue_since_version
+        while True:
+            if self._stop_event.is_set():
+                break
+            if fetcher is None or queue is None:
+                break
+            try:
+                payload = await fetcher(since_version)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                self._handle_signal_listener_error(exc)
+                await asyncio.sleep(0.5)
+                continue
+
+            if payload is None:
+                continue
+
+            direction, ver, meta = payload
+            since_version = ver
+            self._signal_queue_since_version = ver
+
+            try:
+                await queue.put(payload)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                self._handle_signal_listener_error(exc)
+                await asyncio.sleep(0.1)
+
+    async def _restart_signal_listener(
+        self,
+        fetcher: Callable[[Optional[int]], Awaitable[tuple[int, int, Any]]],
+        *,
+        func_key: Any,
+        config_key: Any,
+    ) -> None:
+        if self._signal_listener_task and not self._signal_listener_task.done():
+            self._signal_listener_task.cancel()
+            try:
+                await asyncio.gather(
+                    self._signal_listener_task, return_exceptions=True
+                )
+            except Exception:
+                pass
+
+        capacity = max(0, int(self._signal_queue_capacity()))
+        self._signal_queue = asyncio.Queue(maxsize=capacity)
+        self._signal_listener_fetcher = fetcher
+        self._signal_listener_func_key = func_key
+        self._signal_listener_config = config_key
+        self._signal_queue_since_version = getattr(self, "_last_signal_ver", None)
+        self._signal_listener_task = asyncio.create_task(self._signal_listener_loop())
+
+    async def _ensure_signal_listener(
+        self,
+        fetcher: Callable[[Optional[int]], Awaitable[tuple[int, int, Any]]],
+        *,
+        config_key: Any = None,
+    ) -> None:
+        func_key = getattr(fetcher, "__func__", fetcher)
+        if (
+            self._signal_listener_task
+            and not self._signal_listener_task.done()
+            and self._signal_listener_func_key is func_key
+            and self._signal_listener_config == config_key
+        ):
+            return
+
+        await self._restart_signal_listener(
+            fetcher, func_key=func_key, config_key=config_key
+        )
+
+    async def _next_signal_from_queue(
+        self, *, timeout: Optional[float] = None
+    ) -> tuple[int, int, Any]:
+        if self._signal_queue is None:
+            raise RuntimeError("Signal queue is not initialized")
+        coro = self._signal_queue.get()
+        return await self.wait_cancellable(coro, timeout=timeout)

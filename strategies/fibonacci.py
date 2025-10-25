@@ -422,6 +422,8 @@ class FibonacciStrategy(MartingaleStrategy):
 
         self._running = False
 
+        await self._cancel_signal_listener()
+
         if self._pending_tasks:
             await asyncio.gather(*list(self._pending_tasks), return_exceptions=True)
             self._pending_tasks.clear()
