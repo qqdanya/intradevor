@@ -566,6 +566,8 @@ class FixedStakeStrategy(StrategyBase):
 
         self._running = False
 
+        await self._cancel_signal_listener()
+
         if self._pending_tasks:
             await asyncio.gather(*list(self._pending_tasks), return_exceptions=True)
             self._pending_tasks.clear()
@@ -573,67 +575,36 @@ class FixedStakeStrategy(StrategyBase):
         (self.log or (lambda s: None))(f"[{self.symbol}] Завершение стратегии.")
 
     async def wait_signal(self, *, timeout: float) -> int:
-        grace = float(self.params.get("grace_delay_sec", DEFAULTS["grace_delay_sec"]))
+        await self._ensure_signal_listener(self._fetch_signal_payload)
 
-        def _on_delay(sec: float):
-            (self.log or (lambda s: None))(
-                f"[{self.symbol}] ⏱ Задержка следующего прогноза ~{sec:.1f}s"
-            )
+        direction, ver, meta = await self._next_signal_from_queue(timeout=timeout)
+        sig_symbol = (meta or {}).get("symbol") or self.symbol
+        sig_tf = ((meta or {}).get("timeframe") or self.timeframe).upper()
 
-        while True:
-            coro = wait_for_signal_versioned(
-                self.symbol,
-                self.timeframe,
-                since_version=self._last_signal_ver,
-                check_pause=self.is_paused,
-                timeout=None,
-                raise_on_timeout=True,
-                grace_delay_sec=grace,
-                on_delay=_on_delay,
-                include_meta=True,
-                max_age_sec=self._max_signal_age_seconds(),
-            )
+        self._last_signal_ver = ver
+        self._last_indicator = (meta or {}).get("indicator") or "-"
 
-            direction, ver, meta = await self.wait_cancellable(coro, timeout=timeout)
-            sig_symbol = (meta or {}).get("symbol") or self.symbol
-            sig_tf = ((meta or {}).get("timeframe") or self.timeframe).upper()
+        ts = (meta or {}).get("next_timestamp")
+        self._next_expire_dt = ts.astimezone(MOSCOW_TZ) if ts else None
 
-            if (
-                self._use_any_timeframe
-                and self._trade_type == "classic"
-                and sig_tf not in CLASSIC_ALLOWED_TFS
-            ):
-                self._last_signal_ver = ver
-                if self.log:
-                    self.log(
-                        f"[{sig_symbol}] ⚠ Таймфрейм {sig_tf} недоступен для Classic — пропуск."
-                    )
-                continue
+        if self._use_any_symbol:
+            self.symbol = sig_symbol
+        if self._use_any_timeframe:
+            self.timeframe = sig_tf
+            self.params["timeframe"] = self.timeframe
+            raw = _minutes_from_timeframe(self.timeframe)
+            norm = normalize_sprint(self.symbol, raw) or raw
+            self._trade_minutes = int(norm)
+            self.params["minutes"] = self._trade_minutes
 
-            self._last_signal_ver = ver
-            self._last_indicator = (meta or {}).get("indicator") or "-"
+        from datetime import datetime
 
-            ts = (meta or {}).get("next_timestamp")
-            self._next_expire_dt = ts.astimezone(MOSCOW_TZ) if ts else None
-
-            if self._use_any_symbol:
-                self.symbol = sig_symbol
-            if self._use_any_timeframe:
-                self.timeframe = sig_tf
-                self.params["timeframe"] = self.timeframe
-                raw = _minutes_from_timeframe(self.timeframe)
-                norm = normalize_sprint(self.symbol, raw) or raw
-                self._trade_minutes = int(norm)
-                self.params["minutes"] = self._trade_minutes
-
-            from datetime import datetime
-
-            self._last_signal_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-            try:
-                self._last_signal_monotonic = asyncio.get_running_loop().time()
-            except RuntimeError:
-                self._last_signal_monotonic = None
-            return int(direction)
+        self._last_signal_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+        try:
+            self._last_signal_monotonic = asyncio.get_running_loop().time()
+        except RuntimeError:
+            self._last_signal_monotonic = None
+        return int(direction)
 
     def update_params(self, **params):
         super().update_params(**params)
@@ -728,3 +699,50 @@ class FixedStakeStrategy(StrategyBase):
             await self.sleep(1.0)
             return False
         return True
+
+    async def _fetch_signal_payload(
+        self, since_version: Optional[int]
+    ) -> tuple[int, int, dict[str, Optional[str | int | float]]]:
+        grace = float(self.params.get("grace_delay_sec", DEFAULTS["grace_delay_sec"]))
+
+        def _on_delay(sec: float):
+            (self.log or (lambda s: None))(
+                f"[{self.symbol}] ⏱ Задержка следующего прогноза ~{sec:.1f}s"
+            )
+
+        listen_symbol = "*" if self._use_any_symbol else self.symbol
+        listen_timeframe = "*" if self._use_any_timeframe else self.timeframe
+        current_version = since_version
+
+        while True:
+            coro = wait_for_signal_versioned(
+                listen_symbol,
+                listen_timeframe,
+                since_version=current_version,
+                check_pause=self.is_paused,
+                timeout=None,
+                raise_on_timeout=True,
+                grace_delay_sec=grace,
+                on_delay=_on_delay,
+                include_meta=True,
+                max_age_sec=self._max_signal_age_seconds(),
+            )
+
+            direction, ver, meta = await self.wait_cancellable(coro, timeout=None)
+            current_version = ver
+
+            sig_symbol = (meta or {}).get("symbol") or listen_symbol
+            sig_tf = ((meta or {}).get("timeframe") or listen_timeframe).upper()
+
+            if (
+                self._use_any_timeframe
+                and self._trade_type == "classic"
+                and sig_tf not in CLASSIC_ALLOWED_TFS
+            ):
+                if self.log:
+                    self.log(
+                        f"[{sig_symbol}] ⚠ Таймфрейм {sig_tf} недоступен для Classic — пропуск."
+                    )
+                continue
+
+            return int(direction), int(ver), meta
