@@ -1,10 +1,8 @@
 from __future__ import annotations
-
 import asyncio
 from datetime import datetime
 from typing import Optional, Callable, Any
 from zoneinfo import ZoneInfo
-
 from core.http_async import HttpClient
 from core.intrade_api_async import (
     get_balance_info,
@@ -16,8 +14,8 @@ from core.intrade_api_async import (
 from core.signal_waiter import wait_for_signal_versioned
 from core.money import format_amount
 from core.policy import normalize_sprint
-
 from strategies.base import StrategyBase
+from strategies.strategy_common import StrategyCommon
 from strategies.constants import *  # Импортируем все константы
 
 def _minutes_from_timeframe(tf: str) -> int:
@@ -39,13 +37,12 @@ def _minutes_from_timeframe(tf: str) -> int:
         return n * 60 * 24 * 7
     return 1
 
-
 class BaseTradingStrategy(StrategyBase):
     """
     Базовый класс для торговых стратегий, объединяющий управление жизненным циклом
     из StrategyBase и торговую логику.
     """
-    
+   
     def __init__(
         self,
         http_client: HttpClient,
@@ -63,16 +60,15 @@ class BaseTradingStrategy(StrategyBase):
         trading_params = dict(DEFAULTS)  # Используем DEFAULTS из constants
         if params:
             trading_params.update(params)
-
+            
         _symbol = (symbol or "").strip()
         _tf_raw = (timeframe or "").strip()
         _tf = _tf_raw.upper()
         self._use_any_symbol = _symbol == ALL_SYMBOLS_LABEL
         self._use_any_timeframe = _tf_raw == ALL_TF_LABEL
-
         cur_symbol = "*" if self._use_any_symbol else _symbol
         cur_tf = "*" if self._use_any_timeframe else _tf
-
+        
         # Инициализация базового класса
         super().__init__(
             session=http_client,
@@ -83,42 +79,45 @@ class BaseTradingStrategy(StrategyBase):
             **trading_params,
             **kwargs
         )
-
+        
         self.http_client = http_client
         self.timeframe = cur_tf or self.params.get("timeframe", "M1")
         self.params["timeframe"] = self.timeframe
         self.strategy_name = strategy_name
-
+        
         # Инициализация торговых параметров
         self._init_trading_params()
-
+        
         # Колбэки
         self._on_trade_result = self.params.get("on_trade_result")
         self._on_trade_pending = self.params.get("on_trade_pending")
         self._on_status = self.params.get("on_status")
-
+        
         # Состояние стратегии
         self._last_signal_ver: int = 0
         self._last_indicator: str = "-"
         self._last_signal_at_str: Optional[str] = None
         self._next_expire_dt = None
         self._last_signal_monotonic: Optional[float] = None
-
+        
         # Параллельная обработка
         self._allow_parallel_trades = bool(self.params.get("allow_parallel_trades", True))
         self.params["allow_parallel_trades"] = self._allow_parallel_trades
-
+        
         # Активные сделки и задачи
         self._pending_tasks: set[asyncio.Task] = set()
         self._pending_for_status: dict[str, tuple[str, str]] = {}
         self._active_trades: dict[str, asyncio.Task] = {}
-
+        
         # Аккаунт
         anchor = str(self.params.get("account_currency", "RUB")).upper()
         self._anchor_ccy = anchor
         self.params["account_currency"] = anchor
         self._anchor_is_demo: Optional[bool] = None
         self._low_payout_notified = False
+        
+        # Общая логика обработки сигналов
+        self._common = StrategyCommon(self)
 
     def _init_trading_params(self):
         """Инициализация торговых параметров"""
@@ -131,12 +130,10 @@ class BaseTradingStrategy(StrategyBase):
                 self.log(f"[{self.symbol}] ⚠ Минуты {raw_minutes} недопустимы. Использую {norm}.")
         self._trade_minutes = int(norm)
         self.params["minutes"] = self._trade_minutes
-
         self._trade_type = str(self.params.get("trade_type", "sprint")).lower()
         self.params["trade_type"] = self._trade_type
 
     # === STATUS MANAGEMENT ===
-
     def _status(self, msg: str):
         """Обновление статуса стратегии"""
         self._emit_status(msg)
@@ -146,7 +143,6 @@ class BaseTradingStrategy(StrategyBase):
         if not self._pending_for_status:
             self._status("ожидание сигнала")
             return
-
         parts = []
         for symbol, timeframe in self._pending_for_status.values():
             sym = str(symbol or "-")
@@ -155,7 +151,6 @@ class BaseTradingStrategy(StrategyBase):
         if not parts:
             self._status("ожидание сигнала")
             return
-
         shown = parts[:3]
         extra = len(parts) - len(shown)
         text = ", ".join(shown)
@@ -174,18 +169,17 @@ class BaseTradingStrategy(StrategyBase):
         self._update_pending_status()
 
     # === TRADING METHODS ===
-
     async def place_trade_with_retry(
-        self, 
-        symbol: str, 
-        direction: int, 
-        stake: float, 
+        self,
+        symbol: str,
+        direction: int,
+        stake: float,
         account_ccy: str,
         max_attempts: int = 4
     ) -> Optional[str]:
         """Размещение сделки с повторными попытками"""
         log = self.log or (lambda s: None)
-        
+       
         trade_kwargs = {"trade_type": self._trade_type}
         time_arg = self._trade_minutes
         if self._trade_type == "classic":
@@ -194,7 +188,7 @@ class BaseTradingStrategy(StrategyBase):
                 return None
             time_arg = self._next_expire_dt.strftime("%H:%M")
             trade_kwargs["date"] = self._next_expire_dt.strftime("%d-%m-%Y")
-            
+           
         for attempt in range(max_attempts):
             trade_id = await place_trade(
                 self.http_client,
@@ -214,7 +208,7 @@ class BaseTradingStrategy(StrategyBase):
             if attempt < max_attempts - 1:
                 log(f"[{symbol}] ❌ Сделка не размещена. Пауза и повтор.")
                 await self.sleep(1.0)
-                    
+                   
         return None
 
     async def wait_for_trade_result(
@@ -234,7 +228,6 @@ class BaseTradingStrategy(StrategyBase):
     ) -> Optional[float]:
         """Ожидание результата сделки"""
         self._status("ожидание результата")
-
         try:
             profit = await check_trade_result(
                 self.http_client,
@@ -245,7 +238,7 @@ class BaseTradingStrategy(StrategyBase):
             )
         except Exception:
             profit = None
-
+            
         # Вызов колбэка результата
         if callable(self._on_trade_result):
             try:
@@ -264,20 +257,20 @@ class BaseTradingStrategy(StrategyBase):
                 )
             except Exception:
                 pass
-
+                
         self._unregister_pending_trade(trade_id)
         return None if profit is None else float(profit)
 
     async def check_payout_and_balance(
-        self, 
-        symbol: str, 
-        stake: float, 
+        self,
+        symbol: str,
+        stake: float,
         min_pct: int,
         wait_low: float
     ) -> tuple[Optional[int], Optional[float]]:
         """Проверка выплаты и баланса"""
         account_ccy = self._anchor_ccy
-        
+       
         # Проверка выплаты
         pct = await get_current_percent(
             self.http_client,
@@ -287,11 +280,11 @@ class BaseTradingStrategy(StrategyBase):
             account_ccy=account_ccy,
             trade_type=self._trade_type,
         )
-        
+       
         if pct is None:
             self._status("ожидание процента")
             return None, None
-            
+           
         if pct < min_pct:
             self._status("ожидание высокого процента")
             if not self._low_payout_notified:
@@ -299,11 +292,11 @@ class BaseTradingStrategy(StrategyBase):
                 self._low_payout_notified = True
             await self.sleep(wait_low)
             return None, None
-            
+           
         if self._low_payout_notified:
             (self.log or (lambda s: None))(f"[{symbol}] ℹ Работа продолжается (текущий payout = {pct}%)")
             self._low_payout_notified = False
-
+            
         # Проверка баланса
         try:
             cur_balance, _, _ = await get_balance_info(
@@ -311,7 +304,7 @@ class BaseTradingStrategy(StrategyBase):
             )
         except Exception:
             cur_balance = None
-            
+           
         min_floor = float(self.params.get("min_balance", 100))
         if cur_balance is None or (cur_balance - stake) < min_floor:
             (self.log or (lambda s: None))(
@@ -320,7 +313,7 @@ class BaseTradingStrategy(StrategyBase):
                 + ("" if cur_balance is None else f" (текущий {format_amount(cur_balance)} {account_ccy})")
             )
             return None, None
-
+            
         return pct, cur_balance
 
     async def ensure_account_conditions(self) -> bool:
@@ -353,10 +346,8 @@ class BaseTradingStrategy(StrategyBase):
             self._status("ожидание проверки режима счёта")
             await self.sleep(1.0)
             return False
-
         if self._anchor_is_demo is None:
             self._anchor_is_demo = bool(demo_now)
-
         if bool(demo_now) != bool(self._anchor_is_demo):
             need = "ДЕМО" if self._anchor_is_demo else "РЕАЛ"
             self._status(f"ожидание смены счёта на {need}")
@@ -365,91 +356,9 @@ class BaseTradingStrategy(StrategyBase):
         return True
 
     # === SIGNAL PROCESSING ===
-
     async def _signal_listener(self, queue: asyncio.Queue):
-        """Прослушиватель сигналов"""
-        log = self.log or (lambda s: None)
-        log(f"[{self.symbol}] Запуск прослушивателя сигналов ({self.strategy_name})")
-        
-        _parallel_block_notified = False
-        
-        while self._running:
-            await self._pause_point()
-            
-            # Проверяем блокировку параллельной обработки
-            if not self._allow_parallel_trades and self._active_trades:
-                if not _parallel_block_notified:
-                    log(f"[{self.symbol}] ⏳ Ожидание завершения активных сделок перед приемом новых сигналов")
-                    _parallel_block_notified = True
-                await asyncio.sleep(0.5)
-                continue
-            elif _parallel_block_notified:
-                log(f"[{self.symbol}] ✅ Возобновление приема сигналов")
-                _parallel_block_notified = False
-                
-            try:
-                direction, ver, meta = await self._fetch_signal_payload(self._last_signal_ver)
-                
-                signal_data = {
-                    'direction': direction,
-                    'version': ver,
-                    'meta': meta,
-                    'symbol': meta.get('symbol') if meta else self.symbol,
-                    'timeframe': meta.get('timeframe') if meta else self.timeframe,
-                    'timestamp': datetime.now(),
-                    'indicator': meta.get('indicator') if meta else '-'
-                }
-                
-                await queue.put(signal_data)
-                log(f"[{signal_data['symbol']}] Сигнал добавлен в очередь")
-                
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                log(f"[{self.symbol}] Ошибка в прослушивателе сигналов: {e}")
-                await asyncio.sleep(1.0)
-
-    async def _signal_processor(self, queue: asyncio.Queue):
-        """Обработчик сигналов"""
-        log = self.log or (lambda s: None)
-        log(f"[{self.symbol}] Запуск обработчика сигналов ({self.strategy_name})")
-        
-        while self._running:
-            await self._pause_point()
-            
-            try:
-                try:
-                    signal_data = await asyncio.wait_for(queue.get(), timeout=1.0)
-                except asyncio.TimeoutError:
-                    continue
-                
-                # Проверка параллельной обработки
-                if not self._allow_parallel_trades and self._active_trades:
-                    log(f"[{signal_data['symbol']}] ⚠ Пропускаем сигнал (параллельная обработка запрещена)")
-                    queue.task_done()
-                    continue
-                
-                trade_key = f"{signal_data['symbol']}_{signal_data['timeframe']}"
-                
-                if trade_key in self._active_trades:
-                    log(f"[{signal_data['symbol']}] Активная сделка уже существует, пропускаем сигнал")
-                    queue.task_done()
-                    continue
-                
-                task = asyncio.create_task(self._process_single_signal(signal_data))
-                self._active_trades[trade_key] = task
-                
-                def cleanup(fut):
-                    self._active_trades.pop(trade_key, None)
-                    queue.task_done()
-                
-                task.add_done_callback(cleanup)
-                
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                log(f"[{self.symbol}] Ошибка в обработчике сигналов: {e}")
-                queue.task_done()
+        """Прослушиватель сигналов - использует общую логику"""
+        await self._common.signal_listener(queue)
 
     async def _process_single_signal(self, signal_data: dict):
         """Обработка одного сигнала (должен быть реализован в дочерних классах)"""
@@ -460,16 +369,13 @@ class BaseTradingStrategy(StrategyBase):
     ) -> tuple[int, int, dict[str, Optional[str | int | float]]]:
         """Получение сигнала"""
         grace = float(self.params.get("grace_delay_sec", 30.0))
-
         def _on_delay(sec: float):
             (self.log or (lambda s: None))(
                 f"[{self.symbol}] ⏱ Задержка следующего прогноза ~{sec:.1f}s"
             )
-
         listen_symbol = "*" if self._use_any_symbol else self.symbol
         listen_timeframe = "*" if self._use_any_timeframe else self.timeframe
         current_version = since_version
-
         while True:
             coro = wait_for_signal_versioned(
                 listen_symbol,
@@ -483,13 +389,10 @@ class BaseTradingStrategy(StrategyBase):
                 include_meta=True,
                 max_age_sec=self._max_signal_age_seconds(),
             )
-
             direction, ver, meta = await asyncio.wait_for(coro, timeout=None)
             current_version = ver
-
             sig_symbol = (meta or {}).get("symbol") or listen_symbol
             sig_tf = ((meta or {}).get("timeframe") or listen_timeframe).upper()
-
             if (
                 self._use_any_timeframe
                 and self._trade_type == "classic"
@@ -500,7 +403,6 @@ class BaseTradingStrategy(StrategyBase):
                         f"[{sig_symbol}] ⚠ Таймфрейм {sig_tf} недоступен для Classic — пропуск."
                     )
                 continue
-
             return int(direction), int(ver), meta
 
     def _max_signal_age_seconds(self) -> float:
@@ -510,33 +412,28 @@ class BaseTradingStrategy(StrategyBase):
             base = CLASSIC_SIGNAL_MAX_AGE_SEC
         elif self._trade_type == "sprint":
             base = SPRINT_SIGNAL_MAX_AGE_SEC
-
         if not self._allow_parallel_trades:
             return base
-
         wait_window = float(self.params.get("result_wait_s") or 0.0)
         if wait_window <= 0.0:
             wait_window = float(self._trade_minutes) * 60.0
         else:
             wait_window = max(wait_window, float(self._trade_minutes) * 60.0)
-
         return max(base, wait_window + 5.0)
 
     # === STRATEGY MANAGEMENT ===
-
     async def run(self) -> None:
         """Запуск стратегии"""
         self._running = True
         log = self.log or (lambda s: None)
-
+        
         # Инициализация аккаунта
         await self._initialize_account()
-
+        
         # Запуск обработки сигналов
         signal_queue = asyncio.Queue()
         self._signal_listener_task = asyncio.create_task(self._signal_listener(signal_queue))
-        self._signal_processor_task = asyncio.create_task(self._signal_processor(signal_queue))
-
+        
         # Основной цикл
         try:
             while self._running:
@@ -549,7 +446,6 @@ class BaseTradingStrategy(StrategyBase):
     async def _initialize_account(self):
         """Инициализация аккаунта"""
         log = self.log or (lambda s: None)
-
         try:
             self._anchor_is_demo = await is_demo_account(self.http_client)
             mode_txt = "ДЕМО" if self._anchor_is_demo else "РЕАЛ"
@@ -557,7 +453,6 @@ class BaseTradingStrategy(StrategyBase):
         except Exception as e:
             log(f"[{self.symbol}] ⚠ Не удалось определить режим счёта: {e}")
             self._anchor_is_demo = False
-
         try:
             amount, cur_ccy, display = await get_balance_info(
                 self.http_client, self.user_id, self.user_hash
@@ -569,52 +464,49 @@ class BaseTradingStrategy(StrategyBase):
     async def _shutdown(self):
         """Завершение работы стратегии"""
         self._running = False
-
+        
         # Отмена задач
         if self._signal_listener_task:
             self._signal_listener_task.cancel()
-        if self._signal_processor_task:
-            self._signal_processor_task.cancel()
-
+            
         # Ожидание завершения активных сделок
         if self._active_trades:
             await asyncio.gather(*list(self._active_trades.values()), return_exceptions=True)
-            
+           
         if self._pending_tasks:
             await asyncio.gather(*list(self._pending_tasks), return_exceptions=True)
-
+            
         # Очистка
         self._pending_tasks.clear()
         self._active_trades.clear()
         self._pending_for_status.clear()
-
         (self.log or (lambda s: None))(f"[{self.symbol}] Завершение стратегии {self.strategy_name}")
 
     def stop(self):
         """Остановка стратегии"""
+        self._common.stop()
         super().stop()
         self._pending_for_status.clear()
         self._active_trades.clear()
 
     # === PARAMETER UPDATES ===
-
     def update_params(self, **params):
         """Обновление параметров"""
         super().update_params(**params)
-        
+       
         if "minutes" in params:
             self._update_minutes_param(params["minutes"])
-            
+           
         if "timeframe" in params:
             self._update_timeframe_param(params["timeframe"])
-            
+           
         if "account_currency" in params:
             self._update_currency_param(params["account_currency"])
-            
+           
         if "trade_type" in params:
             self._trade_type = str(params["trade_type"]).lower()
             self.params["trade_type"] = self._trade_type
-
+            
         if "allow_parallel_trades" in params:
             self._allow_parallel_trades = bool(params["allow_parallel_trades"])
             self.params["allow_parallel_trades"] = self._allow_parallel_trades
