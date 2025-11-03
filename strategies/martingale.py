@@ -311,11 +311,17 @@ class MartingaleStrategy(StrategyBase):
                 except asyncio.TimeoutError:
                     continue
                 
-                # Создаем независимую задачу для обработки каждого сигнала
+                # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: 
+                # Если параллельная обработка выключена И есть ЛЮБАЯ активная сделка - пропускаем сигнал
+                if not self._allow_parallel_trades and self._active_trades:
+                    log(f"[{signal_data['symbol']}] ⚠ Параллельная обработка запрещена, активные сделки: {len(self._active_trades)}. Пропускаем сигнал.")
+                    queue.task_done()
+                    continue
+                
                 trade_key = f"{signal_data['symbol']}_{signal_data['timeframe']}"
                 
-                # Если уже есть активная сделка для этого инструмента/таймфрейма, пропускаем
-                if trade_key in self._active_trades and not self._allow_parallel_trades:
+                # Дополнительная проверка для одинаковых symbol/timeframe
+                if trade_key in self._active_trades:
                     log(f"[{signal_data['symbol']}] Активная сделка уже существует, пропускаем сигнал")
                     queue.task_done()
                     continue
