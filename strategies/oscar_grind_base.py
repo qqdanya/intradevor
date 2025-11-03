@@ -61,6 +61,93 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             **kwargs,
         )
 
+    async def _signal_listener(self, queue: asyncio.Queue):
+        """Прослушиватель сигналов с проверкой параллельной обработки"""
+        log = self.log or (lambda s: None)
+        log(f"[{self.symbol}] Запуск прослушивателя сигналов ({self.strategy_name})")
+        
+        _parallel_block_notified = False
+        
+        while self._running:
+            await self._pause_point()
+            
+            # Проверяем блокировку параллельной обработки
+            if not self._allow_parallel_trades and self._active_trades:
+                if not _parallel_block_notified:
+                    log(f"[{self.symbol}] ⏳ Ожидание завершения активных сделок перед приемом новых сигналов")
+                    _parallel_block_notified = True
+                await asyncio.sleep(0.5)
+                continue
+            elif _parallel_block_notified:
+                log(f"[{self.symbol}] ✅ Возобновление приема сигналов")
+                _parallel_block_notified = False
+                
+            try:
+                direction, ver, meta = await self._fetch_signal_payload(self._last_signal_ver)
+                
+                signal_data = {
+                    'direction': direction,
+                    'version': ver,
+                    'meta': meta,
+                    'symbol': meta.get('symbol') if meta else self.symbol,
+                    'timeframe': meta.get('timeframe') if meta else self.timeframe,
+                    'timestamp': datetime.now(),
+                    'indicator': meta.get('indicator') if meta else '-'
+                }
+                
+                await queue.put(signal_data)
+                log(f"[{signal_data['symbol']}] Сигнал добавлен в очередь")
+                
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                log(f"[{self.symbol}] Ошибка в прослушивателе сигналов: {e}")
+                await asyncio.sleep(1.0)
+
+    async def _signal_processor(self, queue: asyncio.Queue):
+        """Обработчик сигналов с проверкой параллельной обработки"""
+        log = self.log or (lambda s: None)
+        log(f"[{self.symbol}] Запуск обработчика сигналов ({self.strategy_name})")
+        
+        while self._running:
+            await self._pause_point()
+            
+            try:
+                try:
+                    signal_data = await asyncio.wait_for(queue.get(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    continue
+                
+                # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: 
+                # Если параллельная обработка выключена И есть ЛЮБАЯ активная сделка - пропускаем сигнал
+                if not self._allow_parallel_trades and self._active_trades:
+                    log(f"[{signal_data['symbol']}] ⚠ Пропускаем сигнал (параллельная обработка запрещена)")
+                    queue.task_done()
+                    continue
+                
+                trade_key = f"{signal_data['symbol']}_{signal_data['timeframe']}"
+                
+                # Дополнительная проверка для одинаковых symbol/timeframe
+                if trade_key in self._active_trades:
+                    log(f"[{signal_data['symbol']}] Активная сделка уже существует, пропускаем сигнал")
+                    queue.task_done()
+                    continue
+                
+                task = asyncio.create_task(self._process_single_signal(signal_data))
+                self._active_trades[trade_key] = task
+                
+                def cleanup(fut):
+                    self._active_trades.pop(trade_key, None)
+                    queue.task_done()
+                
+                task.add_done_callback(cleanup)
+                
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                log(f"[{self.symbol}] Ошибка в обработчике сигналов: {e}")
+                queue.task_done()
+
     async def _process_single_signal(self, signal_data: dict):
         """Обработка одного сигнала для Oscar Grind"""
         symbol = signal_data['symbol']
