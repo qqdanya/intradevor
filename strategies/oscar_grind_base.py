@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import math
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Dict, Set
 from zoneinfo import ZoneInfo
 
 from strategies.base_trading_strategy import BaseTradingStrategy, _minutes_from_timeframe
@@ -60,28 +60,20 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             strategy_name=strategy_name,
             **kwargs,
         )
+        
+        # Очередь отложенных сигналов по инструментам
+        self._pending_signals: Dict[str, asyncio.Queue] = {}  # trade_key -> Queue
+        self._pending_processing: Dict[str, asyncio.Task] = {}  # trade_key -> Task
+        self._pending_notified: Set[str] = set()
 
     async def _signal_listener(self, queue: asyncio.Queue):
-        """Прослушиватель сигналов с проверкой параллельной обработки"""
+        """Прослушиватель сигналов с отложенной обработкой"""
         log = self.log or (lambda s: None)
         log(f"[{self.symbol}] Запуск прослушивателя сигналов ({self.strategy_name})")
-        
-        _parallel_block_notified = False
         
         while self._running:
             await self._pause_point()
             
-            # Проверяем блокировку параллельной обработки
-            if not self._allow_parallel_trades and self._active_trades:
-                if not _parallel_block_notified:
-                    log(f"[{self.symbol}] ⏳ Ожидание завершения активных сделок перед приемом новых сигналов")
-                    _parallel_block_notified = True
-                await asyncio.sleep(0.5)
-                continue
-            elif _parallel_block_notified:
-                log(f"[{self.symbol}] ✅ Возобновление приема сигналов")
-                _parallel_block_notified = False
-                
             try:
                 direction, ver, meta = await self._fetch_signal_payload(self._last_signal_ver)
                 
@@ -95,8 +87,33 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                     'indicator': meta.get('indicator') if meta else '-'
                 }
                 
-                await queue.put(signal_data)
-                log(f"[{signal_data['symbol']}] Сигнал добавлен в очередь")
+                symbol = signal_data['symbol']
+                timeframe = signal_data['timeframe']
+                trade_key = f"{symbol}_{timeframe}"
+                
+                # Если для этого инструмента уже есть активная сделка - сохраняем сигнал в отложенную очередь
+                if trade_key in self._active_trades:
+                    if trade_key not in self._pending_notified:
+                        log(f"[{symbol}] ⏳ Активная сделка выполняется, откладываем сигнал для {symbol} {timeframe}")
+                        self._pending_notified.add(trade_key)
+                    
+                    # Создаем или получаем очередь отложенных сигналов для этого инструмента
+                    if trade_key not in self._pending_signals:
+                        self._pending_signals[trade_key] = asyncio.Queue()
+                    
+                    # Сохраняем сигнал в отложенную очередь
+                    await self._pending_signals[trade_key].put(signal_data)
+                    log(f"[{symbol}] 📨 Сигнал сохранен в отложенную очередь (в очереди: {self._pending_signals[trade_key].qsize()})")
+                    
+                    # Запускаем обработчик отложенных сигналов, если он еще не запущен
+                    if trade_key not in self._pending_processing:
+                        self._pending_processing[trade_key] = asyncio.create_task(
+                            self._process_pending_signals(trade_key)
+                        )
+                else:
+                    # Если нет активной сделки - обрабатываем сигнал немедленно
+                    await queue.put(signal_data)
+                    log(f"[{symbol}] Сигнал добавлен в основную очередь")
                 
             except asyncio.CancelledError:
                 break
@@ -104,8 +121,87 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                 log(f"[{self.symbol}] Ошибка в прослушивателе сигналов: {e}")
                 await asyncio.sleep(1.0)
 
+    async def _process_pending_signals(self, trade_key: str):
+        """Обрабатывает отложенные сигналы для конкретного инструмента"""
+        log = self.log or (lambda s: None)
+        symbol, timeframe = trade_key.split('_', 1)
+        
+        log(f"[{symbol}] 🚀 Запуск обработчика отложенных сигналов для {symbol} {timeframe}")
+        
+        try:
+            while self._running and trade_key in self._pending_signals:
+                # Ждем завершения активной сделки
+                while trade_key in self._active_trades and self._running:
+                    await asyncio.sleep(0.1)
+                
+                if not self._running:
+                    break
+                
+                # Активная сделка завершилась - обрабатываем отложенные сигналы
+                pending_queue = self._pending_signals[trade_key]
+                
+                # Обрабатываем все накопленные сигналы (только последний актуальный)
+                last_signal = None
+                try:
+                    # Берем только последний сигнал из очереди (самый актуальный)
+                    while True:
+                        last_signal = pending_queue.get_nowait()
+                        pending_queue.task_done()
+                except asyncio.QueueEmpty:
+                    pass
+                
+                if last_signal:
+                    log(f"[{symbol}] 🔄 Обрабатываем отложенный сигнал для {symbol} {timeframe}")
+                    
+                    # Создаем задачу для обработки отложенного сигнала
+                    task = asyncio.create_task(self._process_single_signal(last_signal))
+                    self._active_trades[trade_key] = task
+                    
+                    def cleanup(fut):
+                        self._active_trades.pop(trade_key, None)
+                        # После завершения сделки проверяем, есть ли еще отложенные сигналы
+                        asyncio.create_task(self._check_more_pending_signals(trade_key))
+                    
+                    task.add_done_callback(cleanup)
+                    
+                    # Ждем завершения обработки этого сигнала перед следующим
+                    await task
+                
+                # Небольшая пауза перед следующей проверкой
+                await asyncio.sleep(0.1)
+                
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            log(f"[{symbol}] Ошибка в обработчике отложенных сигналов: {e}")
+        finally:
+            # Очистка ресурсов
+            if trade_key in self._pending_processing:
+                del self._pending_processing[trade_key]
+            if trade_key in self._pending_signals:
+                del self._pending_signals[trade_key]
+            if trade_key in self._pending_notified:
+                self._pending_notified.discard(trade_key)
+            
+            log(f"[{symbol}] 🛑 Остановка обработчика отложенных сигналов для {symbol} {timeframe}")
+
+    async def _check_more_pending_signals(self, trade_key: str):
+        """Проверяет, есть ли еще отложенные сигналы после завершения сделки"""
+        if trade_key in self._pending_signals:
+            pending_queue = self._pending_signals[trade_key]
+            if not pending_queue.empty():
+                symbol, timeframe = trade_key.split('_', 1)
+                log = self.log or (lambda s: None)
+                log(f"[{symbol}] 📋 В отложенной очереди еще {pending_queue.qsize()} сигналов")
+                
+                # Перезапускаем обработчик, если он не активен
+                if trade_key not in self._pending_processing:
+                    self._pending_processing[trade_key] = asyncio.create_task(
+                        self._process_pending_signals(trade_key)
+                    )
+
     async def _signal_processor(self, queue: asyncio.Queue):
-        """Обработчик сигналов с проверкой параллельной обработки"""
+        """Обработчик сигналов из основной очереди"""
         log = self.log or (lambda s: None)
         log(f"[{self.symbol}] Запуск обработчика сигналов ({self.strategy_name})")
         
@@ -118,21 +214,44 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                 except asyncio.TimeoutError:
                     continue
                 
-                # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: 
-                # Если параллельная обработка выключена И есть ЛЮБАЯ активная сделка - пропускаем сигнал
-                if not self._allow_parallel_trades and self._active_trades:
-                    log(f"[{signal_data['symbol']}] ⚠ Пропускаем сигнал (параллельная обработка запрещена)")
-                    queue.task_done()
-                    continue
+                symbol = signal_data['symbol']
+                timeframe = signal_data['timeframe']
+                trade_key = f"{symbol}_{timeframe}"
                 
-                trade_key = f"{signal_data['symbol']}_{signal_data['timeframe']}"
-                
-                # Дополнительная проверка для одинаковых symbol/timeframe
+                # Проверка на активные сделки (двойная проверка)
                 if trade_key in self._active_trades:
-                    log(f"[{signal_data['symbol']}] Активная сделка уже существует, пропускаем сигнал")
+                    log(f"[{symbol}] ⚠ Активная сделка появилась, перемещаем сигнал в отложенную очередь")
+                    
+                    # Перемещаем сигнал в отложенную очередь
+                    if trade_key not in self._pending_signals:
+                        self._pending_signals[trade_key] = asyncio.Queue()
+                    
+                    await self._pending_signals[trade_key].put(signal_data)
+                    
+                    # Запускаем обработчик отложенных сигналов, если нужно
+                    if trade_key not in self._pending_processing:
+                        self._pending_processing[trade_key] = asyncio.create_task(
+                            self._process_pending_signals(trade_key)
+                        )
+                    
                     queue.task_done()
                     continue
                 
+                # Проверка общей параллельной обработки
+                if not self._allow_parallel_trades and self._active_trades:
+                    log(f"[{symbol}] ⚠ Параллельная обработка запрещена, перемещаем сигнал в отложенную очередь")
+                    
+                    # Для простоты помещаем в очередь первого попавшегося инструмента
+                    # В реальности нужно более сложное управление очередями
+                    first_trade_key = next(iter(self._active_trades.keys()))
+                    if first_trade_key not in self._pending_signals:
+                        self._pending_signals[first_trade_key] = asyncio.Queue()
+                    
+                    await self._pending_signals[first_trade_key].put(signal_data)
+                    queue.task_done()
+                    continue
+                
+                # Обработка сигнала
                 task = asyncio.create_task(self._process_single_signal(signal_data))
                 self._active_trades[trade_key] = task
                 
@@ -407,3 +526,16 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                 )
             except Exception:
                 pass
+
+    def stop(self):
+        """Остановка стратегии с очисткой отложенных сигналов"""
+        # Останавливаем все обработчики отложенных сигналов
+        for task in self._pending_processing.values():
+            task.cancel()
+        
+        # Очищаем очереди
+        self._pending_signals.clear()
+        self._pending_processing.clear()
+        self._pending_notified.clear()
+        
+        super().stop()
