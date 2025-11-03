@@ -69,23 +69,20 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         self._next_expire_dt = signal_data.get('next_expire')
         signal_received_time = signal_data['timestamp']
        
-        # Проверяем актуальность сигнала перед началом серии
+        # ПРОВЕРКА АКТУАЛЬНОСТИ СИГНАЛА С НОВОЙ ЛОГИКОЙ
         current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
-        max_age = self._max_signal_age_seconds()
-       
-        if max_age > 0:
-            deadline = signal_received_time + timedelta(seconds=max_age)
-            if current_time > deadline:
-                log(f"[{symbol}] Сигнал устарел перед началом серии: свеча {signal_received_time.strftime('%H:%M:%S')} + {max_age}s = {deadline.strftime('%H:%M:%S')}, сейчас {current_time.strftime('%H:%M:%S')}")
-                return
-       
-        # Проверяем окно classic перед началом серии
+        
         if self._trade_type == "classic":
-            next_expire = signal_data.get('next_expire')
-            if next_expire and current_time >= next_expire:
-                log(f"[{symbol}] Окно classic закрыто перед началом серии: {next_expire.strftime('%H:%M:%S')}")
+            is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time)
+            if not is_valid:
+                log(f"[{symbol}] ❌ Сигнал неактуален для classic: {reason}")
                 return
-       
+        else:
+            is_valid, reason = self._is_signal_valid_for_sprint(signal_data, current_time)
+            if not is_valid:
+                log(f"[{symbol}] ❌ Сигнал неактуален для sprint: {reason}")
+                return
+
         await self._run_oscar_grind_series(symbol, timeframe, direction, log, signal_received_time, signal_data)
 
     async def _run_oscar_grind_series(
@@ -125,22 +122,22 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             if not await self.ensure_account_conditions():
                 continue
                 
+            # ПРОВЕРКА АКТУАЛЬНОСТИ В ПРОЦЕССЕ СЕРИИ
             current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
-            max_age = self._max_signal_age_seconds()
             
-            # === УСТАРЕВАНИЕ: signal_time + max_age ===
-            if max_age > 0:
-                deadline = signal_received_time + timedelta(seconds=max_age)
-                if current_time > deadline:
-                    log(f"[{symbol}] Сигнал устарел: свеча {signal_received_time.strftime('%H:%M:%S')} + {max_age}s = {deadline.strftime('%H:%M:%S')}, сейчас {current_time.strftime('%H:%M:%S')}")
-                    return  # Просто выходим, не завершая серию
-                    
-            # === Classic: окно размещения ===
             if self._trade_type == "classic":
-                next_expire = signal_data.get('next_expire')
-                if next_expire and current_time >= next_expire:
-                    log(f"[{symbol}] Окно classic закрыто: {next_expire.strftime('%H:%M:%S')}")
-                    return  # Просто выходим, не завершая серию
+                is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time)
+                if not is_valid:
+                    log(f"[{symbol}] ❌ Сигнал стал неактуален в процессе серии: {reason}")
+                    return
+            else:
+                is_valid, reason = self._is_signal_valid_for_sprint(
+                    {'timestamp': signal_received_time}, 
+                    current_time
+                )
+                if not is_valid:
+                    log(f"[{symbol}] ❌ Сигнал стал неактуален в процессе серии: {reason}")
+                    return
                     
             pct, balance = await self.check_payout_and_balance(symbol, stake, min_pct, wait_low)
             if pct is None:
