@@ -1,4 +1,3 @@
-# oscar_grind_base.py
 from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta
@@ -27,7 +26,7 @@ OSCAR_GRIND_DEFAULTS = {
 
 class OscarGrindBaseStrategy(BaseTradingStrategy):
     """Oscar Grind: глобальная блокировка при allow_parallel_trades=False"""
-
+    
     def __init__(
         self,
         http_client,
@@ -44,7 +43,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         oscar_params = dict(OSCAR_GRIND_DEFAULTS)
         if params:
             oscar_params.update(params)
-
+            
         super().__init__(
             http_client=http_client,
             user_id=user_id,
@@ -57,338 +56,121 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             **kwargs,
         )
 
-        # Очереди и задачи
-        self._signal_queues: Dict[str, asyncio.Queue] = {}
-        self._signal_processors: Dict[str, asyncio.Task] = {}
-        self._pending_signals: Dict[str, asyncio.Queue] = {}
-        self._pending_processing: Dict[str, asyncio.Task] = {}
-
-        # Глобальная блокировка — только одна сделка в системе
-        self._global_trade_lock = asyncio.Lock()
-
-    async def _signal_listener(self, queue: asyncio.Queue):
-        """Прослушиватель — кладёт в нужную очередь по trade_key"""
-        log = self.log or (lambda s: None)
-        log(f"[*] Запуск прослушивателя сигналов ({self.strategy_name})")
-
-        while self._running:
-            await self._pause_point()
-
-            try:
-                direction, ver, meta = await self._fetch_signal_payload(self._last_signal_ver)
-
-                # === ИЗВЛЕКАЕМ timestamp (время свечи) и next_timestamp ===
-                signal_timestamp = datetime.now(ZoneInfo(MOSCOW_TZ))
-                next_expire = None
-
-                if meta and isinstance(meta, dict):
-                    ts_raw = meta.get('timestamp')
-                    if ts_raw and isinstance(ts_raw, datetime):
-                        signal_timestamp = ts_raw.astimezone(ZoneInfo(MOSCOW_TZ))
-                    
-                    next_raw = meta.get('next_timestamp')
-                    if next_raw and isinstance(next_raw, datetime):
-                        next_expire = next_raw.astimezone(ZoneInfo(MOSCOW_TZ))
-
-                signal_data = {
-                    'direction': direction,
-                    'version': ver,
-                    'meta': meta,
-                    'symbol': meta.get('symbol') if meta else self.symbol,
-                    'timeframe': meta.get('timeframe') if meta else self.timeframe,
-                    'timestamp': signal_timestamp,
-                    'indicator': meta.get('indicator') if meta else '-',
-                    'next_expire': next_expire,
-                }
-
-                symbol = signal_data['symbol']
-                timeframe = signal_data['timeframe']
-                trade_key = f"{symbol}_{timeframe}"
-
-                self._last_signal_ver = ver
-                self._last_signal_at_str = signal_timestamp.strftime("%d.%m.%Y %H:%M:%S")
-
-                # Создаём очередь
-                if trade_key not in self._signal_queues:
-                    self._signal_queues[trade_key] = asyncio.Queue()
-                    self._signal_processors[trade_key] = asyncio.create_task(
-                        self._process_signal_queue(trade_key)
-                    )
-
-                await self._signal_queues[trade_key].put(signal_data)
-                log(f"[{symbol}] Сигнал добавлен: свеча {signal_timestamp.strftime('%H:%M:%S')}")
-
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                log(f"[*] Ошибка в прослушивателе: {e}")
-                await asyncio.sleep(1.0)
-
-    async def _process_signal_queue(self, trade_key: str):
-        """Обрабатывает очередь — с глобальной блокировкой при allow_parallel=False"""
-        queue = self._signal_queues[trade_key]
-        symbol, timeframe = trade_key.split('_', 1)
-        log = self.log or (lambda s: None)
-        allow_parallel = self.params.get("allow_parallel_trades", True)
-
-        log(f"[{symbol}] Запуск обработчика очереди {trade_key} (allow_parallel={allow_parallel})")
-
-        while self._running:
-            await self._pause_point()
-
-            try:
-                signal_data = await queue.get()
-
-                if not allow_parallel:
-                    # === ГЛОБАЛЬНАЯ БЛОКИРОВКА ДЛЯ ВСЕХ СИМВОЛОВ ===
-                    if self._global_trade_lock.locked():
-                        # ЗАМЕНА: вместо очереди просто заменяем последний отложенный сигнал
-                        if trade_key not in self._pending_signals:
-                            self._pending_signals[trade_key] = asyncio.Queue(maxsize=1)  # Только 1 слот!
-                        
-                        # Очищаем очередь и кладём только последний сигнал
-                        while not self._pending_signals[trade_key].empty():
-                            try:
-                                self._pending_signals[trade_key].get_nowait()
-                                self._pending_signals[trade_key].task_done()
-                            except asyncio.QueueEmpty:
-                                break
-                        
-                        # Если очередь полная, это значит есть старый сигнал - заменяем его
-                        try:
-                            self._pending_signals[trade_key].put_nowait(signal_data)
-                        except asyncio.QueueFull:
-                            # Удаляем старый и кладём новый
-                            try:
-                                self._pending_signals[trade_key].get_nowait()
-                                self._pending_signals[trade_key].task_done()
-                            except asyncio.QueueEmpty:
-                                pass
-                            self._pending_signals[trade_key].put_nowait(signal_data)
-                        
-                        log(f"[{symbol}] Сигнал отложен (идёт другая сделка в системе)")
-
-                        if trade_key not in self._pending_processing:
-                            self._pending_processing[trade_key] = asyncio.create_task(
-                                self._process_pending_signals(trade_key)
-                            )
-                        queue.task_done()
-                        continue
-
-                    # Блокируем и обрабатываем - ОДНА сделка на всю систему
-                    async with self._global_trade_lock:
-                        log(f"[{symbol}] Получена глобальная блокировка, начало обработки")
-                        task = asyncio.create_task(self._process_single_signal(signal_data))
-                        await task  # Ждём завершения ПОД блокировкой
-                        log(f"[{symbol}] Освобождение глобальной блокировки")
-
-                else:
-                    # === ПАРАЛЛЕЛЬНЫЕ СДЕЛКИ ===
-                    if trade_key in self._active_trades:
-                        if trade_key not in self._pending_signals:
-                            self._pending_signals[trade_key] = asyncio.Queue()
-
-                        while not self._pending_signals[trade_key].empty():
-                            try:
-                                self._pending_signals[trade_key].get_nowait()
-                                self._pending_signals[trade_key].task_done()
-                            except asyncio.QueueEmpty:
-                                break
-
-                        await self._pending_signals[trade_key].put(signal_data)
-                        log(f"[{symbol}] Сигнал отложен (активная сделка по этому символу)")
-
-                        if trade_key not in self._pending_processing:
-                            self._pending_processing[trade_key] = asyncio.create_task(
-                                self._process_pending_signals(trade_key)
-                            )
-                    else:
-                        task = asyncio.create_task(self._process_single_signal(signal_data))
-                        self._active_trades[trade_key] = task
-
-                        def cleanup(fut):
-                            self._active_trades.pop(trade_key, None)
-                            queue.task_done()
-                            asyncio.create_task(self._check_more_pending_signals(trade_key))
-
-                        task.add_done_callback(cleanup)
-
-                queue.task_done()
-
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                log(f"[{symbol}] Ошибка в обработчике: {e}")
-                queue.task_done()
-
-        log(f"[{symbol}] Остановка обработчика {trade_key}")
-
-    async def _process_pending_signals(self, trade_key: str):
-        """Обрабатывает отложку после завершения сделки - ТОЛЬКО ПОСЛЕДНИЙ СИГНАЛ"""
-        symbol, _ = trade_key.split('_', 1)
-        log = self.log or (lambda s: None)
-        allow_parallel = self.params.get("allow_parallel_trades", True)
-
-        try:
-            if not allow_parallel:
-                # Для непараллельного режима - обрабатываем только один отложенный сигнал
-                async with self._global_trade_lock:
-                    log(f"[{symbol}] Получена глобальная блокировка для отложенного сигнала")
-                    await self._process_one_pending(trade_key)
-                    log(f"[{symbol}] Освобождение глобальной блокировки для отложенного сигнала")
-            else:
-                # Для параллельного режима - ждём завершения активной сделки
-                wait_start = asyncio.get_event_loop().time()
-                while trade_key in self._active_trades and self._running:
-                    if asyncio.get_event_loop().time() - wait_start > 60.0:
-                        break
-                    await asyncio.sleep(0.1)
-                if not self._running:
-                    return
-                await self._process_one_pending(trade_key)
-
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            log(f"[{symbol}] Ошибка в отложке: {e}")
-        finally:
-            self._pending_processing.pop(trade_key, None)
-
-    async def _process_one_pending(self, trade_key: str):
-        """Обрабатывает один отложенный сигнал"""
-        symbol, _ = trade_key.split('_', 1)
-        log = self.log or (lambda s: None)
-
-        if trade_key not in self._pending_signals or self._pending_signals[trade_key].empty():
-            return
-
-        last_signal = None
-        while True:
-            try:
-                last_signal = self._pending_signals[trade_key].get_nowait()
-                self._pending_signals[trade_key].task_done()
-            except asyncio.QueueEmpty:
-                break
-
-        if last_signal:
-            log(f"[{symbol}] Запуск отложенного сигнала")
-            task = asyncio.create_task(self._process_single_signal(last_signal))
-            if not self.params.get("allow_parallel_trades", True):
-                await task  # Ждём
-            else:
-                self._active_trades[trade_key] = task
-                task.add_done_callback(lambda f: self._active_trades.pop(trade_key, None))
-
-    async def _check_more_pending_signals(self, trade_key: str):
-        if trade_key in self._pending_signals and not self._pending_signals[trade_key].empty():
-            symbol, _ = trade_key.split('_', 1)
-            log = self.log or (lambda s: None)
-            log(f"[{symbol}] Есть отложенные — перезапуск")
-            if trade_key not in self._pending_processing:
-                self._pending_processing[trade_key] = asyncio.create_task(
-                    self._process_pending_signals(trade_key)
-                )
-
     async def _process_single_signal(self, signal_data: dict):
+        """Обработка одного сигнала для Oscar Grind"""
         symbol = signal_data['symbol']
         timeframe = signal_data['timeframe']
         direction = signal_data['direction']
+        
         log = self.log or (lambda s: None)
-
-        log(f"[{symbol}] Начало обработки сигнала")
+        log(f"[{symbol}] Начало обработки сигнала Oscar Grind")
+        
         self._last_indicator = signal_data['indicator']
         self._next_expire_dt = signal_data.get('next_expire')
         signal_received_time = signal_data['timestamp']
-        
+       
         # Проверяем актуальность сигнала перед началом серии
         current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
         max_age = self._max_signal_age_seconds()
-        
+       
         if max_age > 0:
             deadline = signal_received_time + timedelta(seconds=max_age)
             if current_time > deadline:
                 log(f"[{symbol}] Сигнал устарел перед началом серии: свеча {signal_received_time.strftime('%H:%M:%S')} + {max_age}s = {deadline.strftime('%H:%M:%S')}, сейчас {current_time.strftime('%H:%M:%S')}")
                 return
-        
+       
         # Проверяем окно classic перед началом серии
         if self._trade_type == "classic":
             next_expire = signal_data.get('next_expire')
             if next_expire and current_time >= next_expire:
                 log(f"[{symbol}] Окно classic закрыто перед началом серии: {next_expire.strftime('%H:%M:%S')}")
                 return
-        
+       
         await self._run_oscar_grind_series(symbol, timeframe, direction, log, signal_received_time, signal_data)
 
-    async def _run_oscar_grind_series(self, symbol: str, timeframe: str, initial_direction: int, log, signal_received_time: datetime, signal_data: dict):
+    async def _run_oscar_grind_series(
+        self, 
+        symbol: str, 
+        timeframe: str, 
+        initial_direction: int, 
+        log, 
+        signal_received_time: datetime, 
+        signal_data: dict
+    ):
+        """Запускает серию Oscar Grind для конкретного сигнала"""
         series_left = int(self.params.get("repeat_count", 10))
         if series_left <= 0:
             log(f"[{symbol}] repeat_count=0")
             return
-
+            
         base_unit = float(self.params.get("base_investment", 100))
         target_profit = base_unit
         max_steps = int(self.params.get("max_steps", 20))
         min_pct = int(self.params.get("min_percent", 70))
         wait_low = float(self.params.get("wait_on_low_percent", 1))
         double_entry = bool(self.params.get("double_entry", True))
-
+        
         if max_steps <= 0:
             return
-
+            
         step_idx = 0
         cum_profit = 0.0
         stake = base_unit
         series_started = False
         series_direction = initial_direction
         repeat_trade = False
-
+        
         while self._running and step_idx < max_steps:
             await self._pause_point()
             if not await self.ensure_account_conditions():
                 continue
-
+                
             current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
             max_age = self._max_signal_age_seconds()
-
+            
             # === УСТАРЕВАНИЕ: signal_time + max_age ===
             if max_age > 0:
                 deadline = signal_received_time + timedelta(seconds=max_age)
                 if current_time > deadline:
                     log(f"[{symbol}] Сигнал устарел: свеча {signal_received_time.strftime('%H:%M:%S')} + {max_age}s = {deadline.strftime('%H:%M:%S')}, сейчас {current_time.strftime('%H:%M:%S')}")
                     return  # Просто выходим, не завершая серию
-
+                    
             # === Classic: окно размещения ===
             if self._trade_type == "classic":
                 next_expire = signal_data.get('next_expire')
                 if next_expire and current_time >= next_expire:
                     log(f"[{symbol}] Окно classic закрыто: {next_expire.strftime('%H:%M:%S')}")
                     return  # Просто выходим, не завершая серию
-
+                    
             pct, balance = await self.check_payout_and_balance(symbol, stake, min_pct, wait_low)
             if pct is None:
                 continue
-
+                
             log(f"[{symbol}] step={step_idx + 1} stake={format_amount(stake)} side={'UP' if series_direction == 1 else 'DOWN'} payout={pct}%")
-
+            
             try:
                 demo_now = await is_demo_account(self.http_client)
             except Exception:
                 demo_now = False
             account_mode = "ДЕМО" if demo_now else "РЕАЛ"
-
+            
             self._status("ставка")
             trade_id = await self.place_trade_with_retry(symbol, series_direction, stake, self._anchor_ccy)
+            
             if not trade_id:
                 log(f"[{symbol}] Не удалось разместить")
                 await asyncio.sleep(2.0)
                 continue
-
+                
             trade_seconds, expected_end_ts = self._calculate_trade_duration(symbol)
             wait_seconds = self.params.get("result_wait_s", trade_seconds)
-
-            self._notify_pending_trade(trade_id, symbol, timeframe, series_direction, stake, pct, trade_seconds, account_mode, expected_end_ts)
+            
+            self._notify_pending_trade(
+                trade_id, symbol, timeframe, series_direction, stake, pct, 
+                trade_seconds, account_mode, expected_end_ts
+            )
             self._register_pending_trade(trade_id, symbol, timeframe)
-
+            
             profit = await self.wait_for_trade_result(
                 trade_id=trade_id,
                 wait_seconds=float(wait_seconds),
@@ -402,14 +184,14 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                 account_mode=account_mode,
                 indicator=self._last_indicator,
             )
-
+            
             if profit is None:
                 profit_val = -float(stake)
                 outcome = "loss"
             else:
                 profit_val = float(profit)
                 outcome = "win" if profit_val > 0 else "refund" if profit_val == 0 else "loss"
-
+                
             if not series_started:
                 if outcome == "loss":
                     series_started = True
@@ -419,11 +201,11 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                     continue
             else:
                 cum_profit += profit_val
-
+                
             if cum_profit >= target_profit:
                 log(f"[{symbol}] Цель достигнута: {format_amount(cum_profit)}")
                 break
-
+                
             need = max(0.0, target_profit - cum_profit)
             next_stake = self._next_stake(
                 outcome=outcome, stake=stake, base_unit=base_unit, pct=pct,
@@ -431,7 +213,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             )
             stake = float(next_stake)
             step_idx += 1
-
+            
             if repeat_trade:
                 repeat_trade = False
                 series_direction = None
@@ -440,76 +222,74 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                     repeat_trade = True
                 else:
                     series_direction = None
-
+                    
             await self.sleep(0.2)
-
+            
             if self._trade_type == "classic" and self._next_expire_dt is not None:
                 self._next_expire_dt += timedelta(minutes=_minutes_from_timeframe(timeframe))
-
+                
         if step_idx > 0:
             series_left -= 1
             log(f"[{symbol}] Осталось серий: {series_left}")
 
-    def _next_stake(self, *, outcome: str, stake: float, base_unit: float, pct: float, need: float, profit: float, cum_profit: float, log) -> float:
-        raise NotImplementedError()
+    def _next_stake(
+        self, 
+        *, 
+        outcome: str, 
+        stake: float, 
+        base_unit: float, 
+        pct: float, 
+        need: float, 
+        profit: float, 
+        cum_profit: float, 
+        log
+    ) -> float:
+        """Определяет следующую ставку - должен быть реализован в дочерних классах"""
+        raise NotImplementedError("Метод должен быть реализован в дочернем классе")
 
     def _calculate_trade_duration(self, symbol: str) -> tuple[float, float]:
+        """Рассчитывает длительность сделки"""
         if self._trade_type == "classic" and self._next_expire_dt is not None:
-            trade_seconds = max(0.0, (self._next_expire_dt - datetime.now(ZoneInfo(MOSCOW_TZ))).total_seconds())
+            trade_seconds = max(
+                0.0, 
+                (self._next_expire_dt - datetime.now(ZoneInfo(MOSCOW_TZ))).total_seconds()
+            )
             expected_end_ts = self._next_expire_dt.timestamp()
         else:
             trade_seconds = float(self._trade_minutes) * 60.0
             expected_end_ts = datetime.now().timestamp() + trade_seconds
+            
         return trade_seconds, expected_end_ts
 
-    def _notify_pending_trade(self, trade_id: str, symbol: str, timeframe: str, direction: int,
-                              stake: float, percent: int, trade_seconds: float,
-                              account_mode: str, expected_end_ts: float):
+    def _notify_pending_trade(
+        self, 
+        trade_id: str, 
+        symbol: str, 
+        timeframe: str, 
+        direction: int,
+        stake: float, 
+        percent: int, 
+        trade_seconds: float,
+        account_mode: str, 
+        expected_end_ts: float
+    ):
+        """Уведомляет о pending сделке"""
         placed_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
         if callable(self._on_trade_pending):
             try:
                 self._on_trade_pending(
-                    trade_id=trade_id, symbol=symbol, timeframe=timeframe,
-                    signal_at=self._last_signal_at_str, placed_at=placed_at_str,
-                    direction=direction, stake=float(stake), percent=int(percent),
-                    wait_seconds=float(trade_seconds), account_mode=account_mode,
-                    indicator=self._last_indicator, expected_end_ts=expected_end_ts,
+                    trade_id=trade_id, 
+                    symbol=symbol, 
+                    timeframe=timeframe,
+                    signal_at=self._last_signal_at_str, 
+                    placed_at=placed_at_str,
+                    direction=direction, 
+                    stake=float(stake), 
+                    percent=int(percent),
+                    wait_seconds=float(trade_seconds), 
+                    account_mode=account_mode,
+                    indicator=self._last_indicator, 
+                    expected_end_ts=expected_end_ts,
                 )
             except Exception:
                 pass
-
-    def stop(self):
-        # Отменяем все задачи
-        all_tasks = []
-        all_tasks.extend(self._signal_processors.values())
-        all_tasks.extend(self._pending_processing.values())
-        all_tasks.extend(self._active_trades.values())
-        
-        for task in all_tasks:
-            if not task.done():
-                task.cancel()
-        
-        # Очищаем все очереди
-        for queue in list(self._signal_queues.values()):
-            while not queue.empty():
-                try:
-                    queue.get_nowait()
-                    queue.task_done()
-                except asyncio.QueueEmpty:
-                    break
-        
-        for queue in list(self._pending_signals.values()):
-            while not queue.empty():
-                try:
-                    queue.get_nowait()
-                    queue.task_done()
-                except asyncio.QueueEmpty:
-                    break
-        
-        self._signal_queues.clear()
-        self._signal_processors.clear()
-        self._pending_signals.clear()
-        self._pending_processing.clear()
-        self._active_trades.clear()
-
-        super().stop()
