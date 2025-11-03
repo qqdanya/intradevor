@@ -6,7 +6,6 @@ from typing import Optional, Tuple, Dict, Callable, Awaitable
 from datetime import datetime
 # --- helpers ---------------------------------------------------------
 def _tf_to_seconds(tf: str) -> Optional[int]:
-    """'M1','M5','H1','D1','W1' -> длительность таймфрейма в секундах (если распознали)."""
     if not tf:
         return None
     tf = str(tf).upper()
