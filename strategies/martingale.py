@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
 
 from strategies.base_trading_strategy import BaseTradingStrategy, _minutes_from_timeframe
+from strategies.constants import MOSCOW_TZ
 from core.money import format_amount
 from core.intrade_api_async import is_demo_account
 
@@ -64,7 +65,7 @@ class MartingaleStrategy(BaseTradingStrategy):
         self._last_signal_at_str = signal_data['timestamp'].strftime("%d.%m.%Y %H:%M:%S")
         
         ts = signal_data['meta'].get('next_timestamp') if signal_data['meta'] else None
-        self._next_expire_dt = ts.astimezone(ZoneInfo("Europe/Moscow")) if ts else None
+        self._next_expire_dt = ts.astimezone(ZoneInfo(MOSCOW_TZ)) if ts else None
 
         # Обновляем символ и таймфрейм если используются "все"
         if self._use_any_symbol:
@@ -191,7 +192,6 @@ class MartingaleStrategy(BaseTradingStrategy):
 
             # Обновляем время экспирации для classic
             if self._trade_type == "classic" and self._next_expire_dt is not None:
-                from datetime import timedelta
                 self._next_expire_dt += timedelta(
                     minutes=_minutes_from_timeframe(timeframe)
                 )
@@ -204,11 +204,10 @@ class MartingaleStrategy(BaseTradingStrategy):
 
     def _calculate_trade_duration(self, symbol: str) -> tuple[float, float]:
         """Рассчитывает длительность сделки"""
-        from datetime import datetime
         if self._trade_type == "classic" and self._next_expire_dt is not None:
             trade_seconds = max(
                 0.0,
-                (self._next_expire_dt - datetime.now(ZoneInfo("Europe/Moscow"))).total_seconds(),
+                (self._next_expire_dt - datetime.now(ZoneInfo(MOSCOW_TZ))).total_seconds(),
             )
             expected_end_ts = self._next_expire_dt.timestamp()
         else:
