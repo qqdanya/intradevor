@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -128,6 +129,13 @@ class FixedStakeStrategy(StrategyBase):
 
         self._pending_tasks: set[asyncio.Task] = set()
         self._pending_for_status: dict[str, tuple[str, str]] = {}
+        
+        # Новые атрибуты для параллельной обработки
+        self._signal_queue: Optional[asyncio.Queue] = None
+        self._signal_listener_task: Optional[asyncio.Task] = None
+        self._signal_processor_task: Optional[asyncio.Task] = None
+        self._active_trades: dict[str, asyncio.Task] = {}  # symbol_timeframe -> task
+        self._trades_counter: int = 0  # Счетчик сделок
 
         def _status(msg: str):
             cb = self._on_status
@@ -184,6 +192,30 @@ class FixedStakeStrategy(StrategyBase):
     def _unregister_pending_trade(self, trade_id: str) -> None:
         self._pending_for_status.pop(str(trade_id), None)
         self._update_pending_status()
+
+    def _launch_trade_result_task(self, task: asyncio.Task) -> None:
+        self._pending_tasks.add(task)
+
+        def _cleanup(fut: asyncio.Future) -> None:
+            self._pending_tasks.discard(task)
+
+        task.add_done_callback(_cleanup)
+
+    def stop(self):
+        # Останавливаем все задачи
+        if self._signal_listener_task:
+            self._signal_listener_task.cancel()
+        if self._signal_processor_task:
+            self._signal_processor_task.cancel()
+            
+        for task in list(self._pending_tasks):
+            task.cancel()
+        for task in list(self._active_trades.values()):
+            task.cancel()
+            
+        self._pending_for_status.clear()
+        self._active_trades.clear()
+        super().stop()
 
     async def _wait_for_trade_result(
         self,
@@ -242,21 +274,307 @@ class FixedStakeStrategy(StrategyBase):
 
         self._unregister_pending_trade(trade_id)
 
-    def _launch_trade_result_task(self, task: asyncio.Task) -> None:
-        self._pending_tasks.add(task)
+    async def _signal_listener(self, queue: asyncio.Queue):
+        """Прослушивает сигналы и добавляет их в очередь"""
+        log = self.log or (lambda s: None)
+        log(f"[{self.symbol}] Запуск прослушивателя сигналов")
+        
+        while self._running:
+            await self._pause_point()
+            
+            try:
+                direction, ver, meta = await self._fetch_signal_payload(self._last_signal_ver)
+                
+                signal_data = {
+                    'direction': direction,
+                    'version': ver,
+                    'meta': meta,
+                    'symbol': meta.get('symbol') if meta else self.symbol,
+                    'timeframe': meta.get('timeframe') if meta else self.timeframe,
+                    'timestamp': datetime.now(),
+                    'indicator': meta.get('indicator') if meta else '-'
+                }
+                
+                await queue.put(signal_data)
+                log(f"[{signal_data['symbol']}] Сигнал добавлен в очередь")
+                
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                log(f"[{self.symbol}] Ошибка в прослушивателе сигналов: {e}")
+                await asyncio.sleep(1.0)
 
-        def _cleanup(fut: asyncio.Future) -> None:
-            self._pending_tasks.discard(task)
+    async def _signal_processor(self, queue: asyncio.Queue):
+        """Обрабатывает сигналы из очереди"""
+        log = self.log or (lambda s: None)
+        log(f"[{self.symbol}] Запуск обработчика сигналов")
+        
+        while self._running:
+            await self._pause_point()
+            
+            try:
+                # Ждем сигнал из очереди с таймаутом для проверки running
+                try:
+                    signal_data = await asyncio.wait_for(queue.get(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    continue
+                
+                # Проверяем лимит сделок
+                if self._trades_counter >= int(self.params.get("repeat_count", DEFAULTS["repeat_count"])):
+                    log(f"[{signal_data['symbol']}] Достигнут лимит сделок, пропускаем сигнал")
+                    queue.task_done()
+                    continue
+                
+                # Создаем независимую задачу для обработки каждого сигнала
+                trade_key = f"{signal_data['symbol']}_{signal_data['timeframe']}"
+                
+                # Если уже есть активная сделка для этого инструмента/таймфрейма, пропускаем
+                if trade_key in self._active_trades and not self._allow_parallel_trades:
+                    log(f"[{signal_data['symbol']}] Активная сделка уже существует, пропускаем сигнал")
+                    queue.task_done()
+                    continue
+                
+                task = asyncio.create_task(self._process_single_signal(signal_data))
+                self._active_trades[trade_key] = task
+                
+                def cleanup(fut):
+                    self._active_trades.pop(trade_key, None)
+                    queue.task_done()
+                
+                task.add_done_callback(cleanup)
+                
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                log(f"[{self.symbol}] Ошибка в обработчике сигналов: {e}")
+                queue.task_done()
 
-        task.add_done_callback(_cleanup)
+    async def _process_single_signal(self, signal_data: dict):
+        """Обрабатывает один сигнал независимо от других"""
+        symbol = signal_data['symbol']
+        timeframe = signal_data['timeframe']
+        direction = signal_data['direction']
+        
+        log = self.log or (lambda s: None)
+        log(f"[{symbol}] Начало обработки сигнала Fixed Stake")
+        
+        # Обновляем последнюю информацию о сигнале
+        self._last_signal_ver = signal_data['version']
+        self._last_indicator = signal_data['indicator']
+        self._last_signal_at_str = signal_data['timestamp'].strftime("%d.%m.%Y %H:%M:%S")
+        
+        ts = signal_data['meta'].get('next_timestamp') if signal_data['meta'] else None
+        self._next_expire_dt = ts.astimezone(MOSCOW_TZ) if ts else None
 
-    def stop(self):
-        for task in list(self._pending_tasks):
-            task.cancel()
-        self._pending_for_status.clear()
-        super().stop()
+        # Обновляем символ и таймфрейм если используются "все"
+        if self._use_any_symbol:
+            self.symbol = symbol
+        if self._use_any_timeframe:
+            self.timeframe = timeframe
+            self.params["timeframe"] = self.timeframe
+            raw = _minutes_from_timeframe(self.timeframe)
+            norm = normalize_sprint(self.symbol, raw) or raw
+            self._trade_minutes = int(norm)
+            self.params["minutes"] = self._trade_minutes
+
+        try:
+            self._last_signal_monotonic = asyncio.get_running_loop().time()
+        except RuntimeError:
+            self._last_signal_monotonic = None
+
+        # Запускаем обработку сделки с фиксированной ставкой
+        await self._process_fixed_trade(symbol, timeframe, direction, log)
+
+    async def _process_fixed_trade(self, symbol: str, timeframe: str, direction: int, log):
+        """Обрабатывает одну сделку с фиксированной ставкой"""
+        # Проверяем баланс
+        try:
+            bal, _, _ = await get_balance_info(
+                self.http_client, self.user_id, self.user_hash
+            )
+        except Exception:
+            bal = 0.0
+
+        min_balance = float(self.params.get("min_balance", DEFAULTS["min_balance"]))
+        if bal < min_balance:
+            log(f"[{symbol}] ⛔ Баланс ниже минимума ({format_amount(bal)} < {format_amount(min_balance)}). Пропускаем сигнал.")
+            return
+
+        stake = float(self.params.get("base_investment", DEFAULTS["base_investment"]))
+        min_pct = int(self.params.get("min_percent", DEFAULTS["min_percent"]))
+        wait_low = float(self.params.get("wait_on_low_percent", DEFAULTS["wait_on_low_percent"]))
+        account_ccy = self._anchor_ccy
+
+        # Проверяем возраст сигнала
+        max_age = self._max_signal_age_seconds()
+        if max_age > 0 and self._last_signal_monotonic is not None:
+            age = asyncio.get_running_loop().time() - self._last_signal_monotonic
+            if age > max_age:
+                log(f"[{symbol}] ⚠ Сигнал устарел ({age:.1f}s > {max_age:.0f}s). Пропускаем.")
+                return
+
+        # Получаем payout
+        pct = await get_current_percent(
+            self.http_client,
+            investment=stake,
+            option=symbol,
+            minutes=self._trade_minutes,
+            account_ccy=account_ccy,
+            trade_type=self._trade_type,
+        )
+        
+        if pct is None:
+            self._status("ожидание процента")
+            log(f"[{symbol}] ⚠ Не получили % выплаты. Пропускаем сигнал.")
+            return
+            
+        if pct < min_pct:
+            self._status("ожидание высокого процента")
+            if not self._low_payout_notified:
+                log(f"[{symbol}] ℹ Низкий payout {pct}% < {min_pct}% — пропускаем сигнал.")
+                self._low_payout_notified = True
+            return
+            
+        if self._low_payout_notified:
+            log(f"[{symbol}] ℹ Работа продолжается (текущий payout = {pct}%)")
+            self._low_payout_notified = False
+
+        # Проверяем баланс для конкретной сделки
+        try:
+            cur_balance, _, _ = await get_balance_info(
+                self.http_client, self.user_id, self.user_hash
+            )
+        except Exception:
+            cur_balance = None
+            
+        min_floor = float(self.params.get("min_balance", DEFAULTS["min_balance"]))
+        if cur_balance is None or (cur_balance - stake) < min_floor:
+            log(f"[{symbol}] 🛑 Сделка {format_amount(stake)} {account_ccy} может опустить баланс ниже "
+                f"{format_amount(min_floor)} {account_ccy}"
+                + ("" if cur_balance is None else f" (текущий {format_amount(cur_balance)} {account_ccy})")
+                + ". Пропускаем сигнал.")
+            return
+
+        if not await self._ensure_anchor_currency():
+            return
+        if not await self._ensure_anchor_account_mode():
+            return
+
+        log(f"[{symbol}] stake={format_amount(stake)} min={self._trade_minutes} "
+            f"side={'UP' if direction == 1 else 'DOWN'} payout={pct}%")
+
+        try:
+            demo_now = await is_demo_account(self.http_client)
+        except Exception:
+            demo_now = False
+        account_mode = "ДЕМО" if demo_now else "РЕАЛ"
+
+        # Размещаем сделку
+        self._status("делает ставку")
+        trade_kwargs = {"trade_type": self._trade_type}
+        time_arg = self._trade_minutes
+        if self._trade_type == "classic":
+            if not self._next_expire_dt:
+                log(f"[{symbol}] ❌ Нет времени экспирации для classic. Пропускаем сигнал.")
+                return
+            time_arg = self._next_expire_dt.strftime("%H:%M")
+            trade_kwargs["date"] = self._next_expire_dt.strftime("%d-%m-%Y")
+            
+        attempt = 0
+        trade_id = None
+        while attempt < 4:
+            trade_id = await place_trade(
+                self.http_client,
+                user_id=self.user_id,
+                user_hash=self.user_hash,
+                investment=stake,
+                option=symbol,
+                status=direction,
+                minutes=time_arg,
+                account_ccy=account_ccy,
+                strict=True,
+                on_log=log,
+                **trade_kwargs,
+            )
+            if trade_id:
+                break
+            attempt += 1
+            if attempt < 4:
+                log(f"[{symbol}] ❌ Сделка не размещена. Пауза и повтор.")
+                await self.sleep(1.0)
+                
+        if not trade_id:
+            log(f"[{symbol}] ❌ Не удалось разместить сделку после 4 попыток. Пропускаем сигнал.")
+            return
+
+        # Увеличиваем счетчик сделок
+        self._trades_counter += 1
+
+        # Определяем длительность сделки
+        from datetime import datetime
+        if self._trade_type == "classic" and self._next_expire_dt is not None:
+            trade_seconds = max(
+                0.0,
+                (self._next_expire_dt - datetime.now(MOSCOW_TZ)).total_seconds(),
+            )
+            expected_end_ts = self._next_expire_dt.timestamp()
+        else:
+            trade_seconds = float(self._trade_minutes) * 60.0
+            expected_end_ts = datetime.now().timestamp() + trade_seconds
+
+        wait_seconds = self.params.get("result_wait_s")
+        if wait_seconds is None:
+            wait_seconds = trade_seconds
+        else:
+            wait_seconds = float(wait_seconds)
+
+        # Уведомляем о pending сделке
+        placed_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+        if callable(self._on_trade_pending):
+            try:
+                self._on_trade_pending(
+                    trade_id=trade_id,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    signal_at=self._last_signal_at_str,
+                    placed_at=placed_at_str,
+                    direction=direction,
+                    stake=float(stake),
+                    percent=int(pct),
+                    wait_seconds=float(trade_seconds),
+                    account_mode=account_mode,
+                    indicator=self._last_indicator,
+                    expected_end_ts=expected_end_ts,
+                )
+            except Exception:
+                pass
+
+        self._register_pending_trade(trade_id, symbol, timeframe)
+
+        # Ожидаем результат сделки
+        ctx = dict(
+            trade_id=trade_id,
+            wait_seconds=float(wait_seconds),
+            placed_at=placed_at_str,
+            signal_at=self._last_signal_at_str,
+            symbol=symbol,
+            timeframe=timeframe,
+            direction=direction,
+            stake=float(stake),
+            percent=int(pct),
+            account_mode=account_mode,
+            indicator=self._last_indicator,
+            log=log,
+        )
+
+        if self._allow_parallel_trades:
+            task = asyncio.create_task(self._wait_for_trade_result(**ctx))
+            self._launch_trade_result_task(task)
+        else:
+            await self._wait_for_trade_result(**ctx)
 
     async def run(self) -> None:
+        """Основной метод с параллельной архитектурой"""
         self._running = True
         log = self.log or (lambda s: None)
 
@@ -272,308 +590,49 @@ class FixedStakeStrategy(StrategyBase):
             amount, cur_ccy, display = await get_balance_info(
                 self.http_client, self.user_id, self.user_hash
             )
-            log(
-                f"[{self.symbol}] Баланс: {display} ({format_amount(amount)}), текущая валюта: {cur_ccy}"
-            )
+            log(f"[{self.symbol}] Баланс: {display} ({format_amount(amount)}), текущая валюта: {cur_ccy}")
         except Exception as e:
             log(f"[{self.symbol}] ⚠ Не удалось получить баланс при старте: {e}")
 
-        trades_left = int(self.params.get("repeat_count", DEFAULTS["repeat_count"]))
-        if trades_left <= 0:
-            log(
-                f"[{self.symbol}] 🛑 repeat_count={trades_left} — нечего выполнять. Завершение."
-            )
-            self._running = False
-            (self.log or (lambda s: None))(f"[{self.symbol}] Завершение стратегии.")
-            return
+        # Инициализируем очередь и задачи
+        self._signal_queue = asyncio.Queue()
+        self._signal_listener_task = asyncio.create_task(self._signal_listener(self._signal_queue))
+        self._signal_processor_task = asyncio.create_task(self._signal_processor(self._signal_queue))
 
+        # Ждем завершения стратегии (по лимиту сделок или остановке)
         try:
-            if self.symbol != "*" and self.timeframe != "*":
-                st = peek_signal_state(self.symbol, self.timeframe)
-                self._last_signal_ver = st.get("version", 0) or 0
-                if self.log:
-                    self.log(
-                        f"[{self.symbol}] Заякорена версия сигнала: v{self._last_signal_ver}"
-                    )
-            else:
-                self._last_signal_ver = 0
-        except Exception:
-            self._last_signal_ver = 0
+            max_trades = int(self.params.get("repeat_count", DEFAULTS["repeat_count"]))
+            while self._running and self._trades_counter < max_trades:
+                await asyncio.sleep(1.0)
+                # Обновляем статус
+                remaining = max_trades - self._trades_counter
+                if remaining > 0:
+                    self._status(f"сделок осталось: {remaining}")
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self._running = False
 
-        while self._running and trades_left > 0:
-            self._last_signal_at_str = None
-            self._last_signal_monotonic = None
-            await self._pause_point()
+        # Завершаем все задачи
+        if self._signal_listener_task:
+            self._signal_listener_task.cancel()
+        if self._signal_processor_task:
+            self._signal_processor_task.cancel()
 
-            if self._use_any_symbol:
-                self.symbol = "*"
-            if self._use_any_timeframe:
-                self.timeframe = "*"
-                self.params["timeframe"] = self.timeframe
-
-            if not await self._ensure_anchor_currency():
-                continue
-            if not await self._ensure_anchor_account_mode():
-                continue
-
-            max_age = self._max_signal_age_seconds()
-            if max_age > 0 and self._last_signal_monotonic is not None:
-                age = asyncio.get_running_loop().time() - self._last_signal_monotonic
-                if age > max_age:
-                    log(
-                        f"[{self.symbol}] ⚠ Сигнал устарел ({age:.1f}s > {max_age:.0f}s). Ждём новый."
-                    )
-                    self._status("ожидание сигнала")
-                    self._last_signal_monotonic = None
-                    await self.sleep(0.1)
-                    continue
-
-            try:
-                bal, _, _ = await get_balance_info(
-                    self.http_client, self.user_id, self.user_hash
-                )
-            except Exception:
-                bal = 0.0
-
-            min_balance = float(self.params.get("min_balance", DEFAULTS["min_balance"]))
-            if bal < min_balance:
-                log(
-                    f"[{self.symbol}] ⛔ Баланс ниже минимума ({format_amount(bal)} < {format_amount(min_balance)}). Ожидание..."
-                )
-                await self.sleep(2.0)
-                continue
-
-            stake = float(
-                self.params.get("base_investment", DEFAULTS["base_investment"])
-            )
-            min_pct = int(self.params.get("min_percent", DEFAULTS["min_percent"]))
-            wait_low = float(
-                self.params.get("wait_on_low_percent", DEFAULTS["wait_on_low_percent"])
-            )
-            sig_timeout = float(
-                self.params.get("signal_timeout_sec", DEFAULTS["signal_timeout_sec"])
-            )
-            account_ccy = self._anchor_ccy
-
-            status = None
-            if self.symbol == "*":
-                self._status("ожидание сигнала")
-                log(f"[{self.symbol}] ⏳ Ожидание сигнала на {self.timeframe}...")
-                try:
-                    direction = await self.wait_signal(timeout=sig_timeout)
-                except asyncio.TimeoutError:
-                    log(f"[{self.symbol}] ⌛ Таймаут ожидания сигнала — повтор.")
-                    await self.sleep(1.0)
-                    continue
-                status = 1 if int(direction) == 1 else 2
-
-            try:
-                pct = await get_current_percent(
-                    self.http_client,
-                    investment=stake,
-                    option=self.symbol,
-                    minutes=self._trade_minutes,
-                    account_ccy=account_ccy,
-                    trade_type=self._trade_type,
-                )
-            except Exception:
-                pct = None
-
-            if pct is None:
-                self._status("ожидание процента")
-                log(f"[{self.symbol}] ⚠ Не получили % выплаты. Пауза и повтор.")
-                await self.sleep(1.0)
-                continue
-
-            if pct < min_pct:
-                if wait_low > 0:
-                    if not self._low_payout_notified:
-                        log(
-                            f"[{self.symbol}] ℹ Текущий процент {pct}% ниже минимума {min_pct}%. Жду {wait_low}s"
-                        )
-                        self._low_payout_notified = True
-                    await self.sleep(wait_low)
-                    continue
-                else:
-                    log(
-                        f"[{self.symbol}] ⛔ Процент выплаты {pct}% ниже минимума {min_pct}%."
-                    )
-                    await self.sleep(1.0)
-                    continue
-
-            if self._low_payout_notified:
-                log(f"[{self.symbol}] ℹ Работа продолжается (текущий payout = {pct}%)")
-                self._low_payout_notified = False
-
-            if status is None:
-                self._status("ожидание сигнала")
-                log(f"[{self.symbol}] ⏳ Ожидание сигнала на {self.timeframe}...")
-
-                try:
-                    direction = await self.wait_signal(timeout=sig_timeout)
-                except asyncio.TimeoutError:
-                    log(f"[{self.symbol}] ⌛ Таймаут ожидания сигнала — повтор.")
-                    await self.sleep(1.0)
-                    continue
-
-                status = 1 if int(direction) == 1 else 2
-
-            try:
-                cur_balance, _, _ = await get_balance_info(
-                    self.http_client, self.user_id, self.user_hash
-                )
-            except Exception:
-                cur_balance = None
-
-            min_floor = float(self.params.get("min_balance", DEFAULTS["min_balance"]))
-            if cur_balance is None or (cur_balance - stake) < min_floor:
-                log(
-                    f"[{self.symbol}] 🛑 Сделка {format_amount(stake)} {account_ccy} может опустить баланс ниже {format_amount(min_floor)}"
-                    + (
-                        ""
-                        if cur_balance is None
-                        else f" (текущий {format_amount(cur_balance)} {account_ccy})"
-                    )
-                    + ". Останавливаю стратегию."
-                )
-                self._running = False
-                break
-
-            if not await self._ensure_anchor_currency():
-                continue
-            if not await self._ensure_anchor_account_mode():
-                continue
-
-            log(
-                f"[{self.symbol}] stake={format_amount(stake)} min={self._trade_minutes} side={'UP' if status == 1 else 'DOWN'} payout={pct}%"
-            )
-
-            try:
-                demo_now = await is_demo_account(self.http_client)
-            except Exception:
-                demo_now = False
-            account_mode = "ДЕМО" if demo_now else "РЕАЛ"
-
-            self._status("делает ставку")
-            trade_kwargs = {"trade_type": self._trade_type}
-            time_arg = self._trade_minutes
-            if self._trade_type == "classic":
-                if not self._next_expire_dt:
-                    log(
-                        f"[{self.symbol}] ❌ Нет времени экспирации для classic. Пауза и повтор."
-                    )
-                    await self.sleep(1.0)
-                    continue
-                time_arg = self._next_expire_dt.strftime("%H:%M")
-                trade_kwargs["date"] = self._next_expire_dt.strftime("%d-%m-%Y")
-            attempt = 0
-            trade_id = None
-            while attempt < 4:
-                trade_id = await place_trade(
-                    self.http_client,
-                    user_id=self.user_id,
-                    user_hash=self.user_hash,
-                    investment=stake,
-                    option=self.symbol,
-                    status=status,
-                    minutes=time_arg,
-                    account_ccy=account_ccy,
-                    strict=True,
-                    on_log=log,
-                    **trade_kwargs,
-                )
-                if trade_id:
-                    break
-                attempt += 1
-                if attempt < 4:
-                    log(f"[{self.symbol}] ❌ Сделка не размещена. Пауза и повтор.")
-                    await self.sleep(1.0)
-            if not trade_id:
-                log(
-                    f"[{self.symbol}] ❌ Не удалось разместить сделку после 4 попыток. Ждём новый сигнал."
-                )
-                status = None
-                continue
-
-            trades_left -= 1
-
-            # определяем длительность сделки (для таймера и ожидания результата)
-            from datetime import datetime
-
-            if self._trade_type == "classic" and self._next_expire_dt is not None:
-                trade_seconds = max(
-                    0.0,
-                    (self._next_expire_dt - datetime.now(MOSCOW_TZ)).total_seconds(),
-                )
-                expected_end_ts = self._next_expire_dt.timestamp()
-            else:
-                trade_seconds = float(self._trade_minutes) * 60.0
-                expected_end_ts = datetime.now().timestamp() + trade_seconds
-
-            wait_seconds = self.params.get("result_wait_s")
-            if wait_seconds is None:
-                wait_seconds = trade_seconds
-            else:
-                wait_seconds = float(wait_seconds)
-
-            placed_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-            trade_symbol = self.symbol
-            trade_timeframe = self.timeframe
-            if callable(self._on_trade_pending):
-                try:
-                    self._on_trade_pending(
-                        trade_id=trade_id,
-                        symbol=trade_symbol,
-                        timeframe=trade_timeframe,
-                        signal_at=self._last_signal_at_str,
-                        placed_at=placed_at_str,
-                        direction=status,
-                        stake=float(stake),
-                        percent=int(pct),
-                        wait_seconds=float(trade_seconds),
-                        account_mode=account_mode,
-                        indicator=self._last_indicator,
-                        expected_end_ts=expected_end_ts,
-                    )
-                except Exception:
-                    pass
-
-            self._register_pending_trade(trade_id, trade_symbol, trade_timeframe)
-
-            ctx = dict(
-                trade_id=trade_id,
-                wait_seconds=float(wait_seconds),
-                placed_at=placed_at_str,
-                signal_at=self._last_signal_at_str,
-                symbol=trade_symbol,
-                timeframe=trade_timeframe,
-                direction=status,
-                stake=float(stake),
-                percent=int(pct),
-                account_mode=account_mode,
-                indicator=self._last_indicator,
-            )
-
-            if self._allow_parallel_trades:
-                task = asyncio.create_task(
-                    self._wait_for_trade_result(log=log, **ctx)
-                )
-                self._launch_trade_result_task(task)
-                await self.sleep(0.2)
-            else:
-                await self._wait_for_trade_result(log=log, **ctx)
-                await self.sleep(0.2)
-
-        self._running = False
-
-        await self._cancel_signal_listener()
-
+        # Ждем завершения всех активных сделок
+        if self._active_trades:
+            await asyncio.gather(*list(self._active_trades.values()), return_exceptions=True)
+            
         if self._pending_tasks:
             await asyncio.gather(*list(self._pending_tasks), return_exceptions=True)
-            self._pending_tasks.clear()
 
-        (self.log or (lambda s: None))(f"[{self.symbol}] Завершение стратегии.")
+        self._pending_tasks.clear()
+        self._active_trades.clear()
+        self._pending_for_status.clear()
 
+        log(f"[{self.symbol}] Завершение стратегии Fixed Stake. Выполнено сделок: {self._trades_counter}")
+
+    # Остальные методы остаются без изменений...
     async def wait_signal(self, *, timeout: float) -> int:
         await self._ensure_signal_listener(self._fetch_signal_payload)
 
