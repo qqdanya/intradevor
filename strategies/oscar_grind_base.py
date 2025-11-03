@@ -91,6 +91,10 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                 timeframe = signal_data['timeframe']
                 trade_key = f"{symbol}_{timeframe}"
                 
+                # ОБНОВЛЯЕМ ВЕРСИЮ СИГНАЛА СРАЗУ ПОСЛЕ ПОЛУЧЕНИЯ - ЭТО КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ!
+                self._last_signal_ver = ver
+                self._last_signal_at_str = signal_data['timestamp'].strftime("%d.%m.%Y %H:%M:%S")
+                
                 # Если для этого инструмента уже есть активная сделка - сохраняем сигнал в отложенную очередь
                 if trade_key in self._active_trades:
                     if trade_key not in self._pending_notified:
@@ -283,10 +287,9 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         log = self.log or (lambda s: None)
         log(f"[{symbol}] Начало обработки сигнала Oscar Grind")
         
-        # Обновляем информацию о сигнале
-        self._last_signal_ver = signal_data['version']
+        # ОБНОВЛЯЕМ ТОЛЬКО ДОПОЛНИТЕЛЬНУЮ ИНФОРМАЦИЮ О СИГНАЛЕ
+        # self._last_signal_ver и self._last_signal_at_str уже обновлены в _signal_listener
         self._last_indicator = signal_data['indicator']
-        self._last_signal_at_str = signal_data['timestamp'].strftime("%d.%m.%Y %H:%M:%S")
         
         ts = signal_data['meta'].get('next_timestamp') if signal_data['meta'] else None
         self._next_expire_dt = ts.astimezone(ZoneInfo(MOSCOW_TZ)) if ts else None
