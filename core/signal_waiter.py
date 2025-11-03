@@ -1,422 +1,219 @@
-# oscar_grind_base.py
-from __future__ import annotations
+# core/signal_waiter.py
 import asyncio
-from datetime import datetime, timedelta
-from typing import Optional, Dict
-from zoneinfo import ZoneInfo
-from strategies.base_trading_strategy import BaseTradingStrategy, _minutes_from_timeframe
-from strategies.constants import MOSCOW_TZ
-from core.money import format_amount
-from core.intrade_api_async import is_demo_account
-
-OSCAR_GRIND_DEFAULTS = {
-    "base_investment": 100,
-    "max_steps": 20,
-    "repeat_count": 10,
-    "min_balance": 100,
-    "min_percent": 70,
-    "wait_on_low_percent": 1,
-    "signal_timeout_sec": 300,  # 5 минут — сигнал живёт 5 минут после свечи
-    "account_currency": "RUB",
-    "result_wait_s": 60.0,
-    "grace_delay_sec": 30.0,
-    "double_entry": True,
-    "trade_type": "classic",
-    "allow_parallel_trades": True,
-}
-
-class OscarGrindBaseStrategy(BaseTradingStrategy):
-    """Oscar Grind с корректным устареванием: signal_time + max_age (для всех сигналов)"""
-
-    def __init__(
-        self,
-        http_client,
-        user_id: str,
-        user_hash: str,
-        symbol: str,
-        log_callback=None,
-        *,
-        timeframe: str = "M1",
-        params: Optional[dict] = None,
-        strategy_name: str = "OscarGrind",
-        **kwargs,
-    ):
-        oscar_params = dict(OSCAR_GRIND_DEFAULTS)
-        if params:
-            oscar_params.update(params)
-
-        super().__init__(
-            http_client=http_client,
-            user_id=user_id,
-            user_hash=user_hash,
-            symbol=symbol,
-            log_callback=log_callback,
-            timeframe=timeframe,
-            params=oscar_params,
-            strategy_name=strategy_name,
-            **kwargs,
-        )
-
-        # Очереди и задачи по trade_key
-        self._signal_queues: Dict[str, asyncio.Queue] = {}
-        self._signal_processors: Dict[str, asyncio.Task] = {}
-        self._pending_signals: Dict[str, asyncio.Queue] = {}
-        self._pending_processing: Dict[str, asyncio.Task] = {}
-
-    async def _signal_listener(self, queue: asyncio.Queue):
-        """Прослушиватель — кладёт в нужную очередь по trade_key"""
-        log = self.log or (lambda s: None)
-        log(f"[*] Запуск прослушивателя сигналов ({self.strategy_name})")
-
-        while self._running:
-            await self._pause_point()
-
-            try:
-                direction, ver, meta = await self._fetch_signal_payload(self._last_signal_ver)
-
-                # === ИЗВЛЕКАЕМ timestamp (время свечи) и next_timestamp ===
-                signal_timestamp = datetime.now(ZoneInfo(MOSCOW_TZ))
-                next_expire = None
-
-                if meta and isinstance(meta, dict):
-                    ts_raw = meta.get('timestamp')
-                    if ts_raw and isinstance(ts_raw, datetime):
-                        signal_timestamp = ts_raw.astimezone(ZoneInfo(MOSCOW_TZ))
-                    
-                    next_raw = meta.get('next_timestamp')
-                    if next_raw and isinstance(next_raw, datetime):
-                        next_expire = next_raw.astimezone(ZoneInfo(MOSCOW_TZ))
-
-                signal_data = {
-                    'direction': direction,
-                    'version': ver,
-                    'meta': meta,
-                    'symbol': meta.get('symbol') if meta else self.symbol,
-                    'timeframe': meta.get('timeframe') if meta else self.timeframe,
-                    'timestamp': signal_timestamp,  # ← ВРЕМЯ СВЕЧИ
-                    'indicator': meta.get('indicator') if meta else '-',
-                    'next_expire': next_expire,  # ← для classic
-                }
-
-                symbol = signal_data['symbol']
-                timeframe = signal_data['timeframe']
-                trade_key = f"{symbol}_{timeframe}"
-
-                self._last_signal_ver = ver
-                self._last_signal_at_str = signal_timestamp.strftime("%d.%m.%Y %H:%M:%S")
-
-                # Создаём очередь и обработчик
-                if trade_key not in self._signal_queues:
-                    self._signal_queues[trade_key] = asyncio.Queue()
-                    self._signal_processors[trade_key] = asyncio.create_task(
-                        self._process_signal_queue(trade_key)
-                    )
-                    log(f"[{symbol}] Создана очередь для {trade_key}")
-
-                await self._signal_queues[trade_key].put(signal_data)
-                log(f"[{symbol}] Сигнал добавлен: свеча {signal_timestamp.strftime('%H:%M:%S')}")
-
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                log(f"[*] Ошибка в прослушивателе: {e}")
-                await asyncio.sleep(1.0)
-
-    async def _process_signal_queue(self, trade_key: str):
-        """Обрабатывает очередь — НЕ ЖДЁТ завершения серии!"""
-        queue = self._signal_queues[trade_key]
-        symbol, timeframe = trade_key.split('_', 1)
-        log = self.log or (lambda s: None)
-
-        log(f"[{symbol}] Запуск обработчика очереди {trade_key}")
-
-        while self._running:
-            await self._pause_point()
-
-            try:
-                signal_data = await queue.get()
-
-                if trade_key in self._active_trades:
-                    # === Откладываем ===
-                    if trade_key not in self._pending_signals:
-                        self._pending_signals[trade_key] = asyncio.Queue()
-                        log(f"[{symbol}] Создана отложенная очередь")
-
-                    # Оставляем только последний
-                    while not self._pending_signals[trade_key].empty():
-                        try:
-                            self._pending_signals[trade_key].get_nowait()
-                            self._pending_signals[trade_key].task_done()
-                        except asyncio.QueueEmpty:
-                            break
-
-                    await self._pending_signals[trade_key].put(signal_data)
-                    log(f"[{symbol}] Сигнал отложен")
-
-                    if trade_key not in self._pending_processing:
-                        self._pending_processing[trade_key] = asyncio.create_task(
-                            self._process_pending_signals(trade_key)
-                        )
-
-                else:
-                    # === Запускаем в фоне — НЕ ЖДЁМ! ===
-                    task = asyncio.create_task(self._process_single_signal(signal_data))
-                    self._active_trades[trade_key] = task
-
-                    def cleanup(fut):
-                        self._active_trades.pop(trade_key, None)
-                        queue.task_done()
-                        asyncio.create_task(self._check_more_pending_signals(trade_key))
-
-                    task.add_done_callback(cleanup)
-
-                queue.task_done()
-
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                log(f"[{symbol}] Ошибка в обработчике: {e}")
-                queue.task_done()
-
-        log(f"[{symbol}] Остановка обработчика {trade_key}")
-
-    async def _process_pending_signals(self, trade_key: str):
-        """Обрабатывает отложку после завершения сделки"""
-        symbol, _ = trade_key.split('_', 1)
-        log = self.log or (lambda s: None)
-
-        try:
-            while self._running:
-                while trade_key in self._active_trades and self._running:
-                    await asyncio.sleep(0.1)
-
-                if not self._running:
-                    break
-
-                if trade_key not in self._pending_signals or self._pending_signals[trade_key].empty():
-                    break
-
-                last_signal = None
-                while True:
-                    try:
-                        last_signal = self._pending_signals[trade_key].get_nowait()
-                        self._pending_signals[trade_key].task_done()
-                    except asyncio.QueueEmpty:
-                        break
-
-                if last_signal:
-                    log(f"[{symbol}] Запуск отложенного сигнала")
-                    task = asyncio.create_task(self._process_single_signal(last_signal))
-                    self._active_trades[trade_key] = task
-
-                    def cleanup(fut):
-                        self._active_trades.pop(trade_key, None)
-                        asyncio.create_task(self._check_more_pending_signals(trade_key))
-
-                    task.add_done_callback(cleanup)
-                    await task
-
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            log(f"[{symbol}] Ошибка в отложке: {e}")
-        finally:
-            self._pending_processing.pop(trade_key, None)
-
-    async def _check_more_pending_signals(self, trade_key: str):
-        if trade_key in self._pending_signals and not self._pending_signals[trade_key].empty():
-            symbol, _ = trade_key.split('_', 1)
-            log = self.log or (lambda s: None)
-            log(f"[{symbol}] Есть отложенные — перезапуск")
-            if trade_key not in self._pending_processing:
-                self._pending_processing[trade_key] = asyncio.create_task(
-                    self._process_pending_signals(trade_key)
-                )
-
-    async def _process_single_signal(self, signal_data: dict):
-        symbol = signal_data['symbol']
-        timeframe = signal_data['timeframe']
-        direction = signal_data['direction']
-        log = self.log or (lambda s: None)
-
-        log(f"[{symbol}] Начало обработки сигнала")
-
-        self._last_indicator = signal_data['indicator']
-        self._next_expire_dt = signal_data.get('next_expire')
-
-        signal_received_time = signal_data['timestamp']
-        await self._run_oscar_grind_series(symbol, timeframe, direction, log, signal_received_time, signal_data)
-
-    async def _run_oscar_grind_series(self, symbol: str, timeframe: str, initial_direction: int, log, signal_received_time: datetime, signal_data: dict):
-        series_left = int(self.params.get("repeat_count", 10))
-        if series_left <= 0:
-            log(f"[{symbol}] repeat_count=0")
-            return
-
-        base_unit = float(self.params.get("base_investment", 100))
-        target_profit = base_unit
-        max_steps = int(self.params.get("max_steps", 20))
-        min_pct = int(self.params.get("min_percent", 70))
-        wait_low = float(self.params.get("wait_on_low_percent", 1))
-        double_entry = bool(self.params.get("double_entry", True))
-
-        if max_steps <= 0:
-            return
-
-        step_idx = 0
-        cum_profit = 0.0
-        stake = base_unit
-        series_started = False
-        series_direction = initial_direction
-        repeat_trade = False
-
-        while self._running and step_idx < max_steps:
-            await self._pause_point()
-            if not await self.ensure_account_conditions():
-                continue
-
-            current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
-            max_age = self._max_signal_age_seconds()
-
-            # === УСТАРЕВАНИЕ: signal_time + max_age (ВСЕГДА!) ===
-            if max_age > 0:
-                deadline = signal_received_time + timedelta(seconds=max_age)
-                if current_time > deadline:
-                    log(f"[{symbol}] Сигнал устарел: свеча {signal_received_time.strftime('%H:%M:%S')} + {max_age}s = {deadline.strftime('%H:%M:%S')}, сейчас {current_time.strftime('%H:%M:%S')}")
-                    break
-                else:
-                    log(f"[{symbol}] Сигнал живёт до {deadline.strftime('%H:%M:%S')}")
-
-            # === Classic: окно размещения ===
-            if self._trade_type == "classic":
-                next_expire = signal_data.get('next_expire')
-                if next_expire and current_time >= next_expire:
-                    log(f"[{symbol}] Окно classic закрыто: {next_expire.strftime('%H:%M:%S')}")
-                    break
-
-            pct, balance = await self.check_payout_and_balance(symbol, stake, min_pct, wait_low)
-            if pct is None:
-                continue
-
-            log(f"[{symbol}] step={step_idx + 1} stake={format_amount(stake)} side={'UP' if series_direction == 1 else 'DOWN'} payout={pct}%")
-
-            try:
-                demo_now = await is_demo_account(self.http_client)
-            except Exception:
-                demo_now = False
-            account_mode = "ДЕМО" if demo_now else "РЕАЛ"
-
-            self._status("ставка")
-            trade_id = await self.place_trade_with_retry(symbol, series_direction, stake, self._anchor_ccy)
-            if not trade_id:
-                log(f"[{symbol}] Не удалось разместить")
-                await asyncio.sleep(2.0)
-                continue
-
-            trade_seconds, expected_end_ts = self._calculate_trade_duration(symbol)
-            wait_seconds = self.params.get("result_wait_s", trade_seconds)
-
-            self._notify_pending_trade(trade_id, symbol, timeframe, series_direction, stake, pct, trade_seconds, account_mode, expected_end_ts)
-            self._register_pending_trade(trade_id, symbol, timeframe)
-
-            profit = await self.wait_for_trade_result(
-                trade_id=trade_id,
-                wait_seconds=float(wait_seconds),
-                placed_at=datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
-                signal_at=self._last_signal_at_str,
-                symbol=symbol,
-                timeframe=timeframe,
-                direction=series_direction,
-                stake=float(stake),
-                percent=int(pct),
-                account_mode=account_mode,
-                indicator=self._last_indicator,
-            )
-
-            if profit is None:
-                profit_val = -float(stake)
-                outcome = "loss"
-            else:
-                profit_val = float(profit)
-                outcome = "win" if profit_val > 0 else "refund" if profit_val == 0 else "loss"
-
-            if not series_started:
-                if outcome == "loss":
-                    series_started = True
-                    cum_profit += profit_val
-                else:
-                    stake = base_unit
-                    continue
-            else:
-                cum_profit += profit_val
-
-            if cum_profit >= target_profit:
-                log(f"[{symbol}] Цель достигнута: {format_amount(cum_profit)}")
-                break
-
-            need = max(0.0, target_profit - cum_profit)
-            next_stake = self._next_stake(
-                outcome=outcome, stake=stake, base_unit=base_unit, pct=pct,
-                need=need, profit=profit_val, cum_profit=cum_profit, log=log
-            )
-            stake = float(next_stake)
-            step_idx += 1
-
-            if repeat_trade:
-                repeat_trade = False
-                series_direction = None
-            else:
-                if double_entry and outcome == "loss":
-                    repeat_trade = True
-                else:
-                    series_direction = None
-
-            await self.sleep(0.2)
-
-            if self._trade_type == "classic" and self._next_expire_dt is not None:
-                self._next_expire_dt += timedelta(minutes=_minutes_from_timeframe(timeframe))
-
-        if step_idx > 0:
-            series_left -= 1
-            log(f"[{symbol}] Осталось серий: {series_left}")
-
-    def _next_stake(self, *, outcome: str, stake: float, base_unit: float, pct: float, need: float, profit: float, cum_profit: float, log) -> float:
-        raise NotImplementedError()
-
-    def _calculate_trade_duration(self, symbol: str) -> tuple[float, float]:
-        if self._trade_type == "classic" and self._next_expire_dt is not None:
-            trade_seconds = max(0.0, (self._next_expire_dt - datetime.now(ZoneInfo(MOSCOW_TZ))).total_seconds())
-            expected_end_ts = self._next_expire_dt.timestamp()
-        else:
-            trade_seconds = float(self._trade_minutes) * 60.0
-            expected_end_ts = datetime.now().timestamp() + trade_seconds
-        return trade_seconds, expected_end_ts
-
-    def _notify_pending_trade(self, trade_id: str, symbol: str, timeframe: str, direction: int,
-                              stake: float, percent: int, trade_seconds: float,
-                              account_mode: str, expected_end_ts: float):
-        placed_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-        if callable(self._on_trade_pending):
-            try:
-                self._on_trade_pending(
-                    trade_id=trade_id, symbol=symbol, timeframe=timeframe,
-                    signal_at=self._last_signal_at_str, placed_at=placed_at_str,
-                    direction=direction, stake=float(stake), percent=int(percent),
-                    wait_seconds=float(trade_seconds), account_mode=account_mode,
-                    indicator=self._last_indicator, expected_end_ts=expected_end_ts,
-                )
-            except Exception:
-                pass
-
-    def stop(self):
-        for task in self._signal_processors.values():
-            task.cancel()
-        for task in self._pending_processing.values():
-            task.cancel()
-
-        self._signal_queues.clear()
-        self._signal_processors.clear()
-        self._pending_signals.clear()
-        self._pending_processing.clear()
-
-        super().stop()
+from dataclasses import dataclass, field
+from collections import defaultdict
+from typing import Optional, Tuple, Dict, Callable, Awaitable
+from datetime import datetime
+# --- helpers ---------------------------------------------------------
+def _tf_to_seconds(tf: str) -> Optional[int]:
+    """'M1','M5','H1','D1','W1' -> длительность таймфрейма в секундах (если распознали)."""
+    if not tf:
+        return None
+    tf = str(tf).upper()
+    unit = tf[0]
+    try:
+        n = int(tf[1:])
+    except Exception:
+        return None
+    if n <= 0:
+        return None
+    if unit == "M":
+        return n * 60
+    if unit == "H":
+        return n * 3600
+    if unit == "D":
+        return n * 86400
+    if unit == "W":
+        return n * 604800
+    return None
+# --- state -----------------------------------------------------------
+@dataclass
+class _State:
+    value: Optional[int] = None # 1=up, 2=down, None=нет сигнала
+    version: int = 0 # монотонная версия (эпоха) для каждой пары
+    cond: asyncio.Condition = field(default_factory=asyncio.Condition)
+    last_monotonic: Optional[float] = (
+        None # когда пришёл ПОСЛЕДНИЙ сигнал (loop.time())
+    )
+    tf_sec: Optional[int] = None # длительность TF в секундах (если удалось распарсить)
+    last_indicator: Optional[str] = None # ИМЯ индикатора источника последнего сигнала
+    # для wildcard-ожидателей запоминаем исходный символ/таймфрейм
+    last_symbol: Optional[str] = None
+    last_timeframe: Optional[str] = None
+    next_timestamp: Optional[datetime] = None # начало следующей свечи
+_states: Dict[tuple[str, str], _State] = defaultdict(_State)
+def _key(symbol: str, timeframe: str) -> tuple[str, str]:
+    return (str(symbol).upper(), str(timeframe).upper())
+ANY_SYMBOL = "*"
+ANY_TIMEFRAME = "*"
+# --- public api ------------------------------------------------------
+def push_signal(
+    symbol: str,
+    timeframe: str,
+    direction: Optional[int],
+    indicator: Optional[str] = None,
+    next_timestamp: Optional[datetime] = None,
+) -> None:
+    """
+    Положить НОВОЕ сообщение сигнала:
+      direction: 1 (up), 2 (down), None (или 0) — очистка состояния (none).
+      indicator: строка-имя источника сигнала (например, "RSI(14)").
+    Любой приход (включая None) повышает версию и будит всех ожидающих.
+    Также запоминаем момент прихода (monotonic), длительность TF и имя индикатора.
+    """
+    keys = {
+        _key(symbol, timeframe),
+        _key(ANY_SYMBOL, timeframe),
+        _key(symbol, ANY_TIMEFRAME),
+        _key(ANY_SYMBOL, ANY_TIMEFRAME),
+    }
+    async def _update_and_notify(st: _State):
+        async with st.cond:
+            st.version += 1
+            st.value = direction if direction in (1, 2) else None
+            st.last_monotonic = asyncio.get_running_loop().time()
+            sec = _tf_to_seconds(timeframe)
+            if sec:
+                st.tf_sec = sec
+            if indicator is not None:
+                st.last_indicator = indicator
+            st.last_symbol = symbol
+            st.last_timeframe = timeframe
+            st.next_timestamp = next_timestamp
+            st.cond.notify_all()
+    loop = asyncio.get_running_loop()
+    for k in keys:
+        loop.create_task(_update_and_notify(_states[k]))
+async def _maybe_await(func: Callable[[], Awaitable[None] | None]) -> None:
+    """Аккуратно вызвать check_pause: поддерживает sync и async, не роняет цикл без надобности."""
+    if func is None:
+        return
+    res = func()
+    if asyncio.iscoroutine(res):
+        await res
+async def wait_for_signal_versioned(
+    symbol: str,
+    timeframe: str,
+    *,
+    since_version: Optional[int] = None,
+    check_pause: Optional[Callable[[], Awaitable[None] | None]] = None,
+    timeout: Optional[float] = None,
+    # Если хотите НЕ завершаться на таймауте, а просто продолжить ждать — выставьте:
+    raise_on_timeout: bool = True,
+    # Детектор задержки следующего прогноза:
+    grace_delay_sec: float = 5.0,
+    on_delay: Optional[Callable[[float], None]] = None, # callback(delay_seconds)
+    # --- новое: вернуть вместе с direction/version ещё и meta (indicator, tf_sec, symbol, timeframe) ---
+    include_meta: bool = False,
+    max_age_sec: float = 0.0,
+) -> Tuple[int, int] | Tuple[int, int, Dict[str, Optional[str | int | float]]]:
+    """
+    Ждёт ПЕРВЫЙ up/down с версией > since_version.
+    none (очистка) лишь повышает версию, но не возвращается.
+    По умолчанию возвращает (direction, version), где direction ∈ {1,2}.
+    Если include_meta=True — вернёт (direction, version, meta),
+    где meta = {"indicator": str|None, "tf_sec": int|None, "symbol": str|None, "timeframe": str|None}.
+    max_age_sec > 0 позволяет использовать сигнал, пришедший не ранее чем
+    max_age_sec секунд до вызова функции.
+    """
+    st = _states[_key(symbol, timeframe)]
+    start = asyncio.get_running_loop().time()
+    async def _await_next_change() -> Tuple[Optional[int], int]:
+        async with st.cond:
+            # быстрый путь — только если сигнал пришёл ПОСЛЕ start-max_age_sec
+            if (
+                st.value in (1, 2)
+                and (since_version is None or st.version > since_version)
+                and (st.last_monotonic or 0) >= (start - float(max_age_sec))
+            ):
+                return st.value, st.version
+            # иначе ждём новое сообщение
+            await st.cond.wait()
+            return st.value, st.version
+    while True:
+        # пауза/стоп
+        try:
+            await _maybe_await(check_pause)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+        # --- детектор задержки следующего сигнала на базе monotonic и tf_sec ----
+        if callable(on_delay) and st.last_monotonic is not None and st.tf_sec:
+            expected_next = st.last_monotonic + float(st.tf_sec)
+            now = asyncio.get_running_loop().time()
+            drift = now - expected_next
+            if drift > float(grace_delay_sec):
+                try:
+                    on_delay(drift)
+                except Exception:
+                    pass
+        # --- ожидание события или таймаут ---------------------------------------
+        try:
+            if timeout is None:
+                direction, ver = await _await_next_change()
+            else:
+                elapsed = asyncio.get_running_loop().time() - start
+                left = max(0.0, float(timeout) - elapsed)
+                direction, ver = await asyncio.wait_for(
+                    _await_next_change(), timeout=left
+                )
+        except asyncio.TimeoutError:
+            if raise_on_timeout:
+                raise
+            # мягкий режим: крутимся дальше
+            continue
+        # игнорируем очистки, устаревшие версии и старые сигналы
+        if (
+            direction in (1, 2)
+            and (since_version is None or ver > since_version)
+            and st.last_monotonic is not None
+            and st.last_monotonic >= (start - float(max_age_sec))
+        ):
+                if include_meta:
+                    meta = {
+                        "indicator": st.last_indicator,
+                        "tf_sec": st.tf_sec,
+                        "symbol": st.last_symbol,
+                        "timeframe": st.last_timeframe,
+                        "next_timestamp": st.next_timestamp,
+                    }
+                    return int(direction), int(ver), meta
+                return int(direction), int(ver)
+        # иначе ждём следующего уведомления
+# Совместимый шорткат (без версий)
+async def wait_for_signal(
+    symbol: str,
+    timeframe: str,
+    *,
+    check_pause: Optional[Callable[[], Awaitable[None] | None]] = None,
+    timeout: Optional[float] = None,
+    raise_on_timeout: bool = True,
+) -> int:
+    # Всегда ждём следующий сигнал, игнорируя уже полученные ранее.
+    st = _states[_key(symbol, timeframe)]
+    direction, _ = await wait_for_signal_versioned(
+        symbol,
+        timeframe,
+        since_version=st.version,
+        check_pause=check_pause,
+        timeout=timeout,
+        raise_on_timeout=raise_on_timeout,
+    )
+    return int(direction)
+def peek_signal_state(
+    symbol: str, timeframe: str
+) -> Dict[str, Optional[int | float | str | datetime]]:
+    """
+    Неблокирующий доступ к текущему состоянию: возвращает dict с полями:
+      version, value (1/2/None), indicator (str|None), tf_sec (int|None), last_monotonic (float|None)
+    """
+    st = _states[_key(symbol, timeframe)]
+    return {
+        "version": int(st.version),
+        "value": (int(st.value) if st.value in (1, 2) else None),
+        "indicator": st.last_indicator,
+        "tf_sec": st.tf_sec,
+        "last_monotonic": st.last_monotonic,
+        "next_timestamp": st.next_timestamp,
+    }
