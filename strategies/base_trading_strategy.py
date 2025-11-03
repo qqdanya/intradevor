@@ -134,26 +134,31 @@ class BaseTradingStrategy(StrategyBase):
         self.params["trade_type"] = self._trade_type
 
     # === SIGNAL VALIDATION METHODS ===
-    def _is_signal_valid_for_classic(self, signal_data: dict, current_time: datetime) -> tuple[bool, str]:
+    def _is_signal_valid_for_classic(self, signal_data: dict, current_time: datetime, for_placement: bool = True) -> tuple[bool, str]:
         """
         Проверяет актуальность сигнала для classic-торгов
-        Возвращает (is_valid, reason)
+        for_placement: True - проверка перед размещением ставки, False - проверка в процессе серии
         """
         next_expire = signal_data.get('next_expire')
         if not next_expire:
             return False, "нет next_timestamp"
         
-        # Время до следующей свечи
-        time_until_next = (next_expire - current_time).total_seconds()
+        # Если проверка для РАЗМЕЩЕНИЯ ставки - проверяем время до следующей свечи
+        if for_placement:
+            time_until_next = (next_expire - current_time).total_seconds()
+            
+            # Если следующая свеча уже наступила - нельзя размещать новую ставку
+            if time_until_next <= 0:
+                return False, f"следующая свеча уже наступила в {next_expire.strftime('%H:%M:%S')}"
+            
+            # Проверяем что до следующей свечи осталось достаточно времени для размещения
+            min_required_time = self.params.get("classic_min_time_before_next_sec", 180.0) + \
+                               self.params.get("classic_trade_buffer_sec", 10.0)
+            
+            if time_until_next < min_required_time:
+                return False, f"до следующей свечи осталось {time_until_next:.0f}с < {min_required_time:.0f}с"
         
-        # Проверяем что до следующей свечи осталось больше 3 минут + запас на размещение
-        min_required_time = self.params.get("classic_min_time_before_next_sec", 180.0) + \
-                           self.params.get("classic_trade_buffer_sec", 10.0)
-        
-        if time_until_next < min_required_time:
-            return False, f"до следующей свечи осталось {time_until_next:.0f}с < {min_required_time:.0f}с"
-        
-        # Дополнительная проверка: сигнал не должен быть слишком старым
+        # Проверка возраста сигнала (всегда актуальна)
         signal_timestamp = signal_data['timestamp']
         signal_age = (current_time - signal_timestamp).total_seconds()
         max_signal_age = self.params.get("classic_signal_max_age_sec", 170.0)
