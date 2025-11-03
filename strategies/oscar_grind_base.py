@@ -350,8 +350,8 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             self.timeframe = timeframe
             self.params["timeframe"] = self.timeframe
 
-        # Запоминаем время получения сигнала для проверки устаревания
-        signal_received_time = datetime.now(ZoneInfo(MOSCOW_TZ))
+        # КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: Используем время из сигнала, а не текущее время
+        signal_received_time = signal_data['timestamp'].astimezone(ZoneInfo(MOSCOW_TZ))
 
         # Запускаем серию Oscar Grind для этого сигнала
         await self._run_oscar_grind_series(symbol, timeframe, direction, log, signal_received_time)
