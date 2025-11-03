@@ -1,12 +1,9 @@
 # Константы для всех стратегий
-
 ALL_SYMBOLS_LABEL = "Все валютные пары"
 ALL_TF_LABEL = "Все таймфреймы"
 CLASSIC_ALLOWED_TFS = {"M5", "M15", "M30", "H1", "H4"}
-
 CLASSIC_SIGNAL_MAX_AGE_SEC = 120.0
 SPRINT_SIGNAL_MAX_AGE_SEC = 5.0
-
 MOSCOW_TZ = "Europe/Moscow"
 
 # Параметры по умолчанию для всех стратегий
