@@ -93,21 +93,18 @@ class FibonacciStrategy(BaseTradingStrategy):
         except RuntimeError:
             self._last_signal_monotonic = None
 
-        # Проверяем актуальность сигнала перед началом серии
+        # ПРОВЕРКА АКТУАЛЬНОСТИ СИГНАЛА С НОВОЙ ЛОГИКОЙ
         current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
-        max_age = self._max_signal_age_seconds()
-       
-        if max_age > 0:
-            deadline = signal_data['timestamp'] + timedelta(seconds=max_age)
-            if current_time > deadline:
-                log(f"[{symbol}] Сигнал устарел перед началом серии: свеча {signal_data['timestamp'].strftime('%H:%M:%S')} + {max_age}s = {deadline.strftime('%H:%M:%S')}, сейчас {current_time.strftime('%H:%M:%S')}")
-                return
-       
-        # Проверяем окно classic перед началом серии
+        
         if self._trade_type == "classic":
-            next_expire = signal_data.get('next_expire')
-            if next_expire and current_time >= next_expire:
-                log(f"[{symbol}] Окно classic закрыто перед началом серии: {next_expire.strftime('%H:%M:%S')}")
+            is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time)
+            if not is_valid:
+                log(f"[{symbol}] ❌ Сигнал неактуален для classic: {reason}")
+                return
+        else:
+            is_valid, reason = self._is_signal_valid_for_sprint(signal_data, current_time)
+            if not is_valid:
+                log(f"[{symbol}] ❌ Сигнал неактуален для sprint: {reason}")
                 return
 
         # Запускаем серию Фибоначчи для этого сигнала
@@ -129,21 +126,21 @@ class FibonacciStrategy(BaseTradingStrategy):
             if not await self.ensure_account_conditions():
                 continue
                 
-            # Проверяем возраст сигнала
+            # ПРОВЕРКА АКТУАЛЬНОСТИ В ПРОЦЕССЕ СЕРИИ
             current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
-            max_age = self._max_signal_age_seconds()
-           
-            if max_age > 0:
-                deadline = signal_received_time + timedelta(seconds=max_age)
-                if current_time > deadline:
-                    log(f"[{symbol}] Сигнал устарел: свеча {signal_received_time.strftime('%H:%M:%S')} + {max_age}s = {deadline.strftime('%H:%M:%S')}, сейчас {current_time.strftime('%H:%M:%S')}")
-                    return
-                    
-            # Проверяем окно classic
+            
             if self._trade_type == "classic":
-                next_expire = signal_data.get('next_expire')
-                if next_expire and current_time >= next_expire:
-                    log(f"[{symbol}] Окно classic закрыто: {next_expire.strftime('%H:%M:%S')}")
+                is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time)
+                if not is_valid:
+                    log(f"[{symbol}] ❌ Сигнал стал неактуален в процессе серии: {reason}")
+                    return
+            else:
+                is_valid, reason = self._is_signal_valid_for_sprint(
+                    {'timestamp': signal_received_time}, 
+                    current_time
+                )
+                if not is_valid:
+                    log(f"[{symbol}] ❌ Сигнал стал неактуален в процессе серии: {reason}")
                     return
                     
             # Проверяем баланс
