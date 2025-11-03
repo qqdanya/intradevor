@@ -1,11 +1,37 @@
-# strategies/oscar_grind_1.py
 from __future__ import annotations
 
-from strategies.oscar_grind_2 import OscarGrind2Strategy
+from typing import Optional
+from strategies.oscar_grind_base import OscarGrindBaseStrategy
 from core.money import format_amount
 
 
-class OscarGrind1Strategy(OscarGrind2Strategy):
+class OscarGrind1Strategy(OscarGrindBaseStrategy):
+    """Oscar Grind 1 стратегия (упрощенная версия)"""
+    
+    def __init__(
+        self,
+        http_client,
+        user_id: str,
+        user_hash: str,
+        symbol: str,
+        log_callback=None,
+        *,
+        timeframe: str = "M1",
+        params: Optional[dict] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            http_client=http_client,
+            user_id=user_id,
+            user_hash=user_hash,
+            symbol=symbol,
+            log_callback=log_callback,
+            timeframe=timeframe,
+            params=params,
+            strategy_name="OscarGrind1",
+            **kwargs,
+        )
+
     def _next_stake(
         self,
         *,
