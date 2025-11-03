@@ -98,7 +98,7 @@ class BaseTradingStrategy(StrategyBase):
         self._on_status = self.params.get("on_status")
 
         # Состояние стратегии
-        self._last_signal_ver: Optional[int] = None
+        self._last_signal_ver: int = 0
         self._last_indicator: str = "-"
         self._last_signal_at_str: Optional[str] = None
         self._next_expire_dt = None
