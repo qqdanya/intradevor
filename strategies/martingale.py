@@ -1,8 +1,9 @@
+# martingale.py
 from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Dict
 from zoneinfo import ZoneInfo
 
 from strategies.base_trading_strategy import BaseTradingStrategy, _minutes_from_timeframe
@@ -15,11 +16,20 @@ MARTINGALE_DEFAULTS = {
     "max_steps": 5,
     "repeat_count": 10,
     "coefficient": 2.0,
+    "min_balance": 100,
+    "min_percent": 70,
+    "wait_on_low_percent": 1,
+    "signal_timeout_sec": 300,
+    "account_currency": "RUB",
+    "result_wait_s": 60.0,
+    "grace_delay_sec": 30.0,
+    "trade_type": "classic",
+    "allow_parallel_trades": True,
 }
 
 
 class MartingaleStrategy(BaseTradingStrategy):
-    """Стратегия Мартингейла"""
+    """Стратегия Мартингейла с системой очередей и параллельной обработкой"""
     
     def __init__(
         self,
@@ -50,6 +60,239 @@ class MartingaleStrategy(BaseTradingStrategy):
             **kwargs,
         )
 
+        # Очереди и задачи для параллельной обработки
+        self._signal_queues: Dict[str, asyncio.Queue] = {}
+        self._signal_processors: Dict[str, asyncio.Task] = {}
+        self._pending_signals: Dict[str, asyncio.Queue] = {}
+        self._pending_processing: Dict[str, asyncio.Task] = {}
+        self._active_trades: Dict[str, asyncio.Task] = {}
+
+        # Глобальная блокировка — только одна сделка в системе
+        self._global_trade_lock = asyncio.Lock()
+
+    async def _signal_listener(self, queue: asyncio.Queue):
+        """Прослушиватель — кладёт в нужную очередь по trade_key"""
+        log = self.log or (lambda s: None)
+        log(f"[*] Запуск прослушивателя сигналов (Martingale)")
+
+        while self._running:
+            await self._pause_point()
+
+            try:
+                direction, ver, meta = await self._fetch_signal_payload(self._last_signal_ver)
+
+                # === ИЗВЛЕКАЕМ timestamp (время свечи) и next_timestamp ===
+                signal_timestamp = datetime.now(ZoneInfo(MOSCOW_TZ))
+                next_expire = None
+
+                if meta and isinstance(meta, dict):
+                    ts_raw = meta.get('timestamp')
+                    if ts_raw and isinstance(ts_raw, datetime):
+                        signal_timestamp = ts_raw.astimezone(ZoneInfo(MOSCOW_TZ))
+                    
+                    next_raw = meta.get('next_timestamp')
+                    if next_raw and isinstance(next_raw, datetime):
+                        next_expire = next_raw.astimezone(ZoneInfo(MOSCOW_TZ))
+
+                signal_data = {
+                    'direction': direction,
+                    'version': ver,
+                    'meta': meta,
+                    'symbol': meta.get('symbol') if meta else self.symbol,
+                    'timeframe': meta.get('timeframe') if meta else self.timeframe,
+                    'timestamp': signal_timestamp,
+                    'indicator': meta.get('indicator') if meta else '-',
+                    'next_expire': next_expire,
+                }
+
+                symbol = signal_data['symbol']
+                timeframe = signal_data['timeframe']
+                trade_key = f"{symbol}_{timeframe}"
+
+                self._last_signal_ver = ver
+                self._last_signal_at_str = signal_timestamp.strftime("%d.%m.%Y %H:%M:%S")
+
+                # Создаём очередь
+                if trade_key not in self._signal_queues:
+                    self._signal_queues[trade_key] = asyncio.Queue()
+                    self._signal_processors[trade_key] = asyncio.create_task(
+                        self._process_signal_queue(trade_key)
+                    )
+
+                await self._signal_queues[trade_key].put(signal_data)
+                log(f"[{symbol}] Сигнал добавлен: свеча {signal_timestamp.strftime('%H:%M:%S')}")
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                log(f"[*] Ошибка в прослушивателе: {e}")
+                await asyncio.sleep(1.0)
+
+    async def _process_signal_queue(self, trade_key: str):
+        """Обрабатывает очередь — с глобальной блокировкой при allow_parallel=False"""
+        queue = self._signal_queues[trade_key]
+        symbol, timeframe = trade_key.split('_', 1)
+        log = self.log or (lambda s: None)
+        allow_parallel = self.params.get("allow_parallel_trades", True)
+
+        log(f"[{symbol}] Запуск обработчика очереди {trade_key} (allow_parallel={allow_parallel})")
+
+        while self._running:
+            await self._pause_point()
+
+            try:
+                signal_data = await queue.get()
+
+                if not allow_parallel:
+                    # === ГЛОБАЛЬНАЯ БЛОКИРОВКА ДЛЯ ВСЕХ СИМВОЛОВ ===
+                    if self._global_trade_lock.locked():
+                        # ЗАМЕНА: вместо очереди просто заменяем последний отложенный сигнал
+                        if trade_key not in self._pending_signals:
+                            self._pending_signals[trade_key] = asyncio.Queue(maxsize=1)  # Только 1 слот!
+                        
+                        # Очищаем очередь и кладём только последний сигнал
+                        while not self._pending_signals[trade_key].empty():
+                            try:
+                                self._pending_signals[trade_key].get_nowait()
+                                self._pending_signals[trade_key].task_done()
+                            except asyncio.QueueEmpty:
+                                break
+                        
+                        # Если очередь полная, это значит есть старый сигнал - заменяем его
+                        try:
+                            self._pending_signals[trade_key].put_nowait(signal_data)
+                        except asyncio.QueueFull:
+                            # Удаляем старый и кладём новый
+                            try:
+                                self._pending_signals[trade_key].get_nowait()
+                                self._pending_signals[trade_key].task_done()
+                            except asyncio.QueueEmpty:
+                                pass
+                            self._pending_signals[trade_key].put_nowait(signal_data)
+                        
+                        log(f"[{symbol}] Сигнал отложен (идёт другая сделка в системе)")
+
+                        if trade_key not in self._pending_processing:
+                            self._pending_processing[trade_key] = asyncio.create_task(
+                                self._process_pending_signals(trade_key)
+                            )
+                        queue.task_done()
+                        continue
+
+                    # Блокируем и обрабатываем - ОДНА сделка на всю систему
+                    async with self._global_trade_lock:
+                        log(f"[{symbol}] Получена глобальная блокировка, начало обработки")
+                        task = asyncio.create_task(self._process_single_signal(signal_data))
+                        await task  # Ждём завершения ПОД блокировкой
+                        log(f"[{symbol}] Освобождение глобальной блокировки")
+
+                else:
+                    # === ПАРАЛЛЕЛЬНЫЕ СДЕЛКИ ===
+                    if trade_key in self._active_trades:
+                        if trade_key not in self._pending_signals:
+                            self._pending_signals[trade_key] = asyncio.Queue()
+
+                        while not self._pending_signals[trade_key].empty():
+                            try:
+                                self._pending_signals[trade_key].get_nowait()
+                                self._pending_signals[trade_key].task_done()
+                            except asyncio.QueueEmpty:
+                                break
+
+                        await self._pending_signals[trade_key].put(signal_data)
+                        log(f"[{symbol}] Сигнал отложен (активная сделка по этому символу)")
+
+                        if trade_key not in self._pending_processing:
+                            self._pending_processing[trade_key] = asyncio.create_task(
+                                self._process_pending_signals(trade_key)
+                            )
+                    else:
+                        task = asyncio.create_task(self._process_single_signal(signal_data))
+                        self._active_trades[trade_key] = task
+
+                        def cleanup(fut):
+                            self._active_trades.pop(trade_key, None)
+                            queue.task_done()
+                            asyncio.create_task(self._check_more_pending_signals(trade_key))
+
+                        task.add_done_callback(cleanup)
+
+                queue.task_done()
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                log(f"[{symbol}] Ошибка в обработчике: {e}")
+                queue.task_done()
+
+        log(f"[{symbol}] Остановка обработчика {trade_key}")
+
+    async def _process_pending_signals(self, trade_key: str):
+        """Обрабатывает отложку после завершения сделки - ТОЛЬКО ПОСЛЕДНИЙ СИГНАЛ"""
+        symbol, _ = trade_key.split('_', 1)
+        log = self.log or (lambda s: None)
+        allow_parallel = self.params.get("allow_parallel_trades", True)
+
+        try:
+            if not allow_parallel:
+                # Для непараллельного режима - обрабатываем только один отложенный сигнал
+                async with self._global_trade_lock:
+                    log(f"[{symbol}] Получена глобальная блокировка для отложенного сигнала")
+                    await self._process_one_pending(trade_key)
+                    log(f"[{symbol}] Освобождение глобальной блокировки для отложенного сигнала")
+            else:
+                # Для параллельного режима - ждём завершения активной сделки
+                wait_start = asyncio.get_event_loop().time()
+                while trade_key in self._active_trades and self._running:
+                    if asyncio.get_event_loop().time() - wait_start > 60.0:
+                        break
+                    await asyncio.sleep(0.1)
+                if not self._running:
+                    return
+                await self._process_one_pending(trade_key)
+
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            log(f"[{symbol}] Ошибка в отложке: {e}")
+        finally:
+            self._pending_processing.pop(trade_key, None)
+
+    async def _process_one_pending(self, trade_key: str):
+        """Обрабатывает один отложенный сигнал"""
+        symbol, _ = trade_key.split('_', 1)
+        log = self.log or (lambda s: None)
+
+        if trade_key not in self._pending_signals or self._pending_signals[trade_key].empty():
+            return
+
+        last_signal = None
+        while True:
+            try:
+                last_signal = self._pending_signals[trade_key].get_nowait()
+                self._pending_signals[trade_key].task_done()
+            except asyncio.QueueEmpty:
+                break
+
+        if last_signal:
+            log(f"[{symbol}] Запуск отложенного сигнала")
+            task = asyncio.create_task(self._process_single_signal(last_signal))
+            if not self.params.get("allow_parallel_trades", True):
+                await task  # Ждём
+            else:
+                self._active_trades[trade_key] = task
+                task.add_done_callback(lambda f: self._active_trades.pop(trade_key, None))
+
+    async def _check_more_pending_signals(self, trade_key: str):
+        if trade_key in self._pending_signals and not self._pending_signals[trade_key].empty():
+            symbol, _ = trade_key.split('_', 1)
+            log = self.log or (lambda s: None)
+            log(f"[{symbol}] Есть отложенные — перезапуск")
+            if trade_key not in self._pending_processing:
+                self._pending_processing[trade_key] = asyncio.create_task(
+                    self._process_pending_signals(trade_key)
+                )
+
     async def _process_single_signal(self, signal_data: dict):
         """Обработка одного сигнала для Мартингейла"""
         symbol = signal_data['symbol']
@@ -79,10 +322,27 @@ class MartingaleStrategy(BaseTradingStrategy):
         except RuntimeError:
             self._last_signal_monotonic = None
 
-        # Запускаем серию Мартингейла
-        await self._run_martingale_series(symbol, timeframe, direction, log)
+        # Проверяем актуальность сигнала перед началом серии
+        current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
+        max_age = self._max_signal_age_seconds()
+        
+        if max_age > 0:
+            deadline = signal_data['timestamp'] + timedelta(seconds=max_age)
+            if current_time > deadline:
+                log(f"[{symbol}] Сигнал устарел перед началом серии: свеча {signal_data['timestamp'].strftime('%H:%M:%S')} + {max_age}s = {deadline.strftime('%H:%M:%S')}, сейчас {current_time.strftime('%H:%M:%S')}")
+                return
+        
+        # Проверяем окно classic перед началом серии
+        if self._trade_type == "classic":
+            next_expire = signal_data.get('next_expire')
+            if next_expire and current_time >= next_expire:
+                log(f"[{symbol}] Окно classic закрыто перед началом серии: {next_expire.strftime('%H:%M:%S')}")
+                return
 
-    async def _run_martingale_series(self, symbol: str, timeframe: str, initial_direction: int, log):
+        # Запускаем серию Мартингейла
+        await self._run_martingale_series(symbol, timeframe, direction, log, signal_data['timestamp'], signal_data)
+
+    async def _run_martingale_series(self, symbol: str, timeframe: str, initial_direction: int, log, signal_received_time: datetime, signal_data: dict):
         """Запускает серию Мартингейла для конкретного сигнала"""
         series_left = int(self.params.get("repeat_count", 10))
         if series_left <= 0:
@@ -101,12 +361,21 @@ class MartingaleStrategy(BaseTradingStrategy):
                 continue
 
             # Проверяем возраст сигнала
+            current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
             max_age = self._max_signal_age_seconds()
-            if max_age > 0 and self._last_signal_monotonic is not None:
-                age = asyncio.get_running_loop().time() - self._last_signal_monotonic
-                if age > max_age:
-                    log(f"[{symbol}] ⚠ Сигнал устарел ({age:.1f}s > {max_age:.0f}s). Прерываем серию.")
-                    break
+            
+            if max_age > 0:
+                deadline = signal_received_time + timedelta(seconds=max_age)
+                if current_time > deadline:
+                    log(f"[{symbol}] Сигнал устарел: свеча {signal_received_time.strftime('%H:%M:%S')} + {max_age}s = {deadline.strftime('%H:%M:%S')}, сейчас {current_time.strftime('%H:%M:%S')}")
+                    return
+
+            # Проверяем окно classic
+            if self._trade_type == "classic":
+                next_expire = signal_data.get('next_expire')
+                if next_expire and current_time >= next_expire:
+                    log(f"[{symbol}] Окно classic закрыто: {next_expire.strftime('%H:%M:%S')}")
+                    return
 
             # Рассчитываем ставку
             base_stake = float(self.params.get("base_investment", 100))
@@ -241,3 +510,40 @@ class MartingaleStrategy(BaseTradingStrategy):
                 )
             except Exception:
                 pass
+
+    def stop(self):
+        """Остановка стратегии с очисткой всех очередей и задач"""
+        # Отменяем все задачи
+        all_tasks = []
+        all_tasks.extend(self._signal_processors.values())
+        all_tasks.extend(self._pending_processing.values())
+        all_tasks.extend(self._active_trades.values())
+        
+        for task in all_tasks:
+            if not task.done():
+                task.cancel()
+        
+        # Очищаем все очереди
+        for queue in list(self._signal_queues.values()):
+            while not queue.empty():
+                try:
+                    queue.get_nowait()
+                    queue.task_done()
+                except asyncio.QueueEmpty:
+                    break
+        
+        for queue in list(self._pending_signals.values()):
+            while not queue.empty():
+                try:
+                    queue.get_nowait()
+                    queue.task_done()
+                except asyncio.QueueEmpty:
+                    break
+        
+        self._signal_queues.clear()
+        self._signal_processors.clear()
+        self._pending_signals.clear()
+        self._pending_processing.clear()
+        self._active_trades.clear()
+
+        super().stop()
