@@ -1,6 +1,6 @@
 from __future__ import annotations
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Callable, Any
 from zoneinfo import ZoneInfo
 from core.http_async import HttpClient
@@ -132,6 +132,50 @@ class BaseTradingStrategy(StrategyBase):
         self.params["minutes"] = self._trade_minutes
         self._trade_type = str(self.params.get("trade_type", "sprint")).lower()
         self.params["trade_type"] = self._trade_type
+
+    # === SIGNAL VALIDATION METHODS ===
+    def _is_signal_valid_for_classic(self, signal_data: dict, current_time: datetime) -> tuple[bool, str]:
+        """
+        Проверяет актуальность сигнала для classic-торгов
+        Возвращает (is_valid, reason)
+        """
+        next_expire = signal_data.get('next_expire')
+        if not next_expire:
+            return False, "нет next_timestamp"
+        
+        # Время до следующей свечи
+        time_until_next = (next_expire - current_time).total_seconds()
+        
+        # Проверяем что до следующей свечи осталось больше 3 минут + запас на размещение
+        min_required_time = self.params.get("classic_min_time_before_next_sec", 180.0) + \
+                           self.params.get("classic_trade_buffer_sec", 10.0)
+        
+        if time_until_next < min_required_time:
+            return False, f"до следующей свечи осталось {time_until_next:.0f}с < {min_required_time:.0f}с"
+        
+        # Дополнительная проверка: сигнал не должен быть слишком старым
+        signal_timestamp = signal_data['timestamp']
+        signal_age = (current_time - signal_timestamp).total_seconds()
+        max_signal_age = self.params.get("classic_signal_max_age_sec", 170.0)
+        
+        if signal_age > max_signal_age:
+            return False, f"сигналу {signal_age:.0f}с > {max_signal_age:.0f}с"
+        
+        return True, "актуален"
+
+    def _is_signal_valid_for_sprint(self, signal_data: dict, current_time: datetime) -> tuple[bool, str]:
+        """Проверяет актуальность сигнала для sprint-торгов"""
+        max_age = self._max_signal_age_seconds()
+        if max_age <= 0:
+            return True, "нет ограничения по возрасту"
+        
+        signal_timestamp = signal_data['timestamp']
+        signal_age = (current_time - signal_timestamp).total_seconds()
+        
+        if signal_age > max_age:
+            return False, f"сигналу {signal_age:.0f}с > {max_signal_age:.0f}с"
+        
+        return True, "актуален"
 
     # === STATUS MANAGEMENT ===
     def _status(self, msg: str):
