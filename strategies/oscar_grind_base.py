@@ -91,7 +91,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                 timeframe = signal_data['timeframe']
                 trade_key = f"{symbol}_{timeframe}"
                 
-                # ОБНОВЛЯЕМ ВЕРСИЮ СИГНАЛА СРАЗУ ПОСЛЕ ПОЛУЧЕНИЯ - ЭТО КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ!
+                # ОБНОВЛЯЕМ ВЕРСИЮ СИГНАЛА СРАЗУ ПОСЛЕ ПОЛУЧЕНИЯ
                 self._last_signal_ver = ver
                 self._last_signal_at_str = signal_data['timestamp'].strftime("%d.%m.%Y %H:%M:%S")
                 
@@ -105,12 +105,26 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                     if trade_key not in self._pending_signals:
                         self._pending_signals[trade_key] = asyncio.Queue()
                     
-                    # Сохраняем сигнал в отложенную очередь
-                    await self._pending_signals[trade_key].put(signal_data)
-                    log(f"[{symbol}] 📨 Сигнал сохранен в отложенную очередь (в очереди: {self._pending_signals[trade_key].qsize()})")
+                    # КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: ОЧИЩАЕМ ОЧЕРЕДЬ ПЕРЕД ДОБАВЛЕНИЕМ НОВОГО СИГНАЛА
+                    # Оставляем только самый последний актуальный сигнал
+                    old_queue_size = self._pending_signals[trade_key].qsize()
+                    while not self._pending_signals[trade_key].empty():
+                        try:
+                            self._pending_signals[trade_key].get_nowait()
+                            self._pending_signals[trade_key].task_done()
+                        except asyncio.QueueEmpty:
+                            break
                     
-                    # Запускаем обработчик отложенных сигналов, если он еще не запущен и есть сигналы
-                    if trade_key not in self._pending_processing and not self._pending_signals[trade_key].empty():
+                    # Сохраняем ТОЛЬКО ПОСЛЕДНИЙ сигнал в отложенную очередь
+                    await self._pending_signals[trade_key].put(signal_data)
+                    
+                    if old_queue_size > 0:
+                        log(f"[{symbol}] 📨 Очередь очищена ({old_queue_size} старых сигналов удалено), сохранен последний актуальный сигнал")
+                    else:
+                        log(f"[{symbol}] 📨 Сигнал сохранен в отложенную очередь")
+                    
+                    # Запускаем обработчик отложенных сигналов, если он еще не запущен
+                    if trade_key not in self._pending_processing:
                         self._pending_processing[trade_key] = asyncio.create_task(
                             self._process_pending_signals(trade_key)
                         )
@@ -237,10 +251,22 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                     if trade_key not in self._pending_signals:
                         self._pending_signals[trade_key] = asyncio.Queue()
                     
+                    # КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: ОЧИЩАЕМ ОЧЕРЕДЬ ПЕРЕД ДОБАВЛЕНИЕМ НОВОГО СИГНАЛА
+                    old_queue_size = self._pending_signals[trade_key].qsize()
+                    while not self._pending_signals[trade_key].empty():
+                        try:
+                            self._pending_signals[trade_key].get_nowait()
+                            self._pending_signals[trade_key].task_done()
+                        except asyncio.QueueEmpty:
+                            break
+                    
                     await self._pending_signals[trade_key].put(signal_data)
                     
+                    if old_queue_size > 0:
+                        log(f"[{symbol}] 🔄 Очередь очищена ({old_queue_size} старых сигналов удалено), сохранен последний актуальный сигнал")
+                    
                     # Запускаем обработчик отложенных сигналов, если нужно
-                    if trade_key not in self._pending_processing and not self._pending_signals[trade_key].empty():
+                    if trade_key not in self._pending_processing:
                         self._pending_processing[trade_key] = asyncio.create_task(
                             self._process_pending_signals(trade_key)
                         )
@@ -258,7 +284,20 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                     if first_trade_key not in self._pending_signals:
                         self._pending_signals[first_trade_key] = asyncio.Queue()
                     
+                    # Очищаем очередь перед добавлением нового сигнала
+                    old_queue_size = self._pending_signals[first_trade_key].qsize()
+                    while not self._pending_signals[first_trade_key].empty():
+                        try:
+                            self._pending_signals[first_trade_key].get_nowait()
+                            self._pending_signals[first_trade_key].task_done()
+                        except asyncio.QueueEmpty:
+                            break
+                    
                     await self._pending_signals[first_trade_key].put(signal_data)
+                    
+                    if old_queue_size > 0:
+                        log(f"[{symbol}] 🔄 Общая очередь очищена ({old_queue_size} старых сигналов удалено)")
+                    
                     queue.task_done()
                     continue
                 
