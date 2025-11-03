@@ -18,29 +18,7 @@ from core.money import format_amount
 from core.policy import normalize_sprint
 
 from strategies.base import StrategyBase
-
-MOSCOW_TZ = ZoneInfo("Europe/Moscow")
-
-CLASSIC_SIGNAL_MAX_AGE_SEC = 120.0
-SPRINT_SIGNAL_MAX_AGE_SEC = 5.0
-
-ALL_SYMBOLS_LABEL = "Все валютные пары"
-ALL_TF_LABEL = "Все таймфреймы"
-CLASSIC_ALLOWED_TFS = {"M5", "M15", "M30", "H1", "H4"}
-
-TRADING_DEFAULTS = {
-    "base_investment": 100,
-    "min_balance": 100,
-    "min_percent": 70,
-    "wait_on_low_percent": 1,
-    "signal_timeout_sec": 3600,
-    "account_currency": "RUB",
-    "result_wait_s": 60.0,
-    "grace_delay_sec": 30.0,
-    "trade_type": "classic",
-    "allow_parallel_trades": True,
-}
-
+from strategies.constants import *  # Импортируем все константы
 
 def _minutes_from_timeframe(tf: str) -> int:
     """Конвертация таймфрейма в минуты"""
@@ -82,7 +60,7 @@ class BaseTradingStrategy(StrategyBase):
         **kwargs
     ):
         # Объединяем параметры по умолчанию
-        trading_params = dict(TRADING_DEFAULTS)
+        trading_params = dict(DEFAULTS)  # Используем DEFAULTS из constants
         if params:
             trading_params.update(params)
 
