@@ -1,14 +1,12 @@
 from __future__ import annotations
-
 import math
 from typing import Optional
 from strategies.oscar_grind_base import OscarGrindBaseStrategy
 from core.money import format_amount
 
-
 class OscarGrind2Strategy(OscarGrindBaseStrategy):
     """Oscar Grind 2 стратегия (расширенная версия с расчетом требуемой ставки)"""
-    
+   
     def __init__(
         self,
         http_client,
