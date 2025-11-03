@@ -123,7 +123,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                     else:
                         log(f"[{symbol}] 📨 Сигнал сохранен в отложенную очередь")
                     
-                    # Запускаем обработчик отложенных сигналов, если он еще не запущен
+                    # КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: ЗАПУСКАЕМ ОБРАБОТЧИК ВСЕГДА, КОГДА ЕСТЬ АКТИВНАЯ СДЕЛКА И СИГНАЛ
                     if trade_key not in self._pending_processing:
                         self._pending_processing[trade_key] = asyncio.create_task(
                             self._process_pending_signals(trade_key)
@@ -265,7 +265,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                     if old_queue_size > 0:
                         log(f"[{symbol}] 🔄 Очередь очищена ({old_queue_size} старых сигналов удалено), сохранен последний актуальный сигнал")
                     
-                    # Запускаем обработчик отложенных сигналов, если нужно
+                    # КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: ЗАПУСКАЕМ ОБРАБОТЧИК ВСЕГДА ПРИ ПЕРЕМЕЩЕНИИ СИГНАЛА
                     if trade_key not in self._pending_processing:
                         self._pending_processing[trade_key] = asyncio.create_task(
                             self._process_pending_signals(trade_key)
@@ -297,6 +297,12 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                     
                     if old_queue_size > 0:
                         log(f"[{symbol}] 🔄 Общая очередь очищена ({old_queue_size} старых сигналов удалено)")
+                    
+                    # ЗАПУСКАЕМ ОБРАБОТЧИК ДЛЯ ОБЩЕЙ ОЧЕРЕДИ
+                    if first_trade_key not in self._pending_processing:
+                        self._pending_processing[first_trade_key] = asyncio.create_task(
+                            self._process_pending_signals(first_trade_key)
+                        )
                     
                     queue.task_done()
                     continue
