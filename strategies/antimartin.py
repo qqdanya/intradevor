@@ -88,7 +88,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
         current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
         
         if self._trade_type == "classic":
-            is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time)
+            is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
             if not is_valid:
                 log(f"[{symbol}] ❌ Сигнал неактуален для classic: {reason}")
                 return
@@ -119,23 +119,21 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
             if not await self.ensure_account_conditions():
                 continue
                 
-            # ПРОВЕРКА АКТУАЛЬНОСТИ В ПРОЦЕССЕ СЕРИИ
+            # ПРОВЕРКА АКТУАЛЬНОСТИ ТОЛЬКО ДЛЯ ПЕРВОЙ СТАВКИ
             current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
             
-            if self._trade_type == "classic":
-                is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time)
-                if not is_valid:
-                    log(f"[{symbol}] ❌ Сигнал стал неактуален в процессе серии: {reason}")
-                    return
-            else:
-                is_valid, reason = self._is_signal_valid_for_sprint(
-                    {'timestamp': signal_received_time}, 
-                    current_time
-                )
-                if not is_valid:
-                    log(f"[{symbol}] ❌ Сигнал стал неактуален в процессе серии: {reason}")
-                    return
-                    
+            if not did_place_any_trade:  # ТОЛЬКО перед первой ставкой
+                if self._trade_type == "classic":
+                    is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
+                    if not is_valid:
+                        log(f"[{symbol}] ❌ Сигнал неактуален для размещения: {reason}")
+                        return
+                else:
+                    is_valid, reason = self._is_signal_valid_for_sprint(signal_data, current_time)
+                    if not is_valid:
+                        log(f"[{symbol}] ❌ Сигнал неактуален для размещения: {reason}")
+                        return
+                        
             min_pct = int(self.params.get("min_percent", 70))
             wait_low = float(self.params.get("wait_on_low_percent", 1))
             
@@ -161,8 +159,8 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
             )
                    
             if not trade_id:
-                log(f"[{symbol}] ❌ Не удалось разместить сделку. Прерываем серию.")
-                break
+                log(f"[{symbol}] ❌ Не удалось разместить сделку. Ждем новый сигнал.")
+                return  # ВЫХОДИМ ИЗ СЕРИИ, ЖДЕМ НОВЫЙ СИГНАЛ
                 
             did_place_any_trade = True
             
