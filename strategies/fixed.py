@@ -90,7 +90,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
         current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
         
         if self._trade_type == "classic":
-            is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time)
+            is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
             if not is_valid:
                 log(f"[{symbol}] ❌ Сигнал неактуален для classic: {reason}")
                 return
@@ -111,23 +111,6 @@ class FixedStakeStrategy(BaseTradingStrategy):
 
     async def _process_fixed_trade(self, symbol: str, timeframe: str, direction: int, log, signal_received_time: datetime, signal_data: dict):
         """Обрабатывает одну сделку с фиксированной ставкой"""
-        # ПРОВЕРКА АКТУАЛЬНОСТИ В ПРОЦЕССЕ ОБРАБОТКИ
-        current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
-        
-        if self._trade_type == "classic":
-            is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time)
-            if not is_valid:
-                log(f"[{symbol}] ❌ Сигнал стал неактуален в процессе обработки: {reason}")
-                return
-        else:
-            is_valid, reason = self._is_signal_valid_for_sprint(
-                {'timestamp': signal_received_time}, 
-                current_time
-            )
-            if not is_valid:
-                log(f"[{symbol}] ❌ Сигнал стал неактуален в процессе обработки: {reason}")
-                return
-
         # Проверяем баланс
         try:
             bal, _, _ = await get_balance_info(
@@ -208,9 +191,9 @@ class FixedStakeStrategy(BaseTradingStrategy):
                
         if not trade_id:
             log(f"[{symbol}] ❌ Не удалось разместить сделку. Пропускаем сигнал.")
-            return
+            return  # ПРОПУСКАЕМ СИГНАЛ ВМЕСТО УВЕЛИЧЕНИЯ СЧЕТЧИКА
 
-        # Увеличиваем счетчик сделок
+        # Увеличиваем счетчик сделок ТОЛЬКО при успешном размещении
         self._trades_counter += 1
 
         # Определяем длительность сделки
