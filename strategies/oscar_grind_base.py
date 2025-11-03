@@ -350,15 +350,13 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             self.timeframe = timeframe
             self.params["timeframe"] = self.timeframe
 
-        try:
-            self._last_signal_monotonic = asyncio.get_running_loop().time()
-        except RuntimeError:
-            self._last_signal_monotonic = None
+        # Запоминаем время получения сигнала для проверки устаревания
+        signal_received_time = datetime.now(ZoneInfo(MOSCOW_TZ))
 
         # Запускаем серию Oscar Grind для этого сигнала
-        await self._run_oscar_grind_series(symbol, timeframe, direction, log)
+        await self._run_oscar_grind_series(symbol, timeframe, direction, log, signal_received_time)
 
-    async def _run_oscar_grind_series(self, symbol: str, timeframe: str, initial_direction: int, log):
+    async def _run_oscar_grind_series(self, symbol: str, timeframe: str, initial_direction: int, log, signal_received_time: datetime):
         """Запускает серию Oscar Grind для конкретного сигнала"""
         series_left = int(self.params.get("repeat_count", 10))
         if series_left <= 0:
@@ -393,15 +391,15 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             if not await self.ensure_account_conditions():
                 continue
 
-            # ПРОВЕРЯЕМ УСТАРЕВАНИЕ СИГНАЛА, НО НЕ ПРЕРЫВАЕМ СЕРИЮ
+            # ПРОВЕРКА УСТАРЕВАНИЯ СИГНАЛА ПО МОСКОВСКОМУ ВРЕМЕНИ
             max_age = self._max_signal_age_seconds()
-            if max_age > 0 and self._last_signal_monotonic is not None:
-                age = asyncio.get_running_loop().time() - self._last_signal_monotonic
-                if age > max_age:
-                    log(f"[{symbol}] ⚠ Сигнал устарел ({age:.1f}s > {max_age:.0f}s). Пропускаем шаг и ждем новый сигнал.")
-                    # ПРОПУСКАЕМ ЭТОТ ШАГ, НО ПРОДОЛЖАЕМ СЕРИЮ
-                    await asyncio.sleep(1.0)
-                    continue
+            if max_age > 0:
+                current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
+                signal_age = (current_time - signal_received_time).total_seconds()
+                
+                if signal_age > max_age:
+                    log(f"[{symbol}] 🕒 Сигнал устарел ({signal_age:.1f}s > {max_age:.0f}s). Прерываем серию.")
+                    break  # ПРЕРЫВАЕМ СЕРИЮ - сигнал больше не актуален
 
             # Проверяем выплату и баланс
             pct, balance = await self.check_payout_and_balance(symbol, stake, min_pct, wait_low)
