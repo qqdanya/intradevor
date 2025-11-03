@@ -137,6 +137,7 @@ async def listen_to_signals() -> None:
                         sig.direction,
                         sig.indicator,
                         sig.next_timestamp,
+                        sig.timestamp,  # Передаем timestamp
                     )
 
                     # Лог: время без таймзоны
