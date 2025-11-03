@@ -299,6 +299,24 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         self._last_indicator = signal_data['indicator']
         self._next_expire_dt = signal_data.get('next_expire')
         signal_received_time = signal_data['timestamp']
+        
+        # Проверяем актуальность сигнала перед началом серии
+        current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
+        max_age = self._max_signal_age_seconds()
+        
+        if max_age > 0:
+            deadline = signal_received_time + timedelta(seconds=max_age)
+            if current_time > deadline:
+                log(f"[{symbol}] Сигнал устарел перед началом серии: свеча {signal_received_time.strftime('%H:%M:%S')} + {max_age}s = {deadline.strftime('%H:%M:%S')}, сейчас {current_time.strftime('%H:%M:%S')}")
+                return
+        
+        # Проверяем окно classic перед началом серии
+        if self._trade_type == "classic":
+            next_expire = signal_data.get('next_expire')
+            if next_expire and current_time >= next_expire:
+                log(f"[{symbol}] Окно classic закрыто перед началом серии: {next_expire.strftime('%H:%M:%S')}")
+                return
+        
         await self._run_oscar_grind_series(symbol, timeframe, direction, log, signal_received_time, signal_data)
 
     async def _run_oscar_grind_series(self, symbol: str, timeframe: str, initial_direction: int, log, signal_received_time: datetime, signal_data: dict):
@@ -337,16 +355,14 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                 deadline = signal_received_time + timedelta(seconds=max_age)
                 if current_time > deadline:
                     log(f"[{symbol}] Сигнал устарел: свеча {signal_received_time.strftime('%H:%M:%S')} + {max_age}s = {deadline.strftime('%H:%M:%S')}, сейчас {current_time.strftime('%H:%M:%S')}")
-                    break
-                else:
-                    log(f"[{symbol}] Сигнал живёт до {deadline.strftime('%H:%M:%S')} (max_age={max_age}s)")
+                    return  # Просто выходим, не завершая серию
 
             # === Classic: окно размещения ===
             if self._trade_type == "classic":
                 next_expire = signal_data.get('next_expire')
                 if next_expire and current_time >= next_expire:
                     log(f"[{symbol}] Окно classic закрыто: {next_expire.strftime('%H:%M:%S')}")
-                    break
+                    return  # Просто выходим, не завершая серию
 
             pct, balance = await self.check_payout_and_balance(symbol, stake, min_pct, wait_low)
             if pct is None:
