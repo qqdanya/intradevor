@@ -1,6 +1,6 @@
 from __future__ import annotations
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Dict
 from zoneinfo import ZoneInfo
 from strategies.constants import MOSCOW_TZ
@@ -45,6 +45,34 @@ class StrategyCommon:
                     if next_raw and isinstance(next_raw, datetime):
                         next_expire = next_raw.astimezone(ZoneInfo(MOSCOW_TZ))
                 
+                # ПРОВЕРКА АКТУАЛЬНОСТИ ПЕРЕД ДОБАВЛЕНИЕМ В ОЧЕРЕДЬ
+                current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
+                symbol = meta.get('symbol') if meta else self.strategy.symbol
+                
+                if self.strategy._trade_type == "classic":
+                    # Используем новую логику проверки для classic
+                    is_valid, reason = self.strategy._is_signal_valid_for_classic(
+                        {
+                            'timestamp': signal_timestamp,
+                            'next_expire': next_expire
+                        }, 
+                        current_time
+                    )
+                    if not is_valid:
+                        log(f"[{symbol}] ⏰ Сигнал неактуален для classic: {reason} -> пропуск")
+                        continue
+                else:
+                    # Для sprint - используем старую логику
+                    is_valid, reason = self.strategy._is_signal_valid_for_sprint(
+                        {
+                            'timestamp': signal_timestamp
+                        }, 
+                        current_time
+                    )
+                    if not is_valid:
+                        log(f"[{symbol}] ⏰ Сигнал неактуален для sprint: {reason} -> пропуск")
+                        continue
+                
                 signal_data = {
                     'direction': direction,
                     'version': ver,
@@ -71,7 +99,8 @@ class StrategyCommon:
                     )
                 
                 await self._signal_queues[trade_key].put(signal_data)
-                log(f"[{symbol}] Сигнал добавлен: свеча {signal_timestamp.strftime('%H:%M:%S')}")
+                next_time_str = next_expire.strftime('%H:%M:%S') if next_expire else '?'
+                log(f"[{symbol}] Сигнал добавлен: свеча {signal_timestamp.strftime('%H:%M:%S')} (до {next_time_str})")
                 
             except asyncio.CancelledError:
                 break
