@@ -186,7 +186,11 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                     task.add_done_callback(cleanup)
                     
                     # Ждем завершения обработки этого сигнала
-                    await task
+                    try:
+                        await task
+                    except Exception as e:
+                        log(f"[{symbol}] ⚠ Ошибка при обработке отложенного сигнала: {e}")
+                        # Даже при ошибке сигнал считается обработанным и удаляется из очереди
                 
                 # Небольшая пауза перед следующей проверкой
                 await asyncio.sleep(0.1)
@@ -389,13 +393,15 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             if not await self.ensure_account_conditions():
                 continue
 
-            # Проверяем возраст сигнала
+            # ПРОВЕРЯЕМ УСТАРЕВАНИЕ СИГНАЛА, НО НЕ ПРЕРЫВАЕМ СЕРИЮ
             max_age = self._max_signal_age_seconds()
             if max_age > 0 and self._last_signal_monotonic is not None:
                 age = asyncio.get_running_loop().time() - self._last_signal_monotonic
                 if age > max_age:
-                    log(f"[{symbol}] ⚠ Сигнал устарел ({age:.1f}s > {max_age:.0f}s). Прерываем серию.")
-                    break
+                    log(f"[{symbol}] ⚠ Сигнал устарел ({age:.1f}s > {max_age:.0f}s). Пропускаем шаг и ждем новый сигнал.")
+                    # ПРОПУСКАЕМ ЭТОТ ШАГ, НО ПРОДОЛЖАЕМ СЕРИЮ
+                    await asyncio.sleep(1.0)
+                    continue
 
             # Проверяем выплату и баланс
             pct, balance = await self.check_payout_and_balance(symbol, stake, min_pct, wait_low)
@@ -419,8 +425,10 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             )
                     
             if not trade_id:
-                log(f"[{symbol}] ❌ Не удалось разместить сделку. Прерываем серию.")
-                break
+                log(f"[{symbol}] ❌ Не удалось разместить сделку. Пропускаем этот шаг и продолжаем серию.")
+                # НЕ ПРЕРЫВАЕМ СЕРИЮ - просто пропускаем этот шаг
+                await asyncio.sleep(2.0)
+                continue
 
             # Определяем длительность сделки
             trade_seconds, expected_end_ts = self._calculate_trade_duration(symbol)
