@@ -73,14 +73,14 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
         
         if self._trade_type == "classic":
-            is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time)
+            is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
             if not is_valid:
-                log(f"[{symbol}] ❌ Сигнал неактуален для classic: {reason}")
+                log(f"[{symbol}] ❌ Сигнал неактуален для размещения: {reason}")
                 return
         else:
             is_valid, reason = self._is_signal_valid_for_sprint(signal_data, current_time)
             if not is_valid:
-                log(f"[{symbol}] ❌ Сигнал неактуален для sprint: {reason}")
+                log(f"[{symbol}] ❌ Сигнал неактуален для размещения: {reason}")
                 return
 
         await self._run_oscar_grind_series(symbol, timeframe, direction, log, signal_received_time, signal_data)
@@ -122,22 +122,23 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             if not await self.ensure_account_conditions():
                 continue
                 
-            # ПРОВЕРКА АКТУАЛЬНОСТИ В ПРОЦЕССЕ СЕРИИ
+            # ПРОВЕРКА АКТУАЛЬНОСТИ ТОЛЬКО ДЛЯ ПЕРВОЙ СТАВКИ
             current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
             
-            if self._trade_type == "classic":
-                is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time)
-                if not is_valid:
-                    log(f"[{symbol}] ❌ Сигнал стал неактуален в процессе серии: {reason}")
-                    return
-            else:
-                is_valid, reason = self._is_signal_valid_for_sprint(
-                    {'timestamp': signal_received_time}, 
-                    current_time
-                )
-                if not is_valid:
-                    log(f"[{symbol}] ❌ Сигнал стал неактуален в процессе серии: {reason}")
-                    return
+            if not series_started:  # ТОЛЬКО перед первой ставкой
+                if self._trade_type == "classic":
+                    is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
+                    if not is_valid:
+                        log(f"[{symbol}] ❌ Сигнал стал неактуален для размещения: {reason}")
+                        return
+                else:
+                    is_valid, reason = self._is_signal_valid_for_sprint(
+                        {'timestamp': signal_received_time}, 
+                        current_time
+                    )
+                    if not is_valid:
+                        log(f"[{symbol}] ❌ Сигнал стал неактуален для размещения: {reason}")
+                        return
                     
             pct, balance = await self.check_payout_and_balance(symbol, stake, min_pct, wait_low)
             if pct is None:
@@ -155,9 +156,12 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             trade_id = await self.place_trade_with_retry(symbol, series_direction, stake, self._anchor_ccy)
             
             if not trade_id:
-                log(f"[{symbol}] Не удалось разместить")
-                await asyncio.sleep(2.0)
-                continue
+                log(f"[{symbol}] ❌ Не удалось разместить сделку. Ждем новый сигнал.")
+                # ШАГ НЕ УВЕЛИЧИВАЕМ - ждем новый сигнал для этого же шага
+                await self.sleep(2.0)
+                return  # Выходим из серии, ждем новый сигнал
+            
+            series_started = True
                 
             trade_seconds, expected_end_ts = self._calculate_trade_duration(symbol)
             wait_seconds = self.params.get("result_wait_s", trade_seconds)
