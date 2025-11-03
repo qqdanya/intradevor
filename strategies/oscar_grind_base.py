@@ -140,7 +140,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                 signal_data = await queue.get()
 
                 if not allow_parallel:
-                    # === ГЛОБАЛЬНАЯ БЛОКИРОВКА ===
+                    # === ГЛОБАЛЬНАЯ БЛОКИРОВКА ДЛЯ ВСЕХ СИМВОЛОВ ===
                     if self._global_trade_lock.locked():
                         # ЗАМЕНА: вместо очереди просто заменяем последний отложенный сигнал
                         if trade_key not in self._pending_signals:
@@ -166,7 +166,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                                 pass
                             self._pending_signals[trade_key].put_nowait(signal_data)
                         
-                        log(f"[{symbol}] Сигнал отложен (заменён предыдущий)")
+                        log(f"[{symbol}] Сигнал отложен (идёт другая сделка в системе)")
 
                         if trade_key not in self._pending_processing:
                             self._pending_processing[trade_key] = asyncio.create_task(
@@ -175,11 +175,12 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                         queue.task_done()
                         continue
 
-                    # Блокируем и обрабатываем
+                    # Блокируем и обрабатываем - ОДНА сделка на всю систему
                     async with self._global_trade_lock:
+                        log(f"[{symbol}] Получена глобальная блокировка, начало обработки")
                         task = asyncio.create_task(self._process_single_signal(signal_data))
-                    # Ждём завершения ВНЕ блокировки
-                    await task
+                        await task  # Ждём завершения ПОД блокировкой
+                        log(f"[{symbol}] Освобождение глобальной блокировки")
 
                 else:
                     # === ПАРАЛЛЕЛЬНЫЕ СДЕЛКИ ===
@@ -195,7 +196,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                                 break
 
                         await self._pending_signals[trade_key].put(signal_data)
-                        log(f"[{symbol}] Сигнал отложен")
+                        log(f"[{symbol}] Сигнал отложен (активная сделка по этому символу)")
 
                         if trade_key not in self._pending_processing:
                             self._pending_processing[trade_key] = asyncio.create_task(
@@ -232,7 +233,9 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             if not allow_parallel:
                 # Для непараллельного режима - обрабатываем только один отложенный сигнал
                 async with self._global_trade_lock:
+                    log(f"[{symbol}] Получена глобальная блокировка для отложенного сигнала")
                     await self._process_one_pending(trade_key)
+                    log(f"[{symbol}] Освобождение глобальной блокировки для отложенного сигнала")
             else:
                 # Для параллельного режима - ждём завершения активной сделки
                 wait_start = asyncio.get_event_loop().time()
