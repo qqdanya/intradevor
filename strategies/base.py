@@ -1,12 +1,20 @@
-# strategies/base.py
 from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.http_async import HttpClient
 
 
 class StrategyBase:
-    def __init__(self, session, user_id, user_hash, symbol, log_callback, **params):
+    """
+    Абстрактная база для стратегий - управление жизненным циклом и сигналами.
+    Конкретная торговая логика вынесена в BaseTradingStrategy.
+    """
+    
+    def __init__(self, session: HttpClient, user_id: str, user_hash: str, symbol: str, 
+                 log_callback: Optional[Callable] = None, **params):
         self.session = session
         self.user_id = user_id
         self.user_hash = user_hash
@@ -35,9 +43,11 @@ class StrategyBase:
         self._signal_queue_since_version: Optional[int] = None
 
     async def run(self):
+        """Основной метод запуска стратегии - должен быть реализован в дочерних классах"""
         raise NotImplementedError("Стратегия не реализована.")
 
-    # --- lifecycle ---
+    # === LIFECYCLE MANAGEMENT ===
+
     def start(self):
         """Помечает стратегию как запущенную (сброс флагов), до реального run()."""
         self._running = True
@@ -47,12 +57,15 @@ class StrategyBase:
         self._pause_event.set()
 
     def has_started(self) -> bool:
+        """Проверяет, была ли стратегия запущена"""
         return self._task is not None and not self._task.done()
 
     def is_running(self) -> bool:
+        """Проверяет, работает ли стратегия в данный момент"""
         return self._running and (self._task is None or not self._task.done())
 
     def _emit_status(self, text: str):
+        """Отправляет статус через колбэк"""
         cb = self.params.get("on_status")
         if callable(cb):
             try:
@@ -61,26 +74,33 @@ class StrategyBase:
                 pass
 
     def stop(self):
-        # выставляем флаги и будим всех ждущих
+        """Полная остановка стратегии"""
         self._running = False
         self._stop_event.set()
         self._pause_event.set()
         self._emit_status("завершен")
+        
+        # Отменяем все задачи
         if self._signal_listener_task and not self._signal_listener_task.done():
             self._signal_listener_task.cancel()
-        # отменяем задачу, если мы её создавали
         if self._task and not self._task.done():
             self._task.cancel()
 
     def pause(self):
+        """Постановка стратегии на паузу"""
         self._pause_event.clear()
         self._emit_status("пауза")
 
     def resume(self):
+        """Возобновление стратегии после паузы"""
         self._pause_event.set()
         self._emit_status("ожидание сигнала")
 
     async def _pause_point(self):
+        """
+        Точка паузы - приостанавливает выполнение пока стратегия на паузе.
+        Выбрасывает CancelledError если стратегия остановлена.
+        """
         wait_pause = asyncio.create_task(self._pause_event.wait())
         wait_stop = asyncio.create_task(self._stop_event.wait())
         done, pending = await asyncio.wait(
@@ -94,7 +114,8 @@ class StrategyBase:
         if self._stop_event.is_set():
             raise asyncio.CancelledError
 
-    # --- helpers: отменяемый сон и ожидание ---
+    # === UTILITIES: CANCELLABLE SLEEP AND WAIT ===
+
     async def sleep(self, seconds: float) -> None:
         """Сон, который мгновенно прервётся по stop()."""
         try:
@@ -136,13 +157,17 @@ class StrategyBase:
             await asyncio.gather(task, stop_task, return_exceptions=True)
 
     def is_paused(self) -> bool:
+        """Проверяет, находится ли стратегия на паузе"""
         return not self._pause_event.is_set()
 
     def is_stopped(self) -> bool:
+        """Проверяет, остановлена ли стратегия"""
         return not self._running
 
-    # --- live settings ---
+    # === LIVE SETTINGS ===
+
     def update_params(self, **params):
+        """Обновление параметров стратегии на лету"""
         self.params.update(params)
         if hasattr(self, "log") and self.log:
             pretty = {
@@ -152,15 +177,17 @@ class StrategyBase:
             self.log(f"[{self.symbol}] ⚙ Параметры обновлены: {pretty}")
 
     def get_param(self, key, default=None):
+        """Получение параметра стратегии"""
         return self.params.get(key, default)
 
-    # --- signal queue helpers -------------------------------------------------
+    # === SIGNAL QUEUE MANAGEMENT ===
 
     def _signal_queue_capacity(self) -> int:
         """Максимальный размер очереди сигналов."""
         return 32
 
     def _handle_signal_listener_error(self, exc: Exception) -> None:
+        """Обработка ошибок в слушателе сигналов"""
         cb = getattr(self, "log", None)
         if callable(cb):
             try:
@@ -169,6 +196,7 @@ class StrategyBase:
                 pass
 
     async def _cancel_signal_listener(self) -> None:
+        """Отмена слушателя сигналов и очистка очереди"""
         if self._signal_listener_task:
             self._signal_listener_task.cancel()
             try:
@@ -191,14 +219,15 @@ class StrategyBase:
         self._signal_queue = None
 
     async def _signal_listener_loop(self) -> None:
+        """Основной цикл слушателя сигналов"""
         queue = self._signal_queue
         fetcher = self._signal_listener_fetcher
         since_version = self._signal_queue_since_version
-        while True:
-            if self._stop_event.is_set():
-                break
+        
+        while self._running and not self._stop_event.is_set():
             if fetcher is None or queue is None:
                 break
+                
             try:
                 payload = await fetcher(since_version)
             except asyncio.CancelledError:
@@ -230,14 +259,8 @@ class StrategyBase:
         func_key: Any,
         config_key: Any,
     ) -> None:
-        if self._signal_listener_task and not self._signal_listener_task.done():
-            self._signal_listener_task.cancel()
-            try:
-                await asyncio.gather(
-                    self._signal_listener_task, return_exceptions=True
-                )
-            except Exception:
-                pass
+        """Перезапуск слушателя сигналов"""
+        await self._cancel_signal_listener()
 
         capacity = max(0, int(self._signal_queue_capacity()))
         self._signal_queue = asyncio.Queue(maxsize=capacity)
@@ -253,6 +276,7 @@ class StrategyBase:
         *,
         config_key: Any = None,
     ) -> None:
+        """Обеспечение работы слушателя сигналов"""
         func_key = getattr(fetcher, "__func__", fetcher)
         if (
             self._signal_listener_task
@@ -269,6 +293,7 @@ class StrategyBase:
     async def _next_signal_from_queue(
         self, *, timeout: Optional[float] = None
     ) -> tuple[int, int, Any]:
+        """Получение следующего сигнала из очереди"""
         if self._signal_queue is None:
             raise RuntimeError("Signal queue is not initialized")
         coro = self._signal_queue.get()
