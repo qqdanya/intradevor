@@ -22,11 +22,11 @@ OSCAR_GRIND_DEFAULTS = {
     "grace_delay_sec": 30.0,
     "double_entry": True,
     "trade_type": "classic",
-    "allow_parallel_trades": True,
+    "allow_parallel_trades": True,  # ← Чекбокс "Обрабатывать множество сигналов"
 }
 
 class OscarGrindBaseStrategy(BaseTradingStrategy):
-    """Oscar Grind с корректным устареванием: signal_time + max_age (для всех сигналов)"""
+    """Oscar Grind с умной отложкой: всегда хранит последний сигнал, проверяет свежесть"""
 
     def __init__(
         self,
@@ -123,7 +123,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                 await asyncio.sleep(1.0)
 
     async def _process_signal_queue(self, trade_key: str):
-        """Обрабатывает очередь — НЕ ЖДЁТ завершения серии!"""
+        """Обрабатывает очередь — всегда откладывает последний сигнал"""
         queue = self._signal_queues[trade_key]
         symbol, timeframe = trade_key.split('_', 1)
         log = self.log or (lambda s: None)
@@ -137,7 +137,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                 signal_data = await queue.get()
 
                 if trade_key in self._active_trades:
-                    # === Откладываем ===
+                    # === ОТКЛАДЫВАЕМ ПОСЛЕДНИЙ СИГНАЛ (всегда) ===
                     if trade_key not in self._pending_signals:
                         self._pending_signals[trade_key] = asyncio.Queue()
                         log(f"[{symbol}] Создана отложенная очередь")
@@ -151,15 +151,16 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                             break
 
                     await self._pending_signals[trade_key].put(signal_data)
-                    log(f"[{symbol}] Сигнал отложен")
+                    log(f"[{symbol}] Сигнал отложен (будет проверен после завершения)")
 
+                    # Запускаем обработчик отложки
                     if trade_key not in self._pending_processing:
                         self._pending_processing[trade_key] = asyncio.create_task(
                             self._process_pending_signals(trade_key)
                         )
 
                 else:
-                    # === Запускаем в фоне — НЕ ЖДЁМ! ===
+                    # === Запускаем в фоне ===
                     task = asyncio.create_task(self._process_single_signal(signal_data))
                     self._active_trades[trade_key] = task
 
@@ -187,6 +188,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
 
         try:
             while self._running:
+                # Ждём завершения активной сделки
                 while trade_key in self._active_trades and self._running:
                     await asyncio.sleep(0.1)
 
@@ -196,6 +198,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                 if trade_key not in self._pending_signals or self._pending_signals[trade_key].empty():
                     break
 
+                # Берём последний сигнал
                 last_signal = None
                 while True:
                     try:
@@ -285,7 +288,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                     log(f"[{symbol}] Сигнал устарел: свеча {signal_received_time.strftime('%H:%M:%S')} + {max_age}s = {deadline.strftime('%H:%M:%S')}, сейчас {current_time.strftime('%H:%M:%S')}")
                     break
                 else:
-                    log(f"[{symbol}] Сигнал живёт до {deadline.strftime('%H:%M:%S')}")
+                    log(f"[{symbol}] Сигнал живёт до {deadline.strftime('%H:%M:%S')} (max_age={max_age}s)")
 
             # === Classic: окно размещения ===
             if self._trade_type == "classic":
