@@ -114,7 +114,6 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                     self._signal_processors[trade_key] = asyncio.create_task(
                         self._process_signal_queue(trade_key)
                     )
-                    log(f"[{symbol}] Создана очередь для {trade_key}")
 
                 await self._signal_queues[trade_key].put(signal_data)
                 log(f"[{symbol}] Сигнал добавлен: свеча {signal_timestamp.strftime('%H:%M:%S')}")
@@ -146,7 +145,6 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                         # Откладываем
                         if trade_key not in self._pending_signals:
                             self._pending_signals[trade_key] = asyncio.Queue()
-                            log(f"[{symbol}] Создана отложенная очередь (глобальная блокировка)")
 
                         while not self._pending_signals[trade_key].empty():
                             try:
@@ -168,14 +166,14 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                     # Блокируем и обрабатываем
                     async with self._global_trade_lock:
                         task = asyncio.create_task(self._process_single_signal(signal_data))
-                        await task  # Ждём завершения
+                    # Ждём завершения ВНЕ блокировки
+                    await task
 
                 else:
                     # === ПАРАЛЛЕЛЬНЫЕ СДЕЛКИ ===
                     if trade_key in self._active_trades:
                         if trade_key not in self._pending_signals:
                             self._pending_signals[trade_key] = asyncio.Queue()
-                            log(f"[{symbol}] Создана отложенная очередь")
 
                         while not self._pending_signals[trade_key].empty():
                             try:
@@ -219,21 +217,35 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         allow_parallel = self.params.get("allow_parallel_trades", True)
 
         try:
+            timeout = 300  # 5 минут максимум
+            start_time = asyncio.get_event_loop().time()
+            
             while self._running:
+                if asyncio.get_event_loop().time() - start_time > timeout:
+                    break
+                    
                 if not allow_parallel:
-                    # Ждём разблокировки
-                    if self._global_trade_lock.locked():
-                        await asyncio.sleep(0.1)
-                        continue
-                    async with self._global_trade_lock:
+                    # Ждём разблокировки с таймаутом
+                    try:
+                        async with asyncio.timeout(1.0):
+                            await self._global_trade_lock.acquire()
+                        # Получили блокировку - обрабатываем
                         await self._process_one_pending(trade_key)
+                        self._global_trade_lock.release()
+                        break
+                    except asyncio.TimeoutError:
+                        continue
                 else:
-                    # Ждём завершения по trade_key
+                    # Ждём завершения по trade_key с таймаутом
+                    wait_start = asyncio.get_event_loop().time()
                     while trade_key in self._active_trades and self._running:
+                        if asyncio.get_event_loop().time() - wait_start > 60.0:  # 1 минута таймаут
+                            break
                         await asyncio.sleep(0.1)
                     if not self._running:
                         break
                     await self._process_one_pending(trade_key)
+                    break
 
         except asyncio.CancelledError:
             pass
@@ -451,14 +463,37 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                 pass
 
     def stop(self):
-        for task in self._signal_processors.values():
-            task.cancel()
-        for task in self._pending_processing.values():
-            task.cancel()
-
+        # Отменяем все задачи
+        all_tasks = []
+        all_tasks.extend(self._signal_processors.values())
+        all_tasks.extend(self._pending_processing.values())
+        all_tasks.extend(self._active_trades.values())
+        
+        for task in all_tasks:
+            if not task.done():
+                task.cancel()
+        
+        # Очищаем все очереди
+        for queue in list(self._signal_queues.values()):
+            while not queue.empty():
+                try:
+                    queue.get_nowait()
+                    queue.task_done()
+                except asyncio.QueueEmpty:
+                    break
+        
+        for queue in list(self._pending_signals.values()):
+            while not queue.empty():
+                try:
+                    queue.get_nowait()
+                    queue.task_done()
+                except asyncio.QueueEmpty:
+                    break
+        
         self._signal_queues.clear()
         self._signal_processors.clear()
         self._pending_signals.clear()
         self._pending_processing.clear()
+        self._active_trades.clear()
 
         super().stop()
