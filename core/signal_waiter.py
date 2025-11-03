@@ -40,6 +40,7 @@ class _State:
     last_symbol: Optional[str] = None
     last_timeframe: Optional[str] = None
     next_timestamp: Optional[datetime] = None  # начало следующей свечи
+    timestamp: Optional[datetime] = None  # время текущей свечи сигнала
 
 _states: Dict[tuple[str, str], _State] = defaultdict(_State)
 
@@ -56,11 +57,14 @@ def push_signal(
     direction: Optional[int],
     indicator: Optional[str] = None,
     next_timestamp: Optional[datetime] = None,
+    timestamp: Optional[datetime] = None,
 ) -> None:
     """
     Положить НОВОЕ сообщение сигнала:
       direction: 1 (up), 2 (down), None (или 0) — очистка состояния (none).
       indicator: строка-имя источника сигнала (например, "RSI(14)").
+      timestamp: время свечи сигнала.
+      next_timestamp: время следующей свечи.
     Любой приход (включая None) повышает версию и будит всех ожидающих.
     Также запоминаем момент прихода (monotonic), длительность TF и имя индикатора.
     """
@@ -84,6 +88,7 @@ def push_signal(
             st.last_symbol = symbol
             st.last_timeframe = timeframe
             st.next_timestamp = next_timestamp
+            st.timestamp = timestamp
             st.cond.notify_all()
 
     loop = asyncio.get_running_loop()
@@ -115,13 +120,13 @@ async def wait_for_signal_versioned(
     # --- новое: вернуть вместе с direction/version ещё и meta (indicator, tf_sec, symbol, timeframe) ---
     include_meta: bool = False,
     max_age_sec: float = 0.0,
-) -> Tuple[int, int] | Tuple[int, int, Dict[str, Optional[str | int | float]]]:
+) -> Tuple[int, int] | Tuple[int, int, Dict[str, Optional[str | int | float | datetime]]]:
     """
     Ждёт ПЕРВЫЙ up/down с версией > since_version.
     none (очистка) лишь повышает версию, но не возвращается.
     По умолчанию возвращает (direction, version), где direction ∈ {1,2}.
     Если include_meta=True — вернёт (direction, version, meta),
-    где meta = {"indicator": str|None, "tf_sec": int|None, "symbol": str|None, "timeframe": str|None}.
+    где meta = {"indicator": str|None, "tf_sec": int|None, "symbol": str|None, "timeframe": str|None, "timestamp": datetime|None}.
     max_age_sec > 0 позволяет использовать сигнал, пришедший не ранее чем
     max_age_sec секунд до вызова функции.
     """
@@ -191,6 +196,7 @@ async def wait_for_signal_versioned(
                     "symbol": st.last_symbol,
                     "timeframe": st.last_timeframe,
                     "next_timestamp": st.next_timestamp,
+                    "timestamp": st.timestamp,
                 }
                 return int(direction), int(ver), meta
             return int(direction), int(ver)
@@ -224,7 +230,8 @@ def peek_signal_state(
 ) -> Dict[str, Optional[int | float | str | datetime]]:
     """
     Неблокирующий доступ к текущему состоянию: возвращает dict с полями:
-      version, value (1/2/None), indicator (str|None), tf_sec (int|None), last_monotonic (float|None)
+      version, value (1/2/None), indicator (str|None), tf_sec (int|None), 
+      last_monotonic (float|None), next_timestamp (datetime|None), timestamp (datetime|None)
     """
     st = _states[_key(symbol, timeframe)]
     return {
@@ -234,4 +241,5 @@ def peek_signal_state(
         "tf_sec": st.tf_sec,
         "last_monotonic": st.last_monotonic,
         "next_timestamp": st.next_timestamp,
+        "timestamp": st.timestamp,
     }
