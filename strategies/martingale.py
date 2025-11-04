@@ -5,6 +5,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 from strategies.base_trading_strategy import BaseTradingStrategy, _minutes_from_timeframe
 from strategies.constants import MOSCOW_TZ
+from core.time_utils import format_local_time
 from core.money import format_amount
 from core.intrade_api_async import is_demo_account
 
@@ -80,15 +81,12 @@ class MartingaleStrategy(BaseTradingStrategy):
                 await self._common._handle_pending_signal(trade_key, signal_data)
             return
         
-        # Помечаем серию как активную
-        self._active_series[trade_key] = True
-        log(f"[{symbol}] Начало обработки сигнала (Мартингейл)")
-       
+        series_started = False
         try:
             # Обновляем информацию о сигнале
             self._last_signal_ver = signal_data['version']
             self._last_indicator = signal_data['indicator']
-            self._last_signal_at_str = signal_data['timestamp'].strftime("%d.%m.%Y %H:%M:%S")
+            self._last_signal_at_str = format_local_time(signal_data['timestamp'])
            
             ts = signal_data['meta'].get('next_timestamp') if signal_data['meta'] else None
             self._next_expire_dt = ts.astimezone(ZoneInfo(MOSCOW_TZ)) if ts else None
@@ -119,13 +117,19 @@ class MartingaleStrategy(BaseTradingStrategy):
                     log(f"[{symbol}] ❌ Сигнал неактуален для sprint: {reason}")
                     return
 
+            # Помечаем серию как активную только после успешной валидации
+            self._active_series[trade_key] = True
+            series_started = True
+            log(f"[{symbol}] Начало обработки сигнала (Мартингейл)")
+
             # Запускаем серию Мартингейла
             await self._run_martingale_series(symbol, timeframe, direction, log, signal_data['timestamp'], signal_data)
-            
+
         finally:
-            # 🔴 ВАЖНО: Освобождаем серию после завершения
-            self._active_series[trade_key] = False
-            log(f"[{symbol}] Серия Мартингейла завершена для {timeframe}")
+            if series_started:
+                # 🔴 ВАЖНО: Освобождаем серию после завершения
+                self._active_series.pop(trade_key, None)
+                log(f"[{symbol}] Серия Мартингейла завершена для {timeframe}")
 
     async def _run_martingale_series(self, symbol: str, timeframe: str, initial_direction: int, log, signal_received_time: datetime, signal_data: dict):
         """Запускает серию Мартингейла для конкретного сигнала"""

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict
 from zoneinfo import ZoneInfo
 from core.policy import can_open_new_trade, get_max_open_trades  # Добавляем импорт
+from core.time_utils import format_local_time
 from strategies.constants import MOSCOW_TZ
 
 class StrategyCommon:
@@ -97,7 +98,7 @@ class StrategyCommon:
                 trade_key = f"{symbol}_{timeframe}"
                 
                 self.strategy._last_signal_ver = ver
-                self.strategy._last_signal_at_str = signal_timestamp.strftime("%d.%m.%Y %H:%M:%S")
+                self.strategy._last_signal_at_str = format_local_time(signal_timestamp)
                 
                 # Создаём очередь если её нет
                 if trade_key not in self._signal_queues:

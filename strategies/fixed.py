@@ -7,6 +7,7 @@ from strategies.base_trading_strategy import BaseTradingStrategy, _minutes_from_
 from strategies.constants import MOSCOW_TZ, ALL_SYMBOLS_LABEL, ALL_TF_LABEL, CLASSIC_ALLOWED_TFS
 from core.money import format_amount
 from core.intrade_api_async import is_demo_account, get_balance_info, get_current_percent, place_trade, check_trade_result
+from core.time_utils import format_local_time
 
 FIXED_DEFAULTS = {
     "base_investment": 100,
@@ -69,7 +70,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
         # Обновляем информацию о сигнале
         self._last_signal_ver = signal_data['version']
         self._last_indicator = signal_data['indicator']
-        self._last_signal_at_str = signal_data['timestamp'].strftime("%d.%m.%Y %H:%M:%S")
+        self._last_signal_at_str = format_local_time(signal_data['timestamp'])
        
         ts = signal_data['meta'].get('next_timestamp') if signal_data['meta'] else None
         self._next_expire_dt = ts.astimezone(ZoneInfo(MOSCOW_TZ)) if ts else None
