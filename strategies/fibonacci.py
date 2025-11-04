@@ -3,6 +3,7 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
+
 from strategies.base_trading_strategy import BaseTradingStrategy, _minutes_from_timeframe
 from strategies.constants import MOSCOW_TZ, ALL_SYMBOLS_LABEL, ALL_TF_LABEL, CLASSIC_ALLOWED_TFS
 from core.money import format_amount
@@ -62,7 +63,7 @@ class FibonacciStrategy(BaseTradingStrategy):
         fibonacci_params = dict(FIBONACCI_DEFAULTS)
         if params:
             fibonacci_params.update(params)
-           
+
         super().__init__(
             http_client=http_client,
             user_id=user_id,
@@ -101,25 +102,25 @@ class FibonacciStrategy(BaseTradingStrategy):
         self._last_signal_ver = signal_data['version']
         self._last_indicator = signal_data['indicator']
         self._last_signal_at_str = format_local_time(signal_data['timestamp'])
-       
+
         ts = signal_data['meta'].get('next_timestamp') if signal_data['meta'] else None
         self._next_expire_dt = ts.astimezone(ZoneInfo(MOSCOW_TZ)) if ts else None
-        
+
         # Обновляем символ и таймфрейм если используются "все"
         if self._use_any_symbol:
             self.symbol = symbol
         if self._use_any_timeframe:
             self.timeframe = timeframe
             self.params["timeframe"] = self.timeframe
-            
+
         try:
             self._last_signal_monotonic = asyncio.get_running_loop().time()
         except RuntimeError:
             self._last_signal_monotonic = None
 
-        # ПРОВЕРКА АКТУАЛЬНОСТИ СИГНАЛА С НОВОЙ ЛОГИКОЙ
+        # ПРОВЕРКА АКТУАЛЬНОСТИ СИГНАЛА (перед стартом серий)
         current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
-        
+
         if self._trade_type == "classic":
             is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
             if not is_valid:
@@ -142,7 +143,7 @@ class FibonacciStrategy(BaseTradingStrategy):
             series_started = True
             log(start_processing(symbol, "Фибоначчи"))
 
-            # Запускаем серию Фибоначчи для этого сигнала
+            # Запускаем серии Фибоначчи
             updated = await self._run_fibonacci_series(
                 trade_key,
                 symbol,
@@ -170,18 +171,14 @@ class FibonacciStrategy(BaseTradingStrategy):
         signal_received_time: datetime,
         signal_data: dict,
     ) -> int:
-        """Запускает серию Фибоначчи для конкретного сигнала"""
-
-        next_start_step = 1
-        did_place_any_trade = False
-        force_validate_signal = False
+        """Запускает (несколько) серий Фибоначчи для конкретного сигнала"""
         max_steps = int(self.params.get("max_steps", 5))
 
         while self._running and series_left > 0:
             await self._pause_point()
             if not await self.ensure_account_conditions():
                 continue
-                
+
             # Проверяем баланс
             try:
                 bal, _, _ = await get_balance_info(
@@ -189,30 +186,38 @@ class FibonacciStrategy(BaseTradingStrategy):
                 )
             except Exception:
                 bal = 0.0
-                
+
             min_balance = float(self.params.get("min_balance", 100))
             if bal < min_balance:
                 log(f"[{symbol}] ⛔ Баланс ниже минимума ({format_amount(bal)} < {format_amount(min_balance)}). Ожидание...")
                 await self.sleep(2.0)
                 continue
-                
+
             base = float(self.params.get("base_investment", 100))
             min_pct = int(self.params.get("min_percent", 70))
             wait_low = float(self.params.get("wait_on_low_percent", 1))
-            
+
             if max_steps <= 0:
                 log(f"[{symbol}] ⚠ max_steps={max_steps} — серию не стартуем.")
                 break
-                
+
+            # ------------------------------------------------------------------
+            # FIX: Полный сброс состояния ДЛЯ НОВОЙ СЕРИИ
+            next_start_step = 1
+            did_place_any_trade = False
+            force_validate_signal = False
+            reuse_previous_signal = False
             step = next_start_step
             series_direction = initial_direction
-            reuse_previous_signal = False
+            # ------------------------------------------------------------------
 
+            # ВНУТРЕННИЙ ЦИКЛ ШАГОВ ФИБОНАЧЧИ ВНУТРИ ОДНОЙ СЕРИИ
             while self._running and step <= max_steps:
                 await self._pause_point()
                 if not await self.ensure_account_conditions():
                     continue
 
+                # Подхватываем новый сигнал (если есть) — актуализируем направление/таймфрейм
                 new_signal = None
                 if not reuse_previous_signal and hasattr(self, "_common") and self._common is not None:
                     new_signal = self._common.pop_latest_signal(trade_key)
@@ -255,17 +260,17 @@ class FibonacciStrategy(BaseTradingStrategy):
                         force_validate_signal = True
                         reuse_previous_signal = False
 
-                # ПРОВЕРКА АКТУАЛЬНОСТИ ТОЛЬКО ДЛЯ ПЕРВОЙ СТАВКИ
+                # ПРОВЕРКА АКТУАЛЬНОСТИ ПЕРЕД РАЗМЕЩЕНИЕМ СДЕЛКИ
                 current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
-
-                need_validate = (not did_place_any_trade) or force_validate_signal
+                need_validate = (not did_place_any_trade) or force_validate_signal  # FIX: did_place_any_trade обнуляется на новую серию
                 validate_for_placement = need_validate
 
-                if need_validate:  # Проверка перед размещением ставки
+                if need_validate:
                     if self._trade_type == "classic":
                         is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
                         if not is_valid:
                             log(signal_not_actual_for_placement(symbol, reason))
+                            # Завершить текущую серию (без списания series_left) и ждать условий:
                             return series_left
                     else:
                         is_valid, reason = self._is_signal_valid_for_sprint(
@@ -280,15 +285,15 @@ class FibonacciStrategy(BaseTradingStrategy):
 
                 # Фибоначчи: ставка = база * число Фибоначчи
                 stake = base * _fib(step)
-                
+
                 # Проверяем выплату и баланс
                 pct, balance = await self.check_payout_and_balance(symbol, stake, min_pct, wait_low)
                 if pct is None:
                     continue
-                    
+
                 log(trade_summary(symbol, format_amount(stake), self._trade_minutes, series_direction, pct) + f" (Fib#{step})")
 
-                # Финальная проверка актуальности перед размещением сделки
+                # Финальная проверка актуальности (дублирующая защита)
                 if validate_for_placement:
                     current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
                     if self._trade_type == "classic":
@@ -316,19 +321,19 @@ class FibonacciStrategy(BaseTradingStrategy):
                 except Exception:
                     demo_now = False
                 account_mode = "ДЕМО" if demo_now else "РЕАЛ"
-                
+
                 # Размещаем сделку
                 self._status("делает ставку")
                 trade_id = await self.place_trade_with_retry(
                     symbol, series_direction, stake, self._anchor_ccy
                 )
-                       
+
                 if not trade_id:
                     log(trade_placement_failed(symbol, "Ждем новый сигнал."))
-                    break  # ВЫХОДИМ ИЗ ВНУТРЕННЕГО ЦИКЛА, НО НЕ УВЕЛИЧИВАЕМ ШАГ
-                    
+                    break  # выходим из внутреннего цикла, шаг не увеличиваем
+
                 did_place_any_trade = True
-                
+
                 # Определяем длительность сделки
                 trade_seconds, expected_end_ts = self._calculate_trade_duration(symbol)
                 wait_seconds = self.params.get("result_wait_s")
@@ -336,14 +341,14 @@ class FibonacciStrategy(BaseTradingStrategy):
                     wait_seconds = trade_seconds
                 else:
                     wait_seconds = float(wait_seconds)
-                    
+
                 # Уведомляем о pending сделке
                 self._notify_pending_trade(
                     trade_id, symbol, timeframe, series_direction, stake, pct,
                     trade_seconds, account_mode, expected_end_ts
                 )
                 self._register_pending_trade(trade_id, symbol, timeframe)
-                
+
                 # Ожидаем результат сделки
                 profit = await self.wait_for_trade_result(
                     trade_id=trade_id,
@@ -358,16 +363,15 @@ class FibonacciStrategy(BaseTradingStrategy):
                     account_mode=account_mode,
                     indicator=self._last_indicator,
                 )
-                
+
                 # Обрабатываем результат по логике Фибоначчи
                 if profit is None:
                     log(result_unknown(symbol, treat_as_loss=True))
                     step += 1
                     reuse_previous_signal = False
                 elif profit > 0:
-                    log(f"[{symbol}] ✅ WIN: profit={format_amount(profit)}. Откат на два шага назад.")
-                    reuse_previous_signal = False
-                    next_start_step = max(1, step - 2)
+                    log(f"[{symbol}] ✅ WIN: profit={format_amount(profit)}. Серия завершена.")
+                    # В этой реализации новая серия всегда стартует с шага 1 (чистый сброс) — см. FIX выше.
                     break
                 elif abs(profit) < 1e-9:
                     log(f"[{symbol}] 🤝 PUSH: возврат ставки. Повтор шага без изменения.")
@@ -376,30 +380,30 @@ class FibonacciStrategy(BaseTradingStrategy):
                     log(f"[{symbol}] ❌ LOSS: profit={format_amount(profit)}. Переход к следующему числу Фибоначчи.")
                     step += 1
                     reuse_previous_signal = False
-                    
+
                 await self.sleep(0.2)
-                
+
                 # Обновляем время экспирации для classic
                 if self._trade_type == "classic" and self._next_expire_dt is not None:
                     self._next_expire_dt += timedelta(
                         minutes=_minutes_from_timeframe(timeframe)
                     )
-                    
+
             if not self._running:
                 break
-                
+
             if not did_place_any_trade:
                 log(f"[{symbol}] ℹ Серия завершена без сделок (max_steps={max_steps} или условия не выполнились). "
                     f"Серий осталось: {series_left}.")
             else:
                 if step > max_steps:
                     log(f"[{symbol}] 🛑 Достигнут лимит шагов ({max_steps}). Переход к новой серии.")
-                    next_start_step = 1
-                    
+
+                # Переход к НОВОЙ СЕРИИ: счётчик серий уменьшается,
+                # а все рабочие переменные будут сброшены в начале внешнего цикла (см. FIX выше).
                 series_left -= 1
                 log(f"[{symbol}] ▶ Осталось серий: {series_left}")
-                
-                # Если серии закончились, выходим
+
                 if series_left <= 0:
                     break
 
@@ -417,7 +421,7 @@ class FibonacciStrategy(BaseTradingStrategy):
         else:
             trade_seconds = float(self._trade_minutes) * 60.0
             expected_end_ts = datetime.now().timestamp() + trade_seconds
-           
+
         return trade_seconds, expected_end_ts
 
     def _notify_pending_trade(
