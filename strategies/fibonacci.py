@@ -173,15 +173,15 @@ class FibonacciStrategy(BaseTradingStrategy):
         """Запускает серию Фибоначчи для конкретного сигнала"""
 
         next_start_step = 1
-        did_place_any_trade = False
-        force_validate_signal = False
         max_steps = int(self.params.get("max_steps", 5))
 
         while self._running and series_left > 0:
             await self._pause_point()
             if not await self.ensure_account_conditions():
                 continue
-                
+
+            did_place_any_trade = False
+            force_validate_signal = False
             # Проверяем баланс
             try:
                 bal, _, _ = await get_balance_info(
@@ -372,6 +372,7 @@ class FibonacciStrategy(BaseTradingStrategy):
                 elif abs(profit) < 1e-9:
                     log(f"[{symbol}] 🤝 PUSH: возврат ставки. Повтор шага без изменения.")
                     reuse_previous_signal = True
+                    force_validate_signal = True
                 else:
                     log(f"[{symbol}] ❌ LOSS: profit={format_amount(profit)}. Переход к следующему числу Фибоначчи.")
                     step += 1
@@ -398,7 +399,7 @@ class FibonacciStrategy(BaseTradingStrategy):
                     
                 series_left -= 1
                 log(f"[{symbol}] ▶ Осталось серий: {series_left}")
-                
+
                 # Если серии закончились, выходим
                 if series_left <= 0:
                     break
