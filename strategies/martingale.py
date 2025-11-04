@@ -175,7 +175,8 @@ class MartingaleStrategy(BaseTradingStrategy):
                     is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
                     if not is_valid:
                         log(signal_not_actual_for_placement(symbol, reason))
-                        return
+                        await self.sleep(0.5)
+                        continue
                 else:
                     is_valid, reason = self._is_signal_valid_for_sprint(
                         {'timestamp': signal_received_time},
@@ -183,7 +184,8 @@ class MartingaleStrategy(BaseTradingStrategy):
                     )
                     if not is_valid:
                         log(signal_not_actual_for_placement(symbol, reason))
-                        return
+                        await self.sleep(0.5)
+                        continue
                         
             # Рассчитываем ставку
             base_stake = float(self.params.get("base_investment", 100))
@@ -220,7 +222,8 @@ class MartingaleStrategy(BaseTradingStrategy):
 
             if not is_valid:
                 log(signal_not_actual_for_placement(symbol, reason))
-                return
+                await self.sleep(0.5)
+                continue
 
             # Определяем режим аккаунта
             try:

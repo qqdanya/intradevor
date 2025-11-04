@@ -270,8 +270,8 @@ class FibonacciStrategy(BaseTradingStrategy):
                         is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
                         if not is_valid:
                             log(signal_not_actual_for_placement(symbol, reason))
-                            # Завершить текущую серию (без списания series_left) и ждать условий:
-                            return series_left
+                            await self.sleep(0.5)
+                            continue
                     else:
                         is_valid, reason = self._is_signal_valid_for_sprint(
                             {'timestamp': signal_received_time},
@@ -279,7 +279,8 @@ class FibonacciStrategy(BaseTradingStrategy):
                         )
                         if not is_valid:
                             log(signal_not_actual_for_placement(symbol, reason))
-                            return series_left
+                            await self.sleep(0.5)
+                            continue
 
                 force_validate_signal = False
 
@@ -313,7 +314,8 @@ class FibonacciStrategy(BaseTradingStrategy):
 
                     if not is_valid:
                         log(signal_not_actual_for_placement(symbol, reason))
-                        return series_left
+                        await self.sleep(0.5)
+                        continue
 
                 # Определяем режим аккаунта
                 try:
