@@ -92,13 +92,16 @@ class BaseTradingStrategy(StrategyBase):
         self._on_trade_result = self.params.get("on_trade_result")
         self._on_trade_pending = self.params.get("on_trade_pending")
         self._on_status = self.params.get("on_status")
-        
+
         # Состояние стратегии
         self._last_signal_ver: int = 0
         self._last_indicator: str = "-"
         self._last_signal_at_str: Optional[str] = None
         self._next_expire_dt = None
         self._last_signal_monotonic: Optional[float] = None
+
+        # Счетчики серий для стратегий (кроме Мартингейла, у которого своя реализация)
+        self._series_counters: dict[str, int] = {}
         
         # Параллельная обработка
         self._allow_parallel_trades = bool(self.params.get("allow_parallel_trades", True))
@@ -118,6 +121,31 @@ class BaseTradingStrategy(StrategyBase):
         
         # Общая логика обработки сигналов
         self._common = StrategyCommon(self)
+
+    # === SERIES COUNTERS ===
+    def _get_series_left(self, trade_key: str) -> int:
+        """Возвращает оставшееся количество серий для ключа сделки."""
+        max_series = int(self.params.get("repeat_count", 10))
+        remaining = self._series_counters.get(trade_key)
+
+        if remaining is None:
+            remaining = max_series
+        else:
+            remaining = max(0, min(int(remaining), max_series))
+
+        self._series_counters[trade_key] = remaining
+        return remaining
+
+    def _set_series_left(self, trade_key: str, value: int) -> int:
+        """Обновляет количество оставшихся серий для ключа сделки."""
+        max_series = int(self.params.get("repeat_count", 10))
+        clamped = max(0, min(int(value), max_series))
+        self._series_counters[trade_key] = clamped
+        return clamped
+
+    def _reset_series_counter(self, trade_key: str) -> None:
+        """Сбрасывает счетчик серий для указанного ключа сделки."""
+        self._series_counters.pop(trade_key, None)
 
     def _init_trading_params(self):
         """Инициализация торговых параметров"""
@@ -547,6 +575,7 @@ class BaseTradingStrategy(StrategyBase):
         super().stop()
         self._pending_for_status.clear()
         self._active_trades.clear()
+        self._series_counters.clear()
 
     # === PARAMETER UPDATES ===
     def update_params(self, **params):
@@ -569,6 +598,15 @@ class BaseTradingStrategy(StrategyBase):
         if "allow_parallel_trades" in params:
             self._allow_parallel_trades = bool(params["allow_parallel_trades"])
             self.params["allow_parallel_trades"] = self._allow_parallel_trades
+
+        if "repeat_count" in params:
+            try:
+                max_series = int(params["repeat_count"])
+            except Exception:
+                max_series = int(self.params.get("repeat_count", 10))
+
+            for key in list(self._series_counters.keys()):
+                self._series_counters[key] = max(0, min(self._series_counters[key], max_series))
 
     def _update_minutes_param(self, minutes):
         """Обновление параметра минут"""
