@@ -85,7 +85,7 @@ class MartingaleStrategy(BaseTradingStrategy):
         except RuntimeError:
             self._last_signal_monotonic = None
 
-        # ПРОВЕРКА АКТУАЛЬНОСТИ СИГНАЛА С НОВОЙ ЛОГИКОЙ
+        # ПРОВЕРКА АКТУАЛЬНОСТИ СИГНАЛА ПЕРЕД НАЧАЛОМ НОВОЙ СЕРИИ
         current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
         
         if self._trade_type == "classic":
@@ -119,10 +119,10 @@ class MartingaleStrategy(BaseTradingStrategy):
             if not await self.ensure_account_conditions():
                 continue
                 
-            # ПРОВЕРКА АКТУАЛЬНОСТИ ТОЛЬКО ДЛЯ ПЕРВОЙ СТАВКИ
+            # ПРОВЕРКА АКТУАЛЬНОСТИ ТОЛЬКО ДЛЯ ПЕРВОЙ СТАВКИ В СЕРИИ
             current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
             
-            if not did_place_any_trade:  # ТОЛЬКО перед первой ставкой
+            if not did_place_any_trade:  # ТОЛЬКО перед первой ставкой в новой серии
                 if self._trade_type == "classic":
                     is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
                     if not is_valid:
@@ -213,7 +213,7 @@ class MartingaleStrategy(BaseTradingStrategy):
                 log(f"[{symbol}] 🤝 PUSH: возврат ставки. Повтор шага без увеличения.")
             else:
                 log(f"[{symbol}] ❌ LOSS: profit={format_amount(profit)}. Увеличиваем ставку.")
-                step += 1
+                step += 1  # Продолжаем с тем же направлением и исходным сигналом
                 
             await self.sleep(0.2)
             
