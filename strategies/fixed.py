@@ -121,7 +121,13 @@ class FixedStakeStrategy(BaseTradingStrategy):
         # Проверяем лимит сделок
         max_trades = int(self.params.get("repeat_count", 10))
         if self._trades_counter >= max_trades:
-            log(f"[{symbol}] 🛑 Достигнут лимит сделок ({self._trades_counter}/{max_trades}). Пропускаем сигнал.")
+            if not self.is_stopped():
+                log(
+                    f"[{symbol}] 🛑 Достигнут лимит сделок ({self._trades_counter}/{max_trades}). "
+                    "Останавливаем стратегию."
+                )
+                self._status("достигнут лимит сделок")
+                self.stop()
             return
 
         # Запускаем обработку сделки с фиксированной ставкой
@@ -264,6 +270,8 @@ class FixedStakeStrategy(BaseTradingStrategy):
             self._status(f"сделок осталось: {remaining}")
         else:
             self._status("достигнут лимит сделок")
+            if not self.is_stopped():
+                self.stop()
 
     def _calculate_trade_duration(self, symbol: str) -> tuple[float, float]:
         """Рассчитывает длительность сделки"""
