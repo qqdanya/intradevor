@@ -19,6 +19,8 @@ from PyQt6.QtWidgets import (
     QInputDialog,
     QSizePolicy,
 )
+from datetime import datetime
+
 from PyQt6.QtGui import QColor, QBrush, QTextCursor
 from PyQt6.QtCore import QTimer, Qt
 from core.money import format_amount
@@ -118,6 +120,32 @@ class StrategyControlDialog(QWidget):
         self.trades_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.trades_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self.trades_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+        # ---------- Очередь сигналов ----------
+        self.signal_queue_table = QTableWidget(self)
+        self.signal_queue_table.setColumnCount(8)
+        self.signal_queue_table.setHorizontalHeaderLabels(
+            [
+                "Символ",
+                "ТФ",
+                "Тип",
+                "#",
+                "Время сигнала",
+                "След. свеча",
+                "Направление",
+                "Индикатор",
+            ]
+        )
+        qhdr = self.signal_queue_table.horizontalHeader()
+        qhdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        qhdr.setStretchLastSection(False)
+        self.signal_queue_table.setAlternatingRowColors(True)
+        self.signal_queue_table.setSortingEnabled(False)
+        self.signal_queue_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.signal_queue_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self.signal_queue_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+        self._last_queue_snapshot: list[tuple] = []
 
         # ---------- Настройки (inline) ----------
         self.settings_box = QGroupBox("Настройки стратегии")
@@ -332,17 +360,29 @@ class StrategyControlDialog(QWidget):
         lv.setContentsMargins(0, 0, 0, 0)
         lv.setSpacing(8)
         lv.addWidget(self.settings_box)
+
+        log_label = QLabel("Лог")
+        log_label.setStyleSheet("font-weight: 600;")
+        lv.addWidget(log_label)
+        lv.addWidget(self.log_edit, 1)
         lv.addWidget(controls)
         lv.addStretch(1)
+        lv.setStretch(0, 0)
+        lv.setStretch(1, 0)
+        lv.setStretch(2, 1)
+        lv.setStretch(3, 0)
 
         right_panel = QWidget()
         rv = QVBoxLayout(right_panel)
         rv.setContentsMargins(0, 0, 0, 0)
         rv.setSpacing(8)
         rv.addWidget(self.trades_table)
-        rv.addWidget(self.log_edit)
+        queue_label = QLabel("Очередь сигналов")
+        queue_label.setStyleSheet("font-weight: 600;")
+        rv.addWidget(queue_label)
+        rv.addWidget(self.signal_queue_table)
         rv.setStretch(0, 1)
-        rv.setStretch(1, 1)
+        rv.setStretch(2, 1)
 
         top_split = QWidget()
         hs = QHBoxLayout(top_split)
@@ -377,6 +417,7 @@ class StrategyControlDialog(QWidget):
                     self.apply_template()
 
         self._refresh_status_and_buttons()
+        self._refresh_signal_queue_table()
 
         # === Подписка на сделки для КОНКРЕТНОГО бота ===
         # MainWindow будет вызывать наш колбэк, когда у ЭТОГО бота есть pending/result.
@@ -411,6 +452,7 @@ class StrategyControlDialog(QWidget):
             self.btn_toggle.setEnabled(False)
             self.btn_stop.setEnabled(False)
             self.btn_delete.setEnabled(False)
+            self._refresh_signal_queue_table()
             return
 
         if not started:
@@ -424,6 +466,8 @@ class StrategyControlDialog(QWidget):
         self.btn_stop.setEnabled(running)
         self.btn_delete.setEnabled(True)
 
+        self._refresh_signal_queue_table()
+
     # ---- управление ----
     def _do_toggle(self):
         try:
@@ -434,6 +478,8 @@ class StrategyControlDialog(QWidget):
                 self.log_edit.clear()
                 self.trades_table.setRowCount(0)
                 self._pending_rows.clear()
+                self.signal_queue_table.setRowCount(0)
+                self._last_queue_snapshot = []
                 self.main.bot_logs[self.bot].clear()
                 self.main.bot_trade_history[self.bot].clear()
                 self.main.reset_bot(self.bot)
@@ -862,6 +908,100 @@ class StrategyControlDialog(QWidget):
         except Exception as e:
             # пусть ошибка в UI не роняет окно
             self._add_log(ts(f"⚠ Ошибка обновления таблицы сделок: {e}"))
+
+    # ---- очередь сигналов ----
+    def _collect_signal_queue_snapshot(self) -> list[tuple[str, str, str, int, str, str, str, str]]:
+        strategy = getattr(self.bot, "strategy", None)
+        if strategy is None:
+            return []
+        common = getattr(strategy, "_common", None)
+        if common is None:
+            return []
+
+        snapshot: list[tuple[str, str, str, int, str, str, str, str]] = []
+
+        def _fmt_dt(value) -> str:
+            if isinstance(value, datetime):
+                return value.strftime("%H:%M:%S")
+            if hasattr(value, "strftime"):
+                try:
+                    return value.strftime("%H:%M:%S")
+                except Exception:
+                    pass
+            return str(value) if value is not None else "—"
+
+        def _fmt_dir(value) -> str:
+            if value == 1:
+                return "ВВЕРХ"
+            if value == -1:
+                return "ВНИЗ"
+            return str(value) if value is not None else "—"
+
+        def _extract(items: dict, status: str) -> None:
+            if not isinstance(items, dict):
+                return
+            for trade_key, queue in items.items():
+                if queue is None:
+                    continue
+                raw = getattr(queue, "_queue", None)
+                try:
+                    entries = list(raw) if raw is not None else [None] * queue.qsize()
+                except Exception:
+                    entries = []
+                if not entries:
+                    continue
+                if "_" in trade_key:
+                    symbol, timeframe = trade_key.split("_", 1)
+                else:
+                    symbol, timeframe = trade_key, "—"
+                for index, payload in enumerate(entries, start=1):
+                    data = payload or {}
+                    timestamp = _fmt_dt(data.get("timestamp")) if isinstance(data, dict) else "—"
+                    next_expire = _fmt_dt(data.get("next_expire")) if isinstance(data, dict) else "—"
+                    indicator = "—"
+                    direction = "—"
+                    if isinstance(data, dict):
+                        indicator = str(data.get("indicator") or "—")
+                        direction = _fmt_dir(data.get("direction"))
+                    snapshot.append(
+                        (
+                            str(symbol),
+                            str(timeframe),
+                            status,
+                            index,
+                            timestamp,
+                            next_expire,
+                            direction,
+                            indicator,
+                        )
+                    )
+
+        _extract(getattr(common, "_signal_queues", {}), "в очереди")
+        _extract(getattr(common, "_pending_signals", {}), "отложен")
+
+        snapshot.sort(key=lambda item: (item[0], item[1], item[2], item[3]))
+        return snapshot
+
+    def _refresh_signal_queue_table(self) -> None:
+        snapshot = self._collect_signal_queue_snapshot()
+        if snapshot == self._last_queue_snapshot:
+            return
+        self._last_queue_snapshot = snapshot
+
+        was_sorting = self.signal_queue_table.isSortingEnabled()
+        if was_sorting:
+            self.signal_queue_table.setSortingEnabled(False)
+
+        self.signal_queue_table.setRowCount(len(snapshot))
+        for row, row_data in enumerate(snapshot):
+            for col, value in enumerate(row_data):
+                item = QTableWidgetItem(str(value))
+                if col in (2, 3, 6):
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.signal_queue_table.setItem(row, col, item)
+
+        if was_sorting:
+            self.signal_queue_table.setSortingEnabled(True)
 
     # ---- жизнь/смерть окна ----
     def closeEvent(self, e):
