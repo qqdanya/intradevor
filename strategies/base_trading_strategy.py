@@ -412,6 +412,12 @@ class BaseTradingStrategy(StrategyBase):
         """Обработка одного сигнала (должен быть реализован в дочерних классах)"""
         raise NotImplementedError("Метод должен быть реализован в дочернем классе")
 
+    # === SERIALIZATION HELPERS ===
+    def is_series_active(self, trade_key: str) -> bool:
+        """Возвращает True, если для указанного ключа уже выполняется серия."""
+        # По умолчанию стратегия не ограничивает параллельность по ключу
+        return False
+
     async def _fetch_signal_payload(
         self, since_version: Optional[int]
     ) -> tuple[int, int, dict[str, Optional[str | int | float]]]:
