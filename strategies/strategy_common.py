@@ -155,6 +155,15 @@ class StrategyCommon:
             try:
                 signal_data = await queue.get()
 
+                is_valid, reason = self._validate_signal_for_processing(signal_data)
+                if not is_valid:
+                    symbol_to_log = signal_data.get('symbol') or symbol
+                    log(
+                        f"[{symbol_to_log}] ⏰ Сигнал устарел при обработке очереди: {reason} -> пропуск"
+                    )
+                    queue.task_done()
+                    continue
+
                 processed_immediately = False
 
                 # ПРОВЕРКА ЛИМИТА ОТКРЫТЫХ СДЕЛОК
@@ -217,8 +226,22 @@ class StrategyCommon:
             except Exception as e:
                 log(f"[{symbol}] Ошибка в обработчике: {e}")
                 queue.task_done()
-        
+
         log(f"[{symbol}] Остановка обработчика {trade_key}")
+
+    def _validate_signal_for_processing(self, signal_data: dict) -> tuple[bool, str]:
+        """Проверяет, что сигнал всё ещё актуален перед запуском сделки."""
+        current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
+        trade_type = getattr(self.strategy, "_trade_type", "sprint")
+
+        if trade_type == "classic":
+            return self.strategy._is_signal_valid_for_classic(
+                signal_data,
+                current_time,
+                for_placement=True,
+            )
+
+        return self.strategy._is_signal_valid_for_sprint(signal_data, current_time)
 
     async def _handle_pending_signal(self, trade_key: str, signal_data: dict):
         """Обрабатывает отложенный сигнал"""
@@ -347,8 +370,16 @@ class StrategyCommon:
                 break
         
         if last_signal:
-            log(f"[{symbol}] Запуск отложенного сигнала")
-            
+            signal_symbol = last_signal.get('symbol') or symbol
+            is_valid, reason = self._validate_signal_for_processing(last_signal)
+            if not is_valid:
+                log(
+                    f"[{signal_symbol}] ⏰ Отложенный сигнал устарел: {reason} -> пропуск"
+                )
+                return
+
+            log(f"[{signal_symbol}] Запуск отложенного сигнала")
+
             if not self.strategy.params.get("allow_parallel_trades", True):
                 self._total_open_trades += 1  # Увеличиваем счетчик
                 try:
