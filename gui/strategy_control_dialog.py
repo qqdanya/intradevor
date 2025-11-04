@@ -940,11 +940,31 @@ class StrategyControlDialog(QWidget):
             return str(value) if value is not None else "—"
 
         def _fmt_dir(value) -> str:
-            if value == 1:
+            if value is None:
+                return "—"
+
+            normalized = value
+            if isinstance(value, str):
+                normalized = value.strip()
+                if not normalized:
+                    return "—"
+                upper = normalized.upper()
+                if upper in {"UP", "CALL"}:
+                    return "ВВЕРХ"
+                if upper in {"DOWN", "PUT"}:
+                    return "ВНИЗ"
+
+            try:
+                int_dir = int(normalized)
+            except (TypeError, ValueError):
+                int_dir = None
+
+            if int_dir == 1:
                 return "ВВЕРХ"
-            if value == -1:
+            if int_dir == -1:
                 return "ВНИЗ"
-            return str(value) if value is not None else "—"
+
+            return str(normalized)
 
         def _extract(items: dict, status: str) -> None:
             if not isinstance(items, dict):
