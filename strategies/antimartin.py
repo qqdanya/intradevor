@@ -126,7 +126,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
 
             self._active_series[trade_key] = True
             series_started = True
-            log(f"[{symbol}] Начало обработки сигнала (Антимартингейл, парлей)")
+            log(f"[{symbol}] Начало обработки сигнала (Антимартингейл)")
 
             await self._run_antimartingale_series(
                 trade_key, symbol, timeframe, direction, log, signal_data['timestamp'], signal_data
