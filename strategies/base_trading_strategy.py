@@ -446,6 +446,10 @@ class BaseTradingStrategy(StrategyBase):
         # По умолчанию стратегия не ограничивает параллельность по ключу
         return False
 
+    def allow_concurrent_trades_per_key(self) -> bool:
+        """Разрешает открывать несколько сделок для одного ключа одновременно."""
+        return False
+
     async def _fetch_signal_payload(
         self, since_version: Optional[int]
     ) -> tuple[int, int, dict[str, Optional[str | int | float]]]:

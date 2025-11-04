@@ -9,7 +9,7 @@ _CONFIG_FILE = "config.json"
 
 # ===== Значения по умолчанию (могут быть переопределены окружением) =====
 APP_NAME: str = os.getenv("APP_NAME", "Intradevor")
-APP_VERSION: str = os.getenv("APP_VERSION", "1.0.0")
+APP_VERSION: str = os.getenv("APP_VERSION", "1.1.0")
 
 domain: str = os.getenv("DOMAIN", "intrade27.bar")
 base_url: str = f"https://{domain}"

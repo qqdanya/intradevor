@@ -8,6 +8,19 @@ from strategies.constants import MOSCOW_TZ, ALL_SYMBOLS_LABEL, ALL_TF_LABEL, CLA
 from core.money import format_amount
 from core.intrade_api_async import is_demo_account, get_balance_info, get_current_percent, place_trade, check_trade_result
 from core.time_utils import format_local_time
+from strategies.log_messages import (
+    start_processing,
+    signal_not_actual,
+    trade_placement_failed,
+    payout_missing,
+    payout_too_low,
+    payout_resumed,
+    stake_risk,
+    trade_summary,
+    result_unknown,
+    result_win,
+    result_loss,
+)
 
 FIXED_DEFAULTS = {
     "base_investment": 100,
@@ -58,6 +71,10 @@ class FixedStakeStrategy(BaseTradingStrategy):
         # Специфичные атрибуты для Fixed Stake
         self._trades_counter: int = 0  # Счетчик сделок
 
+    def allow_concurrent_trades_per_key(self) -> bool:
+        """Fixed Stake допускает несколько одновременных сделок по одной паре."""
+        return True
+
     async def _process_single_signal(self, signal_data: dict):
         """Обработка одного сигнала для фиксированной ставки"""
         symbol = signal_data['symbol']
@@ -65,7 +82,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
         direction = signal_data['direction']
        
         log = self.log or (lambda s: None)
-        log(f"[{symbol}] Начало обработки сигнала (Fixed Stake)")
+        log(start_processing(symbol, "Fixed Stake"))
        
         # Обновляем информацию о сигнале
         self._last_signal_ver = signal_data['version']
@@ -93,12 +110,12 @@ class FixedStakeStrategy(BaseTradingStrategy):
         if self._trade_type == "classic":
             is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
             if not is_valid:
-                log(f"[{symbol}] ❌ Сигнал неактуален для classic: {reason}")
+                log(signal_not_actual(symbol, "classic", reason))
                 return
         else:
             is_valid, reason = self._is_signal_valid_for_sprint(signal_data, current_time)
             if not is_valid:
-                log(f"[{symbol}] ❌ Сигнал неактуален для sprint: {reason}")
+                log(signal_not_actual(symbol, "sprint", reason))
                 return
 
         # Проверяем лимит сделок
@@ -142,18 +159,18 @@ class FixedStakeStrategy(BaseTradingStrategy):
        
         if pct is None:
             self._status("ожидание процента")
-            log(f"[{symbol}] ⚠ Не получили % выплаты. Пропускаем сигнал.")
+            log(payout_missing(symbol))
             return
-           
+
         if pct < min_pct:
             self._status("ожидание высокого процента")
             if not self._low_payout_notified:
-                log(f"[{symbol}] ℹ Низкий payout {pct}% < {min_pct}% — пропускаем сигнал.")
+                log(payout_too_low(symbol, pct, min_pct))
                 self._low_payout_notified = True
             return
-           
+
         if self._low_payout_notified:
-            log(f"[{symbol}] ℹ Работа продолжается (текущий payout = {pct}%)")
+            log(payout_resumed(symbol, pct))
             self._low_payout_notified = False
 
         # Проверяем баланс для конкретной сделки
@@ -166,17 +183,22 @@ class FixedStakeStrategy(BaseTradingStrategy):
            
         min_floor = float(self.params.get("min_balance", 100))
         if cur_balance is None or (cur_balance - stake) < min_floor:
-            log(f"[{symbol}] 🛑 Сделка {format_amount(stake)} {account_ccy} может опустить баланс ниже "
-                f"{format_amount(min_floor)} {account_ccy}"
-                + ("" if cur_balance is None else f" (текущий {format_amount(cur_balance)} {account_ccy})")
-                + ". Пропускаем сигнал.")
+            current_display = format_amount(cur_balance) if cur_balance is not None else None
+            log(
+                stake_risk(
+                    symbol,
+                    format_amount(stake),
+                    account_ccy,
+                    format_amount(min_floor),
+                    current_display,
+                )
+            )
             return
 
         if not await self.ensure_account_conditions():
             return
 
-        log(f"[{symbol}] stake={format_amount(stake)} min={self._trade_minutes} "
-            f"side={'UP' if direction == 1 else 'DOWN'} payout={pct}%")
+        log(trade_summary(symbol, format_amount(stake), self._trade_minutes, direction, pct))
 
         try:
             demo_now = await is_demo_account(self.http_client)
@@ -191,7 +213,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
         )
                
         if not trade_id:
-            log(f"[{symbol}] ❌ Не удалось разместить сделку. Пропускаем сигнал.")
+            log(trade_placement_failed(symbol, "Пропускаем сигнал."))
             return  # ПРОПУСКАЕМ СИГНАЛ ВМЕСТО УВЕЛИЧЕНИЯ СЧЕТЧИКА
 
         # Увеличиваем счетчик сделок ТОЛЬКО при успешном размещении
@@ -229,11 +251,11 @@ class FixedStakeStrategy(BaseTradingStrategy):
 
         # Логируем результат
         if profit is None:
-            log(f"[{symbol}] ⚠ Результат неизвестен")
+            log(result_unknown(symbol))
         elif profit >= 0:
-            log(f"[{symbol}] ✅ Результат: {format_amount(profit)}")
+            log(result_win(symbol, f"Результат: {format_amount(profit)}"))
         else:
-            log(f"[{symbol}] ❌ Результат: {format_amount(profit)}")
+            log(result_loss(symbol, f"Результат: {format_amount(profit)}"))
 
         # Обновляем статус с оставшимися сделками
         max_trades = int(self.params.get("repeat_count", 10))
