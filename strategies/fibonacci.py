@@ -259,6 +259,7 @@ class FibonacciStrategy(BaseTradingStrategy):
                 current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
 
                 need_validate = (not did_place_any_trade) or force_validate_signal
+                validate_for_placement = need_validate
 
                 if need_validate:  # Проверка перед размещением ставки
                     if self._trade_type == "classic":
@@ -288,25 +289,26 @@ class FibonacciStrategy(BaseTradingStrategy):
                 log(trade_summary(symbol, format_amount(stake), self._trade_minutes, series_direction, pct) + f" (Fib#{step})")
 
                 # Финальная проверка актуальности перед размещением сделки
-                current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
-                if self._trade_type == "classic":
-                    is_valid, reason = self._is_signal_valid_for_classic(
-                        signal_data,
-                        current_time,
-                        for_placement=True,
-                    )
-                else:
-                    sprint_payload = signal_data
-                    if not sprint_payload.get('timestamp'):
-                        sprint_payload = {'timestamp': signal_received_time}
-                    is_valid, reason = self._is_signal_valid_for_sprint(
-                        sprint_payload,
-                        current_time,
-                    )
+                if validate_for_placement:
+                    current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
+                    if self._trade_type == "classic":
+                        is_valid, reason = self._is_signal_valid_for_classic(
+                            signal_data,
+                            current_time,
+                            for_placement=True,
+                        )
+                    else:
+                        sprint_payload = signal_data
+                        if not sprint_payload.get('timestamp'):
+                            sprint_payload = {'timestamp': signal_received_time}
+                        is_valid, reason = self._is_signal_valid_for_sprint(
+                            sprint_payload,
+                            current_time,
+                        )
 
-                if not is_valid:
-                    log(signal_not_actual_for_placement(symbol, reason))
-                    return series_left
+                    if not is_valid:
+                        log(signal_not_actual_for_placement(symbol, reason))
+                        return series_left
 
                 # Определяем режим аккаунта
                 try:
