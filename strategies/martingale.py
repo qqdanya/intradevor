@@ -55,6 +55,9 @@ class MartingaleStrategy(BaseTradingStrategy):
             strategy_name="Martingale",
             **kwargs,
         )
+        
+        # Отслеживание активных серий по паре+таймфрейму
+        self._active_series: dict[str, bool] = {}
 
     async def _process_single_signal(self, signal_data: dict):
         """Обработка одного сигнала для Мартингейла"""
@@ -63,44 +66,62 @@ class MartingaleStrategy(BaseTradingStrategy):
         direction = signal_data['direction']
        
         log = self.log or (lambda s: None)
+        
+        # 🔴 ПРОВЕРКА: нет ли активной серии для этой пары+таймфрейма
+        trade_key = f"{symbol}_{timeframe}"
+        if trade_key in self._active_series and self._active_series[trade_key]:
+            log(f"[{symbol}] ⚠ Активная серия уже выполняется для {timeframe}. Сигнал отложен.")
+            # Передаем сигнал в систему очередей StrategyCommon
+            if hasattr(self, '_common'):
+                await self._common._handle_pending_signal(trade_key, signal_data)
+            return
+        
+        # Помечаем серию как активную
+        self._active_series[trade_key] = True
         log(f"[{symbol}] Начало обработки сигнала (Мартингейл)")
        
-        # Обновляем информацию о сигнале
-        self._last_signal_ver = signal_data['version']
-        self._last_indicator = signal_data['indicator']
-        self._last_signal_at_str = signal_data['timestamp'].strftime("%d.%m.%Y %H:%M:%S")
-       
-        ts = signal_data['meta'].get('next_timestamp') if signal_data['meta'] else None
-        self._next_expire_dt = ts.astimezone(ZoneInfo(MOSCOW_TZ)) if ts else None
-        
-        # Обновляем символ и таймфрейм если используются "все"
-        if self._use_any_symbol:
-            self.symbol = symbol
-        if self._use_any_timeframe:
-            self.timeframe = timeframe
-            self.params["timeframe"] = self.timeframe
-            
         try:
-            self._last_signal_monotonic = asyncio.get_running_loop().time()
-        except RuntimeError:
-            self._last_signal_monotonic = None
+            # Обновляем информацию о сигнале
+            self._last_signal_ver = signal_data['version']
+            self._last_indicator = signal_data['indicator']
+            self._last_signal_at_str = signal_data['timestamp'].strftime("%d.%m.%Y %H:%M:%S")
+           
+            ts = signal_data['meta'].get('next_timestamp') if signal_data['meta'] else None
+            self._next_expire_dt = ts.astimezone(ZoneInfo(MOSCOW_TZ)) if ts else None
+            
+            # Обновляем символ и таймфрейм если используются "все"
+            if self._use_any_symbol:
+                self.symbol = symbol
+            if self._use_any_timeframe:
+                self.timeframe = timeframe
+                self.params["timeframe"] = self.timeframe
+                
+            try:
+                self._last_signal_monotonic = asyncio.get_running_loop().time()
+            except RuntimeError:
+                self._last_signal_monotonic = None
 
-        # ПРОВЕРКА АКТУАЛЬНОСТИ СИГНАЛА ПЕРЕД НАЧАЛОМ НОВОЙ СЕРИИ
-        current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
-        
-        if self._trade_type == "classic":
-            is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
-            if not is_valid:
-                log(f"[{symbol}] ❌ Сигнал неактуален для classic: {reason}")
-                return
-        else:
-            is_valid, reason = self._is_signal_valid_for_sprint(signal_data, current_time)
-            if not is_valid:
-                log(f"[{symbol}] ❌ Сигнал неактуален для sprint: {reason}")
-                return
+            # ПРОВЕРКА АКТУАЛЬНОСТИ СИГНАЛА ПЕРЕД НАЧАЛОМ НОВОЙ СЕРИИ
+            current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
+            
+            if self._trade_type == "classic":
+                is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
+                if not is_valid:
+                    log(f"[{symbol}] ❌ Сигнал неактуален для classic: {reason}")
+                    return
+            else:
+                is_valid, reason = self._is_signal_valid_for_sprint(signal_data, current_time)
+                if not is_valid:
+                    log(f"[{symbol}] ❌ Сигнал неактуален для sprint: {reason}")
+                    return
 
-        # Запускаем серию Мартингейла
-        await self._run_martingale_series(symbol, timeframe, direction, log, signal_data['timestamp'], signal_data)
+            # Запускаем серию Мартингейла
+            await self._run_martingale_series(symbol, timeframe, direction, log, signal_data['timestamp'], signal_data)
+            
+        finally:
+            # 🔴 ВАЖНО: Освобождаем серию после завершения
+            self._active_series[trade_key] = False
+            log(f"[{symbol}] Серия Мартингейла завершена для {timeframe}")
 
     async def _run_martingale_series(self, symbol: str, timeframe: str, initial_direction: int, log, signal_received_time: datetime, signal_data: dict):
         """Запускает серию Мартингейла для конкретного сигнала"""
@@ -268,3 +289,8 @@ class MartingaleStrategy(BaseTradingStrategy):
                 )
             except Exception:
                 pass
+
+    def stop(self):
+        """Остановка стратегии с очисткой активных серий"""
+        super().stop()
+        self._active_series.clear()
