@@ -9,6 +9,15 @@ from strategies.constants import MOSCOW_TZ
 from core.time_utils import format_local_time
 from core.money import format_amount
 from core.intrade_api_async import is_demo_account
+from strategies.log_messages import (
+    repeat_count_empty,
+    series_already_active,
+    signal_not_actual,
+    signal_not_actual_for_placement,
+    start_processing,
+    trade_placement_failed,
+    result_unknown,
+)
 
 ANTIMARTINGALE_DEFAULTS = {
     "base_investment": 100,
@@ -77,7 +86,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
 
         trade_key = f"{symbol}_{timeframe}"
         if trade_key in self._active_series and self._active_series[trade_key]:
-            log(f"[{symbol}] ⚠ Активная серия уже выполняется для {timeframe}. Сигнал отложен.")
+            log(series_already_active(symbol, timeframe))
             if hasattr(self, '_common'):
                 await self._common._handle_pending_signal(trade_key, signal_data)
             return
@@ -88,7 +97,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
             remaining_series = max_series
             self._series_remaining[trade_key] = remaining_series
         if remaining_series <= 0:
-            log(f"[{symbol}] 🛑 repeat_count={remaining_series} — нечего выполнять.")
+            log(repeat_count_empty(symbol, remaining_series))
             return
 
         series_started = False
@@ -116,17 +125,17 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
             if self._trade_type == "classic":
                 is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
                 if not is_valid:
-                    log(f"[{symbol}] ❌ Сигнал неактуален для classic: {reason}")
+                    log(signal_not_actual(symbol, "classic", reason))
                     return
             else:
                 is_valid, reason = self._is_signal_valid_for_sprint(signal_data, current_time)
                 if not is_valid:
-                    log(f"[{symbol}] ❌ Сигнал неактуален для sprint: {reason}")
+                    log(signal_not_actual(symbol, "sprint", reason))
                     return
 
             self._active_series[trade_key] = True
             series_started = True
-            log(f"[{symbol}] Начало обработки сигнала (Антимартингейл)")
+            log(start_processing(symbol, "Антимартингейл"))
 
             await self._run_antimartingale_series(
                 trade_key, symbol, timeframe, direction, log, signal_data['timestamp'], signal_data
@@ -150,7 +159,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
         """Запускает серию Антимартингейла для конкретного сигнала (парлей)"""
         series_left = self._series_remaining.get(trade_key, int(self.params.get("repeat_count", 10)))
         if series_left <= 0:
-            log(f"[{symbol}] 🛑 repeat_count={series_left} — нечего выполнять.")
+            log(repeat_count_empty(symbol, series_left))
             return
 
         step = 0
@@ -173,12 +182,12 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
                 if self._trade_type == "classic":
                     is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
                     if not is_valid:
-                        log(f"[{symbol}] ❌ Сигнал неактуален для размещения: {reason}")
+                        log(signal_not_actual_for_placement(symbol, reason))
                         return
                 else:
                     is_valid, reason = self._is_signal_valid_for_sprint({'timestamp': signal_received_time}, current_time)
                     if not is_valid:
-                        log(f"[{symbol}] ❌ Сигнал неактуален для размещения: {reason}")
+                        log(signal_not_actual_for_placement(symbol, reason))
                         return
 
             min_pct = int(self.params.get("min_percent", 70))
@@ -200,7 +209,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
             self._status("делает ставку")
             trade_id = await self.place_trade_with_retry(symbol, series_direction, current_stake, self._anchor_ccy)
             if not trade_id:
-                log(f"[{symbol}] ❌ Не удалось разместить сделку. Пропускаем сигнал.")
+                log(trade_placement_failed(symbol, "Пропускаем сигнал."))
                 return
 
             did_place_any_trade = True
@@ -231,7 +240,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
 
             # === Парлей-логика ===
             if profit is None:
-                log(f"[{symbol}] ⚠ Результат неизвестен — считаем как LOSS. Серия завершается.")
+                log(result_unknown(symbol, treat_as_loss=True) + " Серия завершается.")
                 break
             elif profit > 0:
                 log(f"[{symbol}] ✅ WIN: profit={format_amount(profit)}. Увеличиваем ставку на размер выигрыша (парлей).")

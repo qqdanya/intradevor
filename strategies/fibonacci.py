@@ -8,6 +8,15 @@ from strategies.constants import MOSCOW_TZ, ALL_SYMBOLS_LABEL, ALL_TF_LABEL, CLA
 from core.money import format_amount
 from core.intrade_api_async import is_demo_account, get_balance_info
 from core.time_utils import format_local_time
+from strategies.log_messages import (
+    repeat_count_empty,
+    signal_not_actual,
+    signal_not_actual_for_placement,
+    start_processing,
+    trade_placement_failed,
+    trade_summary,
+    result_unknown,
+)
 
 FIBONACCI_DEFAULTS = {
     "base_investment": 100,
@@ -73,7 +82,7 @@ class FibonacciStrategy(BaseTradingStrategy):
         trade_key = f"{symbol}_{timeframe}"
 
         log = self.log or (lambda s: None)
-        log(f"[{symbol}] Начало обработки сигнала Фибоначчи")
+        log(start_processing(symbol, "Фибоначчи"))
        
         # Обновляем информацию о сигнале
         self._last_signal_ver = signal_data['version']
@@ -101,17 +110,17 @@ class FibonacciStrategy(BaseTradingStrategy):
         if self._trade_type == "classic":
             is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
             if not is_valid:
-                log(f"[{symbol}] ❌ Сигнал неактуален для classic: {reason}")
+                log(signal_not_actual(symbol, "classic", reason))
                 return
         else:
             is_valid, reason = self._is_signal_valid_for_sprint(signal_data, current_time)
             if not is_valid:
-                log(f"[{symbol}] ❌ Сигнал неактуален для sprint: {reason}")
+                log(signal_not_actual(symbol, "sprint", reason))
                 return
 
         series_left = self._get_series_left(trade_key)
         if series_left <= 0:
-            log(f"[{symbol}] 🛑 repeat_count={series_left} — нечего выполнять.")
+            log(repeat_count_empty(symbol, series_left))
             return
 
         # Запускаем серию Фибоначчи для этого сигнала
@@ -186,7 +195,7 @@ class FibonacciStrategy(BaseTradingStrategy):
                     if self._trade_type == "classic":
                         is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
                         if not is_valid:
-                            log(f"[{symbol}] ❌ Сигнал неактуален для размещения: {reason}")
+                            log(signal_not_actual_for_placement(symbol, reason))
                             return series_left
                     else:
                         is_valid, reason = self._is_signal_valid_for_sprint(
@@ -194,7 +203,7 @@ class FibonacciStrategy(BaseTradingStrategy):
                             current_time
                         )
                         if not is_valid:
-                            log(f"[{symbol}] ❌ Сигнал неактуален для размещения: {reason}")
+                            log(signal_not_actual_for_placement(symbol, reason))
                             return series_left
                     
                 # Фибоначчи: ставка = база * число Фибоначчи
@@ -205,8 +214,7 @@ class FibonacciStrategy(BaseTradingStrategy):
                 if pct is None:
                     continue
                     
-                log(f"[{symbol}] step={step} stake={format_amount(stake)} min={self._trade_minutes} "
-                    f"side={'UP' if series_direction == 1 else 'DOWN'} payout={pct}% (Fib#{step})")
+                log(trade_summary(symbol, format_amount(stake), self._trade_minutes, series_direction, pct) + f" (Fib#{step})")
                     
                 # Определяем режим аккаунта
                 try:
@@ -222,7 +230,7 @@ class FibonacciStrategy(BaseTradingStrategy):
                 )
                        
                 if not trade_id:
-                    log(f"[{symbol}] ❌ Не удалось разместить сделку. Ждем новый сигнал.")
+                    log(trade_placement_failed(symbol, "Ждем новый сигнал."))
                     break  # ВЫХОДИМ ИЗ ВНУТРЕННЕГО ЦИКЛА, НО НЕ УВЕЛИЧИВАЕМ ШАГ
                     
                 did_place_any_trade = True
@@ -259,7 +267,7 @@ class FibonacciStrategy(BaseTradingStrategy):
                 
                 # Обрабатываем результат по логике Фибоначчи
                 if profit is None:
-                    log(f"[{symbol}] ⚠ Результат неизвестен — считаем как LOSS.")
+                    log(result_unknown(symbol, treat_as_loss=True))
                     step += 1
                 elif profit > 0:
                     log(f"[{symbol}] ✅ WIN: profit={format_amount(profit)}. Откат на два шага назад.")

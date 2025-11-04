@@ -1,7 +1,7 @@
 from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta
-from typing import Optional, Dict
+from typing import Optional, Dict, Set
 from zoneinfo import ZoneInfo
 from core.policy import can_open_new_trade, get_max_open_trades  # Добавляем импорт
 from core.time_utils import format_local_time
@@ -19,7 +19,7 @@ class StrategyCommon:
         self._signal_processors: Dict[str, asyncio.Task] = {}
         self._pending_signals: Dict[str, asyncio.Queue] = {}
         self._pending_processing: Dict[str, asyncio.Task] = {}
-        self._active_trades: Dict[str, asyncio.Task] = {}
+        self._active_trades: Dict[str, Set[asyncio.Task]] = {}
         
         # Глобальная блокировка — только одна сделка в системе
         self._global_trade_lock = asyncio.Lock()
@@ -148,51 +148,63 @@ class StrategyCommon:
             await self.strategy._pause_point()
             try:
                 signal_data = await queue.get()
-                
+
+                processed_immediately = False
+
                 # ПРОВЕРКА ЛИМИТА ОТКРЫТЫХ СДЕЛОК
                 if not can_open_new_trade(self._total_open_trades):
                     max_trades = get_max_open_trades()
                     log(f"[{symbol}] ⚠ Достигнут лимит {max_trades} открытых сделок. Сигнал отложен.")
                     await self._handle_pending_signal(trade_key, signal_data)
-                    queue.task_done()
-                    continue
-                
-                if not allow_parallel:
+                    processed_immediately = True
+
+                elif not allow_parallel:
                     # Глобальная блокировка для всех символов
                     if self._global_trade_lock.locked():
                         await self._handle_pending_signal(trade_key, signal_data)
-                        queue.task_done()
-                        continue
-                    
-                    # Блокируем и обрабатываем - ОДНА сделка на всю систему
-                    async with self._global_trade_lock:
-                        log(f"[{symbol}] Получена глобальная блокировка, начало обработки")
-                        self._total_open_trades += 1  # Увеличиваем счетчик
-                        try:
-                            task = asyncio.create_task(self.strategy._process_single_signal(signal_data))
-                            await task  # Ждём завершения ПОД блокировкой
-                        finally:
-                            self._total_open_trades = max(0, self._total_open_trades - 1)  # Уменьшаем счетчик
-                        log(f"[{symbol}] Освобождение глобальной блокировки")
-                        
-                else:
-                    # Параллельные сделки
-                    if trade_key in self._active_trades:
-                        await self._handle_pending_signal(trade_key, signal_data)
+                        processed_immediately = True
                     else:
-                        self._total_open_trades += 1  # Увеличиваем счетчик
+                        async with self._global_trade_lock:
+                            log(f"[{symbol}] Получена глобальная блокировка, начало обработки")
+                            self._total_open_trades += 1
+                            try:
+                                task = asyncio.create_task(self.strategy._process_single_signal(signal_data))
+                                await task
+                            finally:
+                                self._total_open_trades = max(0, self._total_open_trades - 1)
+                            log(f"[{symbol}] Освобождение глобальной блокировки")
+                        processed_immediately = True
+
+                else:
+                    allow_multi = bool(
+                        getattr(self.strategy, "allow_concurrent_trades_per_key", lambda: False)()
+                    )
+                    active_tasks = self._active_trades.get(trade_key)
+
+                    if not allow_multi and active_tasks:
+                        await self._handle_pending_signal(trade_key, signal_data)
+                        processed_immediately = True
+                    else:
+                        self._total_open_trades += 1
                         task = asyncio.create_task(self.strategy._process_single_signal(signal_data))
-                        self._active_trades[trade_key] = task
-                        
-                        def cleanup(fut):
-                            self._active_trades.pop(trade_key, None)
-                            self._total_open_trades = max(0, self._total_open_trades - 1)  # Уменьшаем счетчик
+                        tasks = self._active_trades.setdefault(trade_key, set())
+                        tasks.add(task)
+
+                        def cleanup(fut: asyncio.Task, key: str = trade_key):
+                            task_set = self._active_trades.get(key)
+                            if task_set is not None:
+                                task_set.discard(fut)
+                                if not task_set:
+                                    self._active_trades.pop(key, None)
+                            self._total_open_trades = max(0, self._total_open_trades - 1)
                             queue.task_done()
-                            asyncio.create_task(self._check_more_pending_signals(trade_key))
-                        
+                            asyncio.create_task(self._check_more_pending_signals(key))
+
                         task.add_done_callback(cleanup)
-                
-                queue.task_done()
+                        continue
+
+                if processed_immediately:
+                    queue.task_done()
                 
             except asyncio.CancelledError:
                 break
@@ -278,7 +290,7 @@ class StrategyCommon:
             else:
                 # Для параллельного режима - ждём завершения активной сделки
                 wait_start = asyncio.get_event_loop().time()
-                while trade_key in self._active_trades and self.strategy._running:
+                while self._active_trades.get(trade_key) and self.strategy._running:
                     if asyncio.get_event_loop().time() - wait_start > 60.0:
                         break
                     await asyncio.sleep(0.1)
@@ -341,10 +353,15 @@ class StrategyCommon:
             else:
                 self._total_open_trades += 1  # Увеличиваем счетчик
                 task = asyncio.create_task(self.strategy._process_single_signal(last_signal))
-                self._active_trades[trade_key] = task
-                
+                tasks = self._active_trades.setdefault(trade_key, set())
+                tasks.add(task)
+
                 def cleanup(fut):
-                    self._active_trades.pop(trade_key, None)
+                    task_set = self._active_trades.get(trade_key)
+                    if task_set is not None:
+                        task_set.discard(fut)
+                        if not task_set:
+                            self._active_trades.pop(trade_key, None)
                     self._total_open_trades = max(0, self._total_open_trades - 1)
                 
                 task.add_done_callback(cleanup)
@@ -370,7 +387,8 @@ class StrategyCommon:
         all_tasks = []
         all_tasks.extend(self._signal_processors.values())
         all_tasks.extend(self._pending_processing.values())
-        all_tasks.extend(self._active_trades.values())
+        for task_set in self._active_trades.values():
+            all_tasks.extend(task_set)
         
         for task in all_tasks:
             if not task.done():

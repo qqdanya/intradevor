@@ -7,6 +7,12 @@ from strategies.base_trading_strategy import BaseTradingStrategy, _minutes_from_
 from strategies.constants import MOSCOW_TZ
 from core.money import format_amount
 from core.intrade_api_async import is_demo_account
+from strategies.log_messages import (
+    signal_not_actual_for_placement,
+    start_processing,
+    trade_placement_failed,
+    trade_summary,
+)
 
 OSCAR_GRIND_DEFAULTS = {
     "base_investment": 100,
@@ -64,7 +70,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         trade_key = f"{symbol}_{timeframe}"
         
         log = self.log or (lambda s: None)
-        log(f"[{symbol}] Начало обработки сигнала Oscar Grind")
+        log(start_processing(symbol, "Oscar Grind"))
         
         self._last_indicator = signal_data['indicator']
         self._next_expire_dt = signal_data.get('next_expire')
@@ -76,12 +82,12 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         if self._trade_type == "classic":
             is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
             if not is_valid:
-                log(f"[{symbol}] ❌ Сигнал неактуален для размещения: {reason}")
+                log(signal_not_actual_for_placement(symbol, reason))
                 return
         else:
             is_valid, reason = self._is_signal_valid_for_sprint(signal_data, current_time)
             if not is_valid:
-                log(f"[{symbol}] ❌ Сигнал неактуален для размещения: {reason}")
+                log(signal_not_actual_for_placement(symbol, reason))
                 return
 
         series_left = self._get_series_left(trade_key)
@@ -143,7 +149,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                 if self._trade_type == "classic":
                     is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
                     if not is_valid:
-                        log(f"[{symbol}] ❌ Сигнал стал неактуален для размещения: {reason}")
+                        log(signal_not_actual_for_placement(symbol, reason))
                         return series_left
                 else:
                     is_valid, reason = self._is_signal_valid_for_sprint(
@@ -151,14 +157,14 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                         current_time
                     )
                     if not is_valid:
-                        log(f"[{symbol}] ❌ Сигнал стал неактуален для размещения: {reason}")
+                        log(signal_not_actual_for_placement(symbol, reason))
                         return series_left
                     
             pct, balance = await self.check_payout_and_balance(symbol, stake, min_pct, wait_low)
             if pct is None:
                 continue
                 
-            log(f"[{symbol}] step={step_idx + 1} stake={format_amount(stake)} side={'UP' if series_direction == 1 else 'DOWN'} payout={pct}%")
+            log(trade_summary(symbol, format_amount(stake), self._trade_minutes, series_direction, pct) + f" (step {step_idx + 1})")
             
             try:
                 demo_now = await is_demo_account(self.http_client)
@@ -170,7 +176,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             trade_id = await self.place_trade_with_retry(symbol, series_direction, stake, self._anchor_ccy)
             
             if not trade_id:
-                log(f"[{symbol}] ❌ Не удалось разместить сделку. Ждем новый сигнал.")
+                log(trade_placement_failed(symbol, "Ждем новый сигнал."))
                 # ШАГ НЕ УВЕЛИЧИВАЕМ - ждем новый сигнал для этого же шага
                 await self.sleep(2.0)
                 return series_left  # Выходим из серии, ждем новый сигнал
