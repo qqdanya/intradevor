@@ -174,8 +174,9 @@ class FibonacciStrategy(BaseTradingStrategy):
 
         next_start_step = 1
         did_place_any_trade = False
+        force_validate_signal = False
         max_steps = int(self.params.get("max_steps", 5))
-        
+
         while self._running and series_left > 0:
             await self._pause_point()
             if not await self.ensure_account_conditions():
@@ -205,16 +206,59 @@ class FibonacciStrategy(BaseTradingStrategy):
                 
             step = next_start_step
             series_direction = initial_direction
-            
+
             while self._running and step <= max_steps:
                 await self._pause_point()
                 if not await self.ensure_account_conditions():
                     continue
-                    
+
+                new_signal = None
+                if hasattr(self, "_common") and self._common is not None:
+                    new_signal = self._common.pop_latest_signal(trade_key)
+
+                if new_signal:
+                    new_direction = new_signal.get('direction')
+                    if new_direction is None:
+                        log(f"[{symbol}] ⚠ Новый сигнал без направления — пропускаем обновление.")
+                    else:
+                        symbol = new_signal.get('symbol', symbol)
+                        timeframe = new_signal.get('timeframe', timeframe)
+                        signal_data = new_signal
+                        initial_direction = new_direction
+                        series_direction = new_direction
+                        signal_received_time = new_signal['timestamp']
+                        self._last_signal_ver = new_signal.get('version', self._last_signal_ver)
+                        indicator = new_signal.get('indicator')
+                        if indicator is not None:
+                            self._last_indicator = indicator
+                        self._last_signal_at_str = format_local_time(signal_received_time)
+
+                        next_expire = new_signal.get('next_expire')
+                        if not next_expire:
+                            meta = new_signal.get('meta') or {}
+                            next_raw = meta.get('next_timestamp')
+                            if next_raw is not None:
+                                if hasattr(next_raw, 'astimezone'):
+                                    next_expire = next_raw.astimezone(ZoneInfo(MOSCOW_TZ))
+                                else:
+                                    next_expire = next_raw
+                        self._next_expire_dt = next_expire
+
+                        if self._use_any_symbol:
+                            self.symbol = symbol
+                        if self._use_any_timeframe:
+                            self.timeframe = timeframe
+                            self.params["timeframe"] = self.timeframe
+
+                        log(f"[{symbol}] 🔄 Обновление серии Фибоначчи по новому сигналу.")
+                        force_validate_signal = True
+
                 # ПРОВЕРКА АКТУАЛЬНОСТИ ТОЛЬКО ДЛЯ ПЕРВОЙ СТАВКИ
                 current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
-                
-                if not did_place_any_trade:  # ТОЛЬКО перед первой ставкой
+
+                need_validate = (not did_place_any_trade) or force_validate_signal
+
+                if need_validate:  # Проверка перед размещением ставки
                     if self._trade_type == "classic":
                         is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
                         if not is_valid:
@@ -228,7 +272,9 @@ class FibonacciStrategy(BaseTradingStrategy):
                         if not is_valid:
                             log(signal_not_actual_for_placement(symbol, reason))
                             return series_left
-                    
+
+                force_validate_signal = False
+
                 # Фибоначчи: ставка = база * число Фибоначчи
                 stake = base * _fib(step)
                 
