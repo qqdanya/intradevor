@@ -237,12 +237,23 @@ class StrategyCommon:
                     if asyncio.get_event_loop().time() - wait_start > 60.0:
                         break
                     await asyncio.sleep(0.1)
-                
+
+                # Дополнительно ждём, пока стратегия освободит серию (для Мартингейла и др.)
+                if self.strategy._running:
+                    wait_start = asyncio.get_event_loop().time()
+                    while (
+                        getattr(self.strategy, "is_series_active", lambda key: False)(trade_key)
+                        and self.strategy._running
+                    ):
+                        if asyncio.get_event_loop().time() - wait_start > 60.0:
+                            break
+                        await asyncio.sleep(0.1)
+
                 if not self.strategy._running:
                     return
-                
+
                 await self._process_one_pending(trade_key)
-                
+
         except asyncio.CancelledError:
             pass
         except Exception as e:

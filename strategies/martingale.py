@@ -59,6 +59,10 @@ class MartingaleStrategy(BaseTradingStrategy):
         # Отслеживание активных серий по паре+таймфрейму
         self._active_series: dict[str, bool] = {}
 
+    def is_series_active(self, trade_key: str) -> bool:
+        """Проверка, выполняется ли серия для указанного ключа."""
+        return self._active_series.get(trade_key, False)
+
     async def _process_single_signal(self, signal_data: dict):
         """Обработка одного сигнала для Мартингейла"""
         symbol = signal_data['symbol']
