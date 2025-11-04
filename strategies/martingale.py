@@ -254,6 +254,10 @@ class MartingaleStrategy(BaseTradingStrategy):
                 break
             elif abs(profit) < 1e-9:
                 log(f"[{symbol}] 🤝 PUSH: возврат ставки. Повтор шага без увеличения.")
+                if hasattr(self, "_common") and self._common is not None:
+                    removed = self._common.discard_signals_for(trade_key)
+                    if removed:
+                        log(f"[{symbol}] 🗑 Удалено сигналов из очередей после PUSH: {removed}")
             else:
                 log(f"[{symbol}] ❌ LOSS: profit={format_amount(profit)}. Увеличиваем ставку.")
                 step += 1  # Продолжаем с тем же направлением и исходным сигналом
