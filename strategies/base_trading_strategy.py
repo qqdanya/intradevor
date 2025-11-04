@@ -111,7 +111,11 @@ class BaseTradingStrategy(StrategyBase):
         self._pending_tasks: set[asyncio.Task] = set()
         self._pending_for_status: dict[str, tuple[str, str]] = {}
         self._active_trades: dict[str, asyncio.Task] = {}
-        
+
+        # Отложенная остановка (ожидание завершения сделок)
+        self._stop_when_idle_requested: bool = False
+        self._stop_when_idle_reason: Optional[str] = None
+
         # Аккаунт
         anchor = str(self.params.get("account_currency", "RUB")).upper()
         self._anchor_ccy = anchor
@@ -243,6 +247,33 @@ class BaseTradingStrategy(StrategyBase):
         """Удаление ожидающей сделки"""
         self._pending_for_status.pop(str(trade_id), None)
         self._update_pending_status()
+        self._fulfill_stop_request_if_idle()
+
+    def _request_stop_when_idle(self, reason: Optional[str] = None) -> None:
+        """Планирует остановку стратегии после завершения активных сделок."""
+        if reason is not None:
+            self._stop_when_idle_reason = reason
+        if not self._stop_when_idle_requested:
+            self._stop_when_idle_requested = True
+        if not self._pending_for_status:
+            self._fulfill_stop_request_if_idle()
+
+    def _fulfill_stop_request_if_idle(self) -> None:
+        """Останавливает стратегию, если запрошена остановка и нет активных сделок."""
+        if not self._stop_when_idle_requested:
+            return
+        if self._pending_for_status:
+            return
+
+        reason = self._stop_when_idle_reason
+        self._stop_when_idle_requested = False
+        self._stop_when_idle_reason = None
+
+        if reason:
+            self._status(reason)
+
+        if not self.is_stopped():
+            self.stop()
 
     # === TRADING METHODS ===
     async def place_trade_with_retry(
@@ -575,6 +606,8 @@ class BaseTradingStrategy(StrategyBase):
 
     def stop(self):
         """Остановка стратегии"""
+        self._stop_when_idle_requested = False
+        self._stop_when_idle_reason = None
         self._common.stop()
         super().stop()
         self._pending_for_status.clear()
