@@ -59,10 +59,12 @@ class StrategyCommon:
                         {
                             'timestamp': signal_timestamp,
                             'next_expire': next_expire
-                        }, 
+                        },
                         current_time
                     )
                     if not is_valid:
+                        # Обновляем версию, чтобы не обрабатывать сигнал повторно
+                        self.strategy._last_signal_ver = ver
                         log(f"[{symbol}] ⏰ Сигнал неактуален для classic: {reason} -> пропуск")
                         continue
                 else:
@@ -70,13 +72,15 @@ class StrategyCommon:
                     is_valid, reason = self.strategy._is_signal_valid_for_sprint(
                         {
                             'timestamp': signal_timestamp
-                        }, 
+                        },
                         current_time
                     )
                     if not is_valid:
+                        # Обновляем версию, чтобы не обрабатывать сигнал повторно
+                        self.strategy._last_signal_ver = ver
                         log(f"[{symbol}] ⏰ Сигнал неактуален для sprint: {reason} -> пропуск")
                         continue
-                
+
                 signal_data = {
                     'direction': direction,
                     'version': ver,
