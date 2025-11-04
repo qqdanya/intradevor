@@ -167,8 +167,8 @@ class MartingaleStrategy(BaseTradingStrategy):
             )
                    
             if not trade_id:
-                log(f"[{symbol}] ❌ Не удалось разместить сделку. Ждем новый сигнал.")
-                return  # ВЫХОДИМ ИЗ СЕРИИ, ЖДЕМ НОВЫЙ СИГНАЛ
+                log(f"[{symbol}] ❌ Не удалось разместить сделку. Пропускаем сигнал.")
+                return  # ПРОПУСК СИГНАЛА
                 
             did_place_any_trade = True
             
