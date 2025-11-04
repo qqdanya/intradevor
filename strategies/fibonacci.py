@@ -10,6 +10,7 @@ from core.intrade_api_async import is_demo_account, get_balance_info
 from core.time_utils import format_local_time
 from strategies.log_messages import (
     repeat_count_empty,
+    series_already_active,
     signal_not_actual,
     signal_not_actual_for_placement,
     start_processing,
@@ -74,6 +75,13 @@ class FibonacciStrategy(BaseTradingStrategy):
             **kwargs,
         )
 
+        # Отслеживание активных серий по паре+таймфрейму
+        self._active_series: dict[str, bool] = {}
+
+    def is_series_active(self, trade_key: str) -> bool:
+        """Показывает, выполняется ли серия для указанного ключа."""
+        return self._active_series.get(trade_key, False)
+
     async def _process_single_signal(self, signal_data: dict):
         """Обработка одного сигнала для стратегии Фибоначчи"""
         symbol = signal_data['symbol']
@@ -82,8 +90,13 @@ class FibonacciStrategy(BaseTradingStrategy):
         trade_key = f"{symbol}_{timeframe}"
 
         log = self.log or (lambda s: None)
-        log(start_processing(symbol, "Фибоначчи"))
-       
+
+        if self._active_series.get(trade_key):
+            log(series_already_active(symbol, timeframe))
+            if hasattr(self, '_common'):
+                await self._common._handle_pending_signal(trade_key, signal_data)
+            return
+
         # Обновляем информацию о сигнале
         self._last_signal_ver = signal_data['version']
         self._last_indicator = signal_data['indicator']
@@ -123,18 +136,28 @@ class FibonacciStrategy(BaseTradingStrategy):
             log(repeat_count_empty(symbol, series_left))
             return
 
-        # Запускаем серию Фибоначчи для этого сигнала
-        updated = await self._run_fibonacci_series(
-            trade_key,
-            symbol,
-            timeframe,
-            direction,
-            log,
-            series_left,
-            signal_data['timestamp'],
-            signal_data,
-        )
-        self._set_series_left(trade_key, updated)
+        series_started = False
+        try:
+            self._active_series[trade_key] = True
+            series_started = True
+            log(start_processing(symbol, "Фибоначчи"))
+
+            # Запускаем серию Фибоначчи для этого сигнала
+            updated = await self._run_fibonacci_series(
+                trade_key,
+                symbol,
+                timeframe,
+                direction,
+                log,
+                series_left,
+                signal_data['timestamp'],
+                signal_data,
+            )
+            self._set_series_left(trade_key, updated)
+        finally:
+            if series_started:
+                self._active_series.pop(trade_key, None)
+                log(f"[{symbol}] Серия Фибоначчи завершена для {timeframe}")
 
     async def _run_fibonacci_series(
         self,
