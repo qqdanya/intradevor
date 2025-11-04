@@ -173,6 +173,7 @@ class FibonacciStrategy(BaseTradingStrategy):
     ) -> int:
         """Запускает (несколько) серий Фибоначчи для конкретного сигнала"""
         max_steps = int(self.params.get("max_steps", 5))
+        signal_timeout_sec = float(self.params.get("signal_timeout_sec", 3600))
     
         while self._running and series_left > 0:
             await self._pause_point()
@@ -209,6 +210,11 @@ class FibonacciStrategy(BaseTradingStrategy):
             reuse_previous_signal = False
             step = next_start_step
             series_direction = initial_direction
+            
+            # Текущий активный сигнал
+            current_signal_data = signal_data
+            current_signal_time = signal_received_time
+            current_direction = initial_direction
             # ------------------------------------------------------------------
     
             # ВНУТРЕННИЙ ЦИКЛ ШАГОВ ФИБОНАЧЧИ ВНУТРИ ОДНОЙ СЕРИИ
@@ -222,6 +228,7 @@ class FibonacciStrategy(BaseTradingStrategy):
                 if not reuse_previous_signal and hasattr(self, "_common") and self._common is not None:
                     new_signal = self._common.pop_latest_signal(trade_key)
     
+                signal_updated = False
                 if new_signal:
                     new_direction = new_signal.get('direction')
                     if new_direction is None:
@@ -229,15 +236,16 @@ class FibonacciStrategy(BaseTradingStrategy):
                     else:
                         symbol = new_signal.get('symbol', symbol)
                         timeframe = new_signal.get('timeframe', timeframe)
-                        signal_data = new_signal
+                        current_signal_data = new_signal
                         initial_direction = new_direction
                         series_direction = new_direction
-                        signal_received_time = new_signal['timestamp']
+                        current_direction = new_direction
+                        current_signal_time = new_signal['timestamp']
                         self._last_signal_ver = new_signal.get('version', self._last_signal_ver)
                         indicator = new_signal.get('indicator')
                         if indicator is not None:
                             self._last_indicator = indicator
-                        self._last_signal_at_str = format_local_time(signal_received_time)
+                        self._last_signal_at_str = format_local_time(current_signal_time)
     
                         next_expire = new_signal.get('next_expire')
                         if not next_expire:
@@ -259,32 +267,83 @@ class FibonacciStrategy(BaseTradingStrategy):
                         log(f"[{symbol}] 🔄 Обновление серии Фибоначчи по новому сигналу.")
                         force_validate_signal = True
                         reuse_previous_signal = False
+                        signal_updated = True
     
                 # ПРОВЕРКА АКТУАЛЬНОСТИ ПЕРЕД РАЗМЕЩЕНИЕМ СДЕЛКИ
                 current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
-                need_validate = (not did_place_any_trade) or force_validate_signal
-                validate_for_placement = need_validate
-    
+                need_validate = (not did_place_any_trade) or force_validate_signal or signal_updated
+                
                 if need_validate:
+                    # Проверяем таймаут сигнала
+                    signal_age = (current_time - current_signal_time).total_seconds()
+                    if signal_age > signal_timeout_sec:
+                        log(f"[{symbol}] ⏰ Сигнал устарел ({signal_age:.1f}с > {signal_timeout_sec}с). Ожидание нового...")
+                        # Ждем новый сигнал
+                        new_signal = await self._wait_for_new_signal(trade_key, log, symbol, timeframe)
+                        if new_signal:
+                            # Обновляем данные по новому сигналу
+                            new_direction = new_signal.get('direction')
+                            if new_direction is not None:
+                                symbol = new_signal.get('symbol', symbol)
+                                timeframe = new_signal.get('timeframe', timeframe)
+                                current_signal_data = new_signal
+                                series_direction = new_direction
+                                current_direction = new_direction
+                                current_signal_time = new_signal['timestamp']
+                                self._last_signal_ver = new_signal.get('version', self._last_signal_ver)
+                                indicator = new_signal.get('indicator')
+                                if indicator is not None:
+                                    self._last_indicator = indicator
+                                self._last_signal_at_str = format_local_time(current_signal_time)
+                                log(f"[{symbol}] 🔄 Получен новый сигнал после ожидания.")
+                                force_validate_signal = True
+                                continue  # Перезапускаем проверку с новым сигналом
+                        else:
+                            # Не получили новый сигнал, продолжаем ждать
+                            continue
+    
                     if self._trade_type == "classic":
-                        is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
+                        is_valid, reason = self._is_signal_valid_for_classic(current_signal_data, current_time, for_placement=True)
                         if not is_valid:
                             log(signal_not_actual_for_placement(symbol, reason))
-                            # ВМЕСТО ЗАВЕРШЕНИЯ СЕРИИ - ЖДЕМ НОВЫЙ СИГНАЛ
-                            log(f"[{symbol}] ⏳ Ожидание нового сигнала...")
-                            await asyncio.sleep(1.0)  # Короткая пауза перед следующей проверкой
-                            continue  # Продолжаем цикл, ожидая новый сигнал
+                            # Ждем новый сигнал
+                            new_signal = await self._wait_for_new_signal(trade_key, log, symbol, timeframe)
+                            if new_signal:
+                                # Обновляем данные и продолжаем
+                                new_direction = new_signal.get('direction')
+                                if new_direction is not None:
+                                    symbol = new_signal.get('symbol', symbol)
+                                    timeframe = new_signal.get('timeframe', timeframe)
+                                    current_signal_data = new_signal
+                                    series_direction = new_direction
+                                    current_direction = new_direction
+                                    current_signal_time = new_signal['timestamp']
+                                    log(f"[{symbol}] 🔄 Получен новый сигнал после неактуального.")
+                                    force_validate_signal = True
+                                    continue
+                            continue
                     else:
                         is_valid, reason = self._is_signal_valid_for_sprint(
-                            {'timestamp': signal_received_time},
+                            {'timestamp': current_signal_time},
                             current_time
                         )
                         if not is_valid:
                             log(signal_not_actual_for_placement(symbol, reason))
-                            # ВМЕСТО ЗАВЕРШЕНИЯ СЕРИИ - ЖДЕМ НОВЫЙ СИГНАЛ
-                            log(f"[{symbol}] ⏳ Ожидание нового сигнала...")
-                            await asyncio.sleep(1.0)
-                            continue  # Продолжаем цикл, ожидая новый сигнал
+                            # Ждем новый сигнал
+                            new_signal = await self._wait_for_new_signal(trade_key, log, symbol, timeframe)
+                            if new_signal:
+                                new_direction = new_signal.get('direction')
+                                if new_direction is not None:
+                                    symbol = new_signal.get('symbol', symbol)
+                                    timeframe = new_signal.get('timeframe', timeframe)
+                                    current_signal_data = new_signal
+                                    series_direction = new_direction
+                                    current_direction = new_direction
+                                    current_signal_time = new_signal['timestamp']
+                                    log(f"[{symbol}] 🔄 Получен новый сигнал после неактуального.")
+                                    force_validate_signal = True
+                                    continue
+                            continue
     
                 force_validate_signal = False
     
@@ -298,37 +357,40 @@ class FibonacciStrategy(BaseTradingStrategy):
     
                 log(trade_summary(symbol, format_amount(stake), self._trade_minutes, series_direction, pct) + f" (Fib#{step})")
     
-                # Финальная проверка актуальности (дублирующая защита)
-                if validate_for_placement:
-                    current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
-                    if self._trade_type == "classic":
-                        is_valid, reason = self._is_signal_valid_for_classic(
-                            signal_data,
-                            current_time,
-                            for_placement=True,
-                        )
-                    else:
-                        sprint_payload = signal_data
-                        if not sprint_payload.get('timestamp'):
-                            sprint_payload = {'timestamp': signal_received_time}
-                        is_valid, reason = self._is_signal_valid_for_sprint(
-                            sprint_payload,
-                            current_time,
-                        )
+                # Финальная проверка актуальности перед размещением
+                current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
+                if self._trade_type == "classic":
+                    is_valid, reason = self._is_signal_valid_for_classic(
+                        current_signal_data,
+                        current_time,
+                        for_placement=True,
+                    )
+                else:
+                    sprint_payload = current_signal_data
+                    if not sprint_payload.get('timestamp'):
+                        sprint_payload = {'timestamp': current_signal_time}
+                    is_valid, reason = self._is_signal_valid_for_sprint(
+                        sprint_payload,
+                        current_time,
+                    )
     
-                    if not is_valid:
-                        log(signal_not_actual_for_placement(symbol, reason))
-                        # ВМЕСТО ЗАВЕРШЕНИЯ СЕРИИ - ЖДЕМ НОВЫЙ СИГНАЛ
-                        log(f"[{symbol}] ⏳ Ожидание нового сигнала...")
-                        await asyncio.sleep(1.0)
-                        continue  # Продолжаем цикл, ожидая новый сигнал
-    
-                # Определяем режим аккаунта
-                try:
-                    demo_now = await is_demo_account(self.http_client)
-                except Exception:
-                    demo_now = False
-                account_mode = "ДЕМО" if demo_now else "РЕАЛ"
+                if not is_valid:
+                    log(signal_not_actual_for_placement(symbol, reason))
+                    # Ждем новый сигнал
+                    new_signal = await self._wait_for_new_signal(trade_key, log, symbol, timeframe)
+                    if new_signal:
+                        new_direction = new_signal.get('direction')
+                        if new_direction is not None:
+                            symbol = new_signal.get('symbol', symbol)
+                            timeframe = new_signal.get('timeframe', timeframe)
+                            current_signal_data = new_signal
+                            series_direction = new_direction
+                            current_direction = new_direction
+                            current_signal_time = new_signal['timestamp']
+                            log(f"[{symbol}] 🔄 Получен новый сигнал перед размещением.")
+                            force_validate_signal = True
+                            continue
+                    continue
     
                 # Размещаем сделку
                 self._status("делает ставку")
@@ -337,8 +399,22 @@ class FibonacciStrategy(BaseTradingStrategy):
                 )
     
                 if not trade_id:
-                    log(trade_placement_failed(symbol, "Ждем новый сигнал."))
-                    break  # выходим из внутреннего цикла, шаг не увеличиваем
+                    log(trade_placement_failed(symbol, "Ожидание нового сигнала."))
+                    # Вместо break - ждем новый сигнал
+                    new_signal = await self._wait_for_new_signal(trade_key, log, symbol, timeframe)
+                    if new_signal:
+                        new_direction = new_signal.get('direction')
+                        if new_direction is not None:
+                            symbol = new_signal.get('symbol', symbol)
+                            timeframe = new_signal.get('timeframe', timeframe)
+                            current_signal_data = new_signal
+                            series_direction = new_direction
+                            current_direction = new_direction
+                            current_signal_time = new_signal['timestamp']
+                            log(f"[{symbol}] 🔄 Получен новый сигнал после неудачного размещения.")
+                            force_validate_signal = True
+                            # Не увеличиваем step, пробуем с тем же шагом но новым сигналом
+                    continue
     
                 did_place_any_trade = True
     
@@ -400,13 +476,11 @@ class FibonacciStrategy(BaseTradingStrategy):
                 break
     
             if not did_place_any_trade:
-                log(f"[{symbol}] ℹ Серия завершена без сделок (max_steps={max_steps} или условия не выполнились). "
-                    f"Серий осталось: {series_left}.")
+                log(f"[{symbol}] ℹ Серия завершена без сделок. Серий осталось: {series_left}.")
             else:
                 if step > max_steps:
                     log(f"[{symbol}] 🛑 Достигнут лимит шагов ({max_steps}). Переход к новой серии.")
     
-                # Переход к НОВОЙ СЕРИИ
                 series_left -= 1
                 log(f"[{symbol}] ▶ Осталось серий: {series_left}")
     
@@ -415,6 +489,25 @@ class FibonacciStrategy(BaseTradingStrategy):
     
         log(f"[{symbol}] Завершение серии Фибоначчи")
         return series_left
+
+async def _wait_for_new_signal(self, trade_key: str, log, symbol: str, timeframe: str, timeout: float = 30.0) -> Optional[dict]:
+    """Ожидает новый сигнал в течение timeout секунд"""
+    start_time = asyncio.get_event_loop().time()
+    
+    while self._running and (asyncio.get_event_loop().time() - start_time) < timeout:
+        await self._pause_point()
+        
+        # Проверяем наличие нового сигнала
+        if hasattr(self, "_common") and self._common is not None:
+            new_signal = self._common.pop_latest_signal(trade_key)
+            if new_signal:
+                return new_signal
+        
+        # Ждем немного перед следующей проверкой
+        await asyncio.sleep(0.5)
+    
+    log(f"[{symbol}] ⏰ Таймаут ожидания нового сигнала ({timeout}с)")
+    return None
 
     def _calculate_trade_duration(self, symbol: str) -> tuple[float, float]:
         """Рассчитывает длительность сделки"""
