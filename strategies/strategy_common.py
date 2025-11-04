@@ -106,11 +106,29 @@ class StrategyCommon:
                     self._signal_processors[trade_key] = asyncio.create_task(
                         self._process_signal_queue(trade_key)
                     )
-                
-                await self._signal_queues[trade_key].put(signal_data)
+
+                queue = self._signal_queues[trade_key]
+
+                # Удаляем предыдущие сигналы для этой пары и таймфрейма,
+                # чтобы в очереди всегда оставался только самый свежий
+                removed = 0
+                while not queue.empty():
+                    try:
+                        queue.get_nowait()
+                        queue.task_done()
+                        removed += 1
+                    except asyncio.QueueEmpty:
+                        break
+
+                if removed:
+                    log(
+                        f"[{symbol}] 🗑 Удалено устаревших сигналов в очереди: {removed}"
+                    )
+
+                await queue.put(signal_data)
                 next_time_str = next_expire.strftime('%H:%M:%S') if next_expire else '?'
                 log(f"[{symbol}] Сигнал добавлен: свеча {signal_timestamp.strftime('%H:%M:%S')} (до {next_time_str})")
-                
+
             except asyncio.CancelledError:
                 break
             except Exception as e:

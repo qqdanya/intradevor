@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import (
 )
 from datetime import datetime
 
-from PyQt6.QtGui import QColor, QBrush, QTextCursor
+from PyQt6.QtGui import QColor, QBrush, QTextCursor, QFont
 from PyQt6.QtCore import QTimer, Qt
 from core.money import format_amount
 from strategies.martingale import _minutes_from_timeframe
@@ -78,6 +78,9 @@ class StrategyControlDialog(QWidget):
         self.log_edit = QTextEdit()
         self.log_edit.setReadOnly(True)
         self.log_edit.setPlaceholderText("Лог этой стратегии…")
+        self.log_edit.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
 
         def _add_log(text: str) -> None:
             """Добавить строку лога (сверху вниз)."""
@@ -123,13 +126,11 @@ class StrategyControlDialog(QWidget):
 
         # ---------- Очередь сигналов ----------
         self.signal_queue_table = QTableWidget(self)
-        self.signal_queue_table.setColumnCount(8)
+        self.signal_queue_table.setColumnCount(6)
         self.signal_queue_table.setHorizontalHeaderLabels(
             [
                 "Символ",
                 "ТФ",
-                "Тип",
-                "#",
                 "Время сигнала",
                 "След. свеча",
                 "Направление",
@@ -149,6 +150,9 @@ class StrategyControlDialog(QWidget):
 
         # ---------- Настройки (inline) ----------
         self.settings_box = QGroupBox("Настройки стратегии")
+        self.settings_box.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
+        )
         box_v = QVBoxLayout(self.settings_box)
         form = QFormLayout()
 
@@ -366,7 +370,6 @@ class StrategyControlDialog(QWidget):
         lv.addWidget(log_label)
         lv.addWidget(self.log_edit, 1)
         lv.addWidget(controls)
-        lv.addStretch(1)
         lv.setStretch(0, 0)
         lv.setStretch(1, 0)
         lv.setStretch(2, 1)
@@ -376,13 +379,16 @@ class StrategyControlDialog(QWidget):
         rv = QVBoxLayout(right_panel)
         rv.setContentsMargins(0, 0, 0, 0)
         rv.setSpacing(8)
+        trades_label = QLabel("Сделки")
+        trades_label.setStyleSheet("font-weight: 600;")
+        rv.addWidget(trades_label)
         rv.addWidget(self.trades_table)
         queue_label = QLabel("Очередь сигналов")
         queue_label.setStyleSheet("font-weight: 600;")
         rv.addWidget(queue_label)
         rv.addWidget(self.signal_queue_table)
-        rv.setStretch(0, 1)
-        rv.setStretch(2, 1)
+        rv.setStretch(1, 1)
+        rv.setStretch(3, 1)
 
         top_split = QWidget()
         hs = QHBoxLayout(top_split)
@@ -910,7 +916,9 @@ class StrategyControlDialog(QWidget):
             self._add_log(ts(f"⚠ Ошибка обновления таблицы сделок: {e}"))
 
     # ---- очередь сигналов ----
-    def _collect_signal_queue_snapshot(self) -> list[tuple[str, str, str, int, str, str, str, str]]:
+    def _collect_signal_queue_snapshot(
+        self,
+    ) -> list[tuple[str, str, str, str, str, str, str]]:
         strategy = getattr(self.bot, "strategy", None)
         if strategy is None:
             return []
@@ -918,7 +926,7 @@ class StrategyControlDialog(QWidget):
         if common is None:
             return []
 
-        snapshot: list[tuple[str, str, str, int, str, str, str, str]] = []
+        snapshot: list[tuple[str, str, str, str, str, str, str]] = []
 
         def _fmt_dt(value) -> str:
             if isinstance(value, datetime):
@@ -954,7 +962,7 @@ class StrategyControlDialog(QWidget):
                     symbol, timeframe = trade_key.split("_", 1)
                 else:
                     symbol, timeframe = trade_key, "—"
-                for index, payload in enumerate(entries, start=1):
+                for payload in entries:
                     data = payload or {}
                     timestamp = _fmt_dt(data.get("timestamp")) if isinstance(data, dict) else "—"
                     next_expire = _fmt_dt(data.get("next_expire")) if isinstance(data, dict) else "—"
@@ -967,19 +975,18 @@ class StrategyControlDialog(QWidget):
                         (
                             str(symbol),
                             str(timeframe),
-                            status,
-                            index,
                             timestamp,
                             next_expire,
                             direction,
                             indicator,
+                            status,
                         )
                     )
 
         _extract(getattr(common, "_signal_queues", {}), "в очереди")
         _extract(getattr(common, "_pending_signals", {}), "отложен")
 
-        snapshot.sort(key=lambda item: (item[0], item[1], item[2], item[3]))
+        snapshot.sort(key=lambda item: (item[0], item[1], item[6], item[2], item[3]))
         return snapshot
 
     def _refresh_signal_queue_table(self) -> None:
@@ -994,11 +1001,23 @@ class StrategyControlDialog(QWidget):
 
         self.signal_queue_table.setRowCount(len(snapshot))
         for row, row_data in enumerate(snapshot):
-            for col, value in enumerate(row_data):
+            values = row_data[:-1]
+            status = row_data[-1]
+            for col, value in enumerate(values):
                 item = QTableWidgetItem(str(value))
-                if col in (2, 3, 6):
+                if col == 4:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                item.setToolTip(f"Статус: {status}")
                 self.signal_queue_table.setItem(row, col, item)
+
+            if status != "в очереди":
+                for col in range(len(values)):
+                    item = self.signal_queue_table.item(row, col)
+                    if not item:
+                        continue
+                    font = QFont(item.font())
+                    font.setItalic(True)
+                    item.setFont(font)
 
         if was_sorting:
             self.signal_queue_table.setSortingEnabled(True)
