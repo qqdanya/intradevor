@@ -454,12 +454,17 @@ class BaseTradingStrategy(StrategyBase):
             return int(direction), int(ver), meta
 
     def _max_signal_age_seconds(self) -> float:
-        """Максимальный возраст сигнала"""
+        """Максимальный возраст сигнала. Для sprint — жёсткий лимит 5.0s."""
+        # базовые значения (взятые из констант)
         base = 0.0
         if self._trade_type == "classic":
             base = CLASSIC_SIGNAL_MAX_AGE_SEC
         elif self._trade_type == "sprint":
-            base = SPRINT_SIGNAL_MAX_AGE_SEC
+            # Жёстко ограничиваем sprint до 5 секунд — чтобы сигналы старше 5с
+            # не попадали в слушатель и не создавали спам-логи.
+            return 5.0
+
+        # если разрешены параллельные сделки — расширяем окно ожидания
         if not self._allow_parallel_trades:
             return base
         wait_window = float(self.params.get("result_wait_s") or 0.0)
