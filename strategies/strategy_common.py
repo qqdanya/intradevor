@@ -82,8 +82,14 @@ class StrategyCommon:
                         log(f"[{symbol}] ⏰ Сигнал неактуален для sprint: {reason} -> пропуск")
                         continue
 
+                direction_value: Optional[int]
+                try:
+                    direction_value = int(direction) if direction is not None else None
+                except (TypeError, ValueError):
+                    direction_value = None
+
                 signal_data = {
-                    'direction': direction,
+                    'direction': direction_value,
                     'version': ver,
                     'meta': meta,
                     'symbol': meta.get('symbol') if meta else self.strategy.symbol,
