@@ -378,11 +378,27 @@ class StrategyCommon:
             symbol, _ = trade_key.split('_', 1)
             log = self.log
             log(f"[{symbol}] Есть отложенные — перезапуск")
-            
+
             if trade_key not in self._pending_processing:
                 self._pending_processing[trade_key] = asyncio.create_task(
                     self._process_pending_signals(trade_key)
                 )
+
+    def pop_latest_signal(self, trade_key: str) -> Optional[dict]:
+        """Возвращает и удаляет самый свежий отложенный сигнал для ключа сделки."""
+        queue = self._pending_signals.get(trade_key)
+        if queue is None or queue.empty():
+            return None
+
+        latest_signal = None
+        while True:
+            try:
+                latest_signal = queue.get_nowait()
+                queue.task_done()
+            except asyncio.QueueEmpty:
+                break
+
+        return latest_signal
 
     def stop(self):
         """Остановка с очисткой всех очередей и задач"""
