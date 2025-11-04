@@ -206,6 +206,7 @@ class FibonacciStrategy(BaseTradingStrategy):
                 
             step = next_start_step
             series_direction = initial_direction
+            reuse_previous_signal = False
 
             while self._running and step <= max_steps:
                 await self._pause_point()
@@ -213,7 +214,7 @@ class FibonacciStrategy(BaseTradingStrategy):
                     continue
 
                 new_signal = None
-                if hasattr(self, "_common") and self._common is not None:
+                if not reuse_previous_signal and hasattr(self, "_common") and self._common is not None:
                     new_signal = self._common.pop_latest_signal(trade_key)
 
                 if new_signal:
@@ -252,6 +253,7 @@ class FibonacciStrategy(BaseTradingStrategy):
 
                         log(f"[{symbol}] 🔄 Обновление серии Фибоначчи по новому сигналу.")
                         force_validate_signal = True
+                        reuse_previous_signal = False
 
                 # ПРОВЕРКА АКТУАЛЬНОСТИ ТОЛЬКО ДЛЯ ПЕРВОЙ СТАВКИ
                 current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
@@ -338,15 +340,19 @@ class FibonacciStrategy(BaseTradingStrategy):
                 if profit is None:
                     log(result_unknown(symbol, treat_as_loss=True))
                     step += 1
+                    reuse_previous_signal = False
                 elif profit > 0:
                     log(f"[{symbol}] ✅ WIN: profit={format_amount(profit)}. Откат на два шага назад.")
+                    reuse_previous_signal = False
                     next_start_step = max(1, step - 2)
                     break
                 elif abs(profit) < 1e-9:
                     log(f"[{symbol}] 🤝 PUSH: возврат ставки. Повтор шага без изменения.")
+                    reuse_previous_signal = True
                 else:
                     log(f"[{symbol}] ❌ LOSS: profit={format_amount(profit)}. Переход к следующему числу Фибоначчи.")
                     step += 1
+                    reuse_previous_signal = False
                     
                 await self.sleep(0.2)
                 
