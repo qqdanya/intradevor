@@ -5,11 +5,15 @@ from collections import defaultdict
 from typing import Optional, Tuple, Dict, Callable, Awaitable
 from datetime import datetime
 
-# --- helpers ---------------------------------------------------------
+# ======================================================================
+# helpers
+# ======================================================================
+
 def _tf_to_seconds(tf: str) -> Optional[int]:
+    """Преобразует строку таймфрейма (M1, H1, D1...) в количество секунд."""
     if not tf:
         return None
-    tf = str(tf).upper()
+    tf = str(tf).upper().strip()
     unit = tf[0]
     try:
         n = int(tf[1:])
@@ -17,6 +21,7 @@ def _tf_to_seconds(tf: str) -> Optional[int]:
         return None
     if n <= 0:
         return None
+
     if unit == "M":
         return n * 60
     if unit == "H":
@@ -27,30 +32,39 @@ def _tf_to_seconds(tf: str) -> Optional[int]:
         return n * 604800
     return None
 
-# --- state -----------------------------------------------------------
+
+# ======================================================================
+# state
+# ======================================================================
+
 @dataclass
 class _State:
     value: Optional[int] = None  # 1=up, 2=down, None=нет сигнала
-    version: int = 0  # монотонная версия (эпоха) для каждой пары
+    version: int = 0             # монотонная версия (эпоха) для каждой пары
     cond: asyncio.Condition = field(default_factory=asyncio.Condition)
-    last_monotonic: Optional[float] = None  # когда пришёл ПОСЛЕДНИЙ сигнал (loop.time())
-    tf_sec: Optional[int] = None  # длительность TF в секундах (если удалось распарсить)
-    last_indicator: Optional[str] = None  # ИМЯ индикатора источника последнего сигнала
-    # для wildcard-ожидателей запоминаем исходный символ/таймфрейм
-    last_symbol: Optional[str] = None
-    last_timeframe: Optional[str] = None
+    last_monotonic: Optional[float] = None  # момент последнего сигнала
+    tf_sec: Optional[int] = None            # длительность TF в секундах
+    last_indicator: Optional[str] = None    # имя источника последнего сигнала
+    last_symbol: Optional[str] = None       # последний символ
+    last_timeframe: Optional[str] = None    # последний TF
     next_timestamp: Optional[datetime] = None  # начало следующей свечи
-    timestamp: Optional[datetime] = None  # время текущей свечи сигнала
+    timestamp: Optional[datetime] = None       # время текущей свечи сигнала
+
 
 _states: Dict[tuple[str, str], _State] = defaultdict(_State)
 
 def _key(symbol: str, timeframe: str) -> tuple[str, str]:
     return (str(symbol).upper(), str(timeframe).upper())
 
+
 ANY_SYMBOL = "*"
 ANY_TIMEFRAME = "*"
 
-# --- public api ------------------------------------------------------
+
+# ======================================================================
+# push_signal
+# ======================================================================
+
 def push_signal(
     symbol: str,
     timeframe: str,
@@ -60,14 +74,16 @@ def push_signal(
     timestamp: Optional[datetime] = None,
 ) -> None:
     """
-    Положить НОВОЕ сообщение сигнала:
-      direction: 1 (up), 2 (down), None (или 0) — очистка состояния (none).
-      indicator: строка-имя источника сигнала (например, "RSI(14)").
-      timestamp: время свечи сигнала.
-      next_timestamp: время следующей свечи.
+    Положить новое сообщение сигнала:
+      direction: 1 (up), 2 (down), None — очистка состояния.
+      indicator: имя источника сигнала.
+      timestamp: время текущей свечи.
+      next_timestamp: начало следующей свечи.
     Любой приход (включая None) повышает версию и будит всех ожидающих.
-    Также запоминаем момент прихода (monotonic), длительность TF и имя индикатора.
     """
+    symbol = str(symbol).upper()
+    timeframe = str(timeframe).upper()
+
     keys = {
         _key(symbol, timeframe),
         _key(ANY_SYMBOL, timeframe),
@@ -96,14 +112,22 @@ def push_signal(
         loop.create_task(_update_and_notify(_states[k]))
 
 
-async def _maybe_await(func: Callable[[], Awaitable[None] | None]) -> None:
-    """Аккуратно вызвать check_pause: поддерживает sync и async, не роняет цикл без надобности."""
+# ======================================================================
+# helpers
+# ======================================================================
+
+async def _maybe_await(func: Optional[Callable[[], Awaitable[None] | None]]) -> None:
+    """Безопасно вызывает функцию check_pause (sync или async)."""
     if func is None:
         return
     res = func()
     if asyncio.iscoroutine(res):
         await res
 
+
+# ======================================================================
+# wait_for_signal_versioned
+# ======================================================================
 
 async def wait_for_signal_versioned(
     symbol: str,
@@ -112,42 +136,38 @@ async def wait_for_signal_versioned(
     since_version: Optional[int] = None,
     check_pause: Optional[Callable[[], Awaitable[None] | None]] = None,
     timeout: Optional[float] = None,
-    # Если хотите НЕ завершаться на таймауте, а просто продолжить ждать — выставьте:
     raise_on_timeout: bool = True,
-    # Детектор задержки следующего прогноза:
     grace_delay_sec: float = 5.0,
-    on_delay: Optional[Callable[[float], None]] = None,  # callback(delay_seconds)
-    # --- новое: вернуть вместе с direction/version ещё и meta (indicator, tf_sec, symbol, timeframe) ---
+    on_delay: Optional[Callable[[float], None]] = None,
     include_meta: bool = False,
     max_age_sec: float = 0.0,
-) -> Tuple[int, int] | Tuple[int, int, Dict[str, Optional[str | int | float | datetime]]]:
+) -> (
+    Tuple[int, int]
+    | Tuple[int, int, Dict[str, Optional[str | int | float | datetime]]]
+):
     """
-    Ждёт ПЕРВЫЙ up/down с версией > since_version.
-    none (очистка) лишь повышает версию, но не возвращается.
-    По умолчанию возвращает (direction, version), где direction ∈ {1,2}.
-    Если include_meta=True — вернёт (direction, version, meta),
-    где meta = {"indicator": str|None, "tf_sec": int|None, "symbol": str|None, "timeframe": str|None, "timestamp": datetime|None}.
-    max_age_sec > 0 позволяет использовать сигнал, пришедший не ранее чем
-    max_age_sec секунд до вызова функции.
+    Ждёт сигнал (up/down) с версией > since_version.
+    По умолчанию возвращает (direction, version).
+    Если include_meta=True — вернёт (direction, version, meta).
     """
     st = _states[_key(symbol, timeframe)]
-    start = asyncio.get_running_loop().time()
+    loop = asyncio.get_running_loop()
+    start = loop.time()
 
     async def _await_next_change() -> Tuple[Optional[int], int]:
         async with st.cond:
-            # быстрый путь — только если сигнал пришёл ПОСЛЕ start-max_age_sec
+            # быстрый путь: сигнал уже есть и свежий
             if (
                 st.value in (1, 2)
                 and (since_version is None or st.version > since_version)
                 and (st.last_monotonic or 0) >= (start - float(max_age_sec))
             ):
                 return st.value, st.version
-            # иначе ждём новое сообщение
             await st.cond.wait()
             return st.value, st.version
 
     while True:
-        # пауза/стоп
+        # обработка паузы
         try:
             await _maybe_await(check_pause)
         except asyncio.CancelledError:
@@ -155,10 +175,10 @@ async def wait_for_signal_versioned(
         except Exception:
             pass
 
-        # --- детектор задержки следующего сигнала на базе monotonic и tf_sec ----
-        if callable(on_delay) and st.last_monotonic is not None and st.tf_sec:
+        # проверка задержки
+        if callable(on_delay) and st.last_monotonic and st.tf_sec:
             expected_next = st.last_monotonic + float(st.tf_sec)
-            now = asyncio.get_running_loop().time()
+            now = loop.time()
             drift = now - expected_next
             if drift > float(grace_delay_sec):
                 try:
@@ -166,27 +186,22 @@ async def wait_for_signal_versioned(
                 except Exception:
                     pass
 
-        # --- ожидание события или таймаут ---------------------------------------
         try:
             if timeout is None:
                 direction, ver = await _await_next_change()
             else:
-                elapsed = asyncio.get_running_loop().time() - start
+                elapsed = loop.time() - start
                 left = max(0.0, float(timeout) - elapsed)
-                direction, ver = await asyncio.wait_for(
-                    _await_next_change(), timeout=left
-                )
+                direction, ver = await asyncio.wait_for(_await_next_change(), timeout=left)
         except asyncio.TimeoutError:
             if raise_on_timeout:
                 raise
-            # мягкий режим: крутимся дальше
-            continue
+            continue  # мягкий режим ожидания
 
-        # игнорируем очистки, устаревшие версии и старые сигналы
         if (
             direction in (1, 2)
             and (since_version is None or ver > since_version)
-            and st.last_monotonic is not None
+            and st.last_monotonic
             and st.last_monotonic >= (start - float(max_age_sec))
         ):
             if include_meta:
@@ -200,10 +215,13 @@ async def wait_for_signal_versioned(
                 }
                 return int(direction), int(ver), meta
             return int(direction), int(ver)
-        # иначе ждём следующего уведомления
+        # иначе ждём дальше
 
 
-# Совместимый шорткат (без версий)
+# ======================================================================
+# wait_for_signal
+# ======================================================================
+
 async def wait_for_signal(
     symbol: str,
     timeframe: str,
@@ -212,7 +230,7 @@ async def wait_for_signal(
     timeout: Optional[float] = None,
     raise_on_timeout: bool = True,
 ) -> int:
-    # Всегда ждём следующий сигнал, игнорируя уже полученные ранее.
+    """Упрощённая версия — ждёт следующий сигнал, игнорируя старые."""
     st = _states[_key(symbol, timeframe)]
     direction, _ = await wait_for_signal_versioned(
         symbol,
@@ -225,18 +243,19 @@ async def wait_for_signal(
     return int(direction)
 
 
+# ======================================================================
+# peek_signal_state
+# ======================================================================
+
 def peek_signal_state(
-    symbol: str, timeframe: str
+    symbol: str,
+    timeframe: str,
 ) -> Dict[str, Optional[int | float | str | datetime]]:
-    """
-    Неблокирующий доступ к текущему состоянию: возвращает dict с полями:
-      version, value (1/2/None), indicator (str|None), tf_sec (int|None), 
-      last_monotonic (float|None), next_timestamp (datetime|None), timestamp (datetime|None)
-    """
+    """Неблокирующий доступ к текущему состоянию."""
     st = _states[_key(symbol, timeframe)]
     return {
         "version": int(st.version),
-        "value": (int(st.value) if st.value in (1, 2) else None),
+        "value": int(st.value) if st.value in (1, 2) else None,
         "indicator": st.last_indicator,
         "tf_sec": st.tf_sec,
         "last_monotonic": st.last_monotonic,
