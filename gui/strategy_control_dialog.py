@@ -961,7 +961,7 @@ class StrategyControlDialog(QWidget):
 
             if int_dir == 1:
                 return "ВВЕРХ"
-            if int_dir == -1:
+            if int_dir in (-1, 2):
                 return "ВНИЗ"
 
             return str(normalized)
