@@ -206,7 +206,7 @@ class StrategyCommon:
         """Обрабатывает отложенный сигнал"""
         symbol, _ = trade_key.split('_', 1)
         log = self.log
-        
+
         if trade_key not in self._pending_signals:
             self._pending_signals[trade_key] = asyncio.Queue(maxsize=1)  # Только 1 слот!
         
@@ -230,11 +230,37 @@ class StrategyCommon:
             self._pending_signals[trade_key].put_nowait(signal_data)
         
         log(f"[{symbol}] Сигнал отложен (активная сделка)")
-        
+
         if trade_key not in self._pending_processing:
             self._pending_processing[trade_key] = asyncio.create_task(
                 self._process_pending_signals(trade_key)
             )
+
+    def discard_signals_for(self, trade_key: str) -> int:
+        """Удаляет сигналы из очередей для указанного ключа."""
+        removed = 0
+
+        queue = self._signal_queues.get(trade_key)
+        if queue is not None:
+            while not queue.empty():
+                try:
+                    queue.get_nowait()
+                    queue.task_done()
+                    removed += 1
+                except asyncio.QueueEmpty:
+                    break
+
+        pending = self._pending_signals.get(trade_key)
+        if pending is not None:
+            while not pending.empty():
+                try:
+                    pending.get_nowait()
+                    pending.task_done()
+                    removed += 1
+                except asyncio.QueueEmpty:
+                    break
+
+        return removed
 
     async def _process_pending_signals(self, trade_key: str):
         """Обрабатывает отложку после завершения сделки - ТОЛЬКО ПОСЛЕДНИЙ СИГНАЛ"""

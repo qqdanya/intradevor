@@ -56,9 +56,10 @@ class MartingaleStrategy(BaseTradingStrategy):
             strategy_name="Martingale",
             **kwargs,
         )
-        
+
         # Отслеживание активных серий по паре+таймфрейму
         self._active_series: dict[str, bool] = {}
+        self._series_remaining: dict[str, int] = {}
 
     def is_series_active(self, trade_key: str) -> bool:
         """Проверка, выполняется ли серия для указанного ключа."""
@@ -79,6 +80,15 @@ class MartingaleStrategy(BaseTradingStrategy):
             # Передаем сигнал в систему очередей StrategyCommon
             if hasattr(self, '_common'):
                 await self._common._handle_pending_signal(trade_key, signal_data)
+            return
+
+        max_series = int(self.params.get("repeat_count", 10))
+        remaining_series = self._series_remaining.get(trade_key)
+        if remaining_series is None:
+            remaining_series = max_series
+            self._series_remaining[trade_key] = remaining_series
+        if remaining_series <= 0:
+            log(f"[{symbol}] 🛑 repeat_count={remaining_series} — нечего выполнять.")
             return
         
         series_started = False
@@ -123,7 +133,7 @@ class MartingaleStrategy(BaseTradingStrategy):
             log(f"[{symbol}] Начало обработки сигнала (Мартингейл)")
 
             # Запускаем серию Мартингейла
-            await self._run_martingale_series(symbol, timeframe, direction, log, signal_data['timestamp'], signal_data)
+            await self._run_martingale_series(trade_key, symbol, timeframe, direction, log, signal_data['timestamp'], signal_data)
 
         finally:
             if series_started:
@@ -131,9 +141,9 @@ class MartingaleStrategy(BaseTradingStrategy):
                 self._active_series.pop(trade_key, None)
                 log(f"[{symbol}] Серия Мартингейла завершена для {timeframe}")
 
-    async def _run_martingale_series(self, symbol: str, timeframe: str, initial_direction: int, log, signal_received_time: datetime, signal_data: dict):
+    async def _run_martingale_series(self, trade_key: str, symbol: str, timeframe: str, initial_direction: int, log, signal_received_time: datetime, signal_data: dict):
         """Запускает серию Мартингейла для конкретного сигнала"""
-        series_left = int(self.params.get("repeat_count", 10))
+        series_left = self._series_remaining.get(trade_key, int(self.params.get("repeat_count", 10)))
         if series_left <= 0:
             log(f"[{symbol}] 🛑 repeat_count={series_left} — нечего выполнять.")
             return
@@ -235,6 +245,10 @@ class MartingaleStrategy(BaseTradingStrategy):
             if profit is None:
                 log(f"[{symbol}] ⚠ Результат неизвестен — считаем как LOSS.")
                 step += 1
+                if hasattr(self, "_common") and self._common is not None:
+                    removed = self._common.discard_signals_for(trade_key)
+                    if removed:
+                        log(f"[{symbol}] 🗑 Удалено сигналов из очередей после LOSS: {removed}")
             elif profit > 0:
                 log(f"[{symbol}] ✅ WIN: profit={format_amount(profit)}. Серия завершена.")
                 break
@@ -243,7 +257,11 @@ class MartingaleStrategy(BaseTradingStrategy):
             else:
                 log(f"[{symbol}] ❌ LOSS: profit={format_amount(profit)}. Увеличиваем ставку.")
                 step += 1  # Продолжаем с тем же направлением и исходным сигналом
-                
+                if hasattr(self, "_common") and self._common is not None:
+                    removed = self._common.discard_signals_for(trade_key)
+                    if removed:
+                        log(f"[{symbol}] 🗑 Удалено сигналов из очередей после LOSS: {removed}")
+
             await self.sleep(0.2)
             
             # Обновляем время экспирации для classic
@@ -255,7 +273,8 @@ class MartingaleStrategy(BaseTradingStrategy):
         if did_place_any_trade:
             if step >= max_steps:
                 log(f"[{symbol}] 🛑 Достигнут лимит шагов ({max_steps}).")
-            series_left -= 1
+            series_left = max(0, series_left - 1)
+            self._series_remaining[trade_key] = series_left
             log(f"[{symbol}] ▶ Осталось серий: {series_left}")
 
     def _calculate_trade_duration(self, symbol: str) -> tuple[float, float]:
@@ -302,3 +321,10 @@ class MartingaleStrategy(BaseTradingStrategy):
         """Остановка стратегии с очисткой активных серий"""
         super().stop()
         self._active_series.clear()
+        self._series_remaining.clear()
+
+    def update_params(self, **params):
+        """Обновление параметров стратегии"""
+        super().update_params(**params)
+        if "repeat_count" in params:
+            self._series_remaining.clear()

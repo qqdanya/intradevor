@@ -35,6 +35,7 @@ from core.templates import (
     load_last_template,
     save_last_template,
 )
+from core.time_utils import format_local_time
 
 
 class StrategyControlDialog(QWidget):
@@ -930,7 +931,7 @@ class StrategyControlDialog(QWidget):
 
         def _fmt_dt(value) -> str:
             if isinstance(value, datetime):
-                return value.strftime("%H:%M:%S")
+                return format_local_time(value, "%H:%M:%S")
             if hasattr(value, "strftime"):
                 try:
                     return value.strftime("%H:%M:%S")
