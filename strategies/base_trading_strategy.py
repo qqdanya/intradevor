@@ -167,18 +167,17 @@ class BaseTradingStrategy(StrategyBase):
             return False, f"сигналу {signal_age:.0f}с > {max_signal_age:.0f}с"
         
         return True, "актуален"
-
+        
     def _is_signal_valid_for_sprint(self, signal_data: dict, current_time: datetime) -> tuple[bool, str]:
         """Проверяет актуальность сигнала для sprint-торгов"""
-        max_age = self._max_signal_age_seconds()
-        if max_age <= 0:
-            return True, "нет ограничения по возрасту"
-        
         signal_timestamp = signal_data['timestamp']
         signal_age = (current_time - signal_timestamp).total_seconds()
         
-        if signal_age > max_age:
-            return False, f"сигналу {signal_age:.0f}с > {max_signal_age:.0f}с"
+        # 🔴 МЕНЯЕМ: максимальный возраст 5 секунд вместо 55
+        max_signal_age = 5.0  # Всего 5 секунд!
+        
+        if signal_age > max_signal_age:
+            return False, f"сигналу {signal_age:.1f}с > {max_signal_age}с"
         
         return True, "актуален"
 
