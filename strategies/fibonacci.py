@@ -160,8 +160,225 @@ class FibonacciStrategy(BaseTradingStrategy):
                 self._active_series.pop(trade_key, None)
                 log(f"[{symbol}] Серия Фибоначчи завершена для {timeframe}")
 
-    async def _run_fibonacci_series():
-        pass
+    async def _run_fibonacci_series(
+        self,
+        trade_key: str,
+        symbol: str,
+        timeframe: str,
+        initial_direction: int,
+        log,
+        series_left: int,
+        signal_received_time: datetime,
+        signal_data: dict,
+    ) -> int:
+        """Запускает серию ставок по последовательности Фибоначчи"""
+
+        base_stake = float(self.params.get("base_investment", 100))
+        max_steps = int(self.params.get("max_steps", 5))
+        min_pct = int(self.params.get("min_percent", 70))
+        wait_low = float(self.params.get("wait_on_low_percent", 1))
+
+        if max_steps <= 0:
+            return series_left
+
+        fib_index = 1  # Позиция в последовательности Фибоначчи (1-indexed)
+        step_idx = 0
+        did_place_any_trade = False
+        series_direction = initial_direction
+
+        def update_signal_context(new_signal: Optional[dict]) -> None:
+            nonlocal signal_data, signal_received_time, series_direction
+            if not new_signal:
+                return
+
+            signal_data = new_signal
+            signal_received_time = new_signal['timestamp']
+            series_direction = new_signal['direction']
+
+            self._last_signal_ver = new_signal.get('version', self._last_signal_ver)
+            self._last_indicator = new_signal.get('indicator', self._last_indicator)
+            self._last_signal_at_str = format_local_time(signal_received_time)
+
+            ts = new_signal.get('meta', {}).get('next_timestamp') if new_signal.get('meta') else None
+            self._next_expire_dt = ts.astimezone(ZoneInfo(MOSCOW_TZ)) if ts else None
+
+        while self._running and step_idx < max_steps:
+            await self._pause_point()
+
+            if not await self.ensure_account_conditions():
+                continue
+
+            current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
+
+            # Проверка актуальности сигнала перед первой ставкой
+            if not did_place_any_trade:
+                if self._trade_type == "classic":
+                    is_valid, reason = self._is_signal_valid_for_classic(
+                        signal_data,
+                        current_time,
+                        for_placement=True,
+                    )
+                    if not is_valid:
+                        log(signal_not_actual_for_placement(symbol, reason))
+                        return series_left
+                else:
+                    sprint_payload = signal_data
+                    if not sprint_payload.get('timestamp'):
+                        sprint_payload = {'timestamp': signal_received_time}
+                    is_valid, reason = self._is_signal_valid_for_sprint(
+                        sprint_payload,
+                        current_time,
+                    )
+                    if not is_valid:
+                        log(signal_not_actual_for_placement(symbol, reason))
+                        return series_left
+
+            # Рассчитываем ставку по числу Фибоначчи
+            multiplier = _fib(fib_index)
+            stake = base_stake * multiplier
+
+            pct, balance = await self.check_payout_and_balance(symbol, stake, min_pct, wait_low)
+            if pct is None:
+                continue
+
+            log(
+                trade_summary(
+                    symbol,
+                    format_amount(stake),
+                    self._trade_minutes,
+                    series_direction,
+                    pct,
+                ) + f" (Fibo #{fib_index})"
+            )
+
+            # Финальная проверка актуальности перед размещением сделки
+            current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
+            if self._trade_type == "classic":
+                is_valid, reason = self._is_signal_valid_for_classic(
+                    signal_data,
+                    current_time,
+                    for_placement=True,
+                )
+            else:
+                sprint_payload = signal_data
+                if not sprint_payload.get('timestamp'):
+                    sprint_payload = {'timestamp': signal_received_time}
+                is_valid, reason = self._is_signal_valid_for_sprint(
+                    sprint_payload,
+                    current_time,
+                )
+
+            if not is_valid:
+                log(signal_not_actual_for_placement(symbol, reason))
+                return series_left
+
+            try:
+                demo_now = await is_demo_account(self.http_client)
+            except Exception:
+                demo_now = False
+            account_mode = "ДЕМО" if demo_now else "РЕАЛ"
+
+            self._status("делает ставку")
+            trade_id = await self.place_trade_with_retry(symbol, series_direction, stake, self._anchor_ccy)
+
+            if not trade_id:
+                log(trade_placement_failed(symbol, "Пропускаем сигнал."))
+                return series_left
+
+            did_place_any_trade = True
+
+            trade_seconds, expected_end_ts = self._calculate_trade_duration(symbol)
+            wait_seconds = self.params.get("result_wait_s")
+            if wait_seconds is None:
+                wait_seconds = trade_seconds
+            else:
+                wait_seconds = float(wait_seconds)
+
+            self._notify_pending_trade(
+                trade_id,
+                symbol,
+                timeframe,
+                series_direction,
+                stake,
+                pct,
+                trade_seconds,
+                account_mode,
+                expected_end_ts,
+            )
+            self._register_pending_trade(trade_id, symbol, timeframe)
+
+            profit = await self.wait_for_trade_result(
+                trade_id=trade_id,
+                wait_seconds=float(wait_seconds),
+                placed_at=datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
+                signal_at=self._last_signal_at_str,
+                symbol=symbol,
+                timeframe=timeframe,
+                direction=series_direction,
+                stake=float(stake),
+                percent=int(pct),
+                account_mode=account_mode,
+                indicator=self._last_indicator,
+            )
+
+            step_idx += 1
+
+            def discard_after(message_suffix: str) -> None:
+                if hasattr(self, "_common") and self._common is not None:
+                    removed = self._common.discard_signals_for(trade_key)
+                    if removed:
+                        log(f"[{symbol}] 🗑 Удалено сигналов из очередей {message_suffix}: {removed}")
+
+            continue_series = True
+
+            if profit is None:
+                log(result_unknown(symbol, treat_as_loss=True))
+                fib_index += 1
+                discard_after("после LOSS")
+            elif profit > 0:
+                fib_index = max(1, fib_index - 2)
+                log(
+                    f"[{symbol}] ✅ WIN: profit={format_amount(profit)}. "
+                    f"Шаг назад по Фибоначчи -> {fib_index}."
+                )
+                if fib_index <= 1:
+                    continue_series = False
+            elif abs(profit) < 1e-9:
+                log(
+                    f"[{symbol}] 🤝 PUSH: возврат ставки. "
+                    f"Остаемся на числе Фибоначчи {fib_index}."
+                )
+                discard_after("после PUSH")
+            else:
+                log(
+                    f"[{symbol}] ❌ LOSS: profit={format_amount(profit)}. "
+                    f"Следующее число Фибоначчи."
+                )
+                fib_index += 1
+                discard_after("после LOSS")
+
+            await self.sleep(0.2)
+
+            if self._trade_type == "classic" and self._next_expire_dt is not None:
+                self._next_expire_dt += timedelta(minutes=_minutes_from_timeframe(timeframe))
+
+            if not continue_series:
+                break
+
+            if step_idx >= max_steps:
+                break
+
+            if hasattr(self, "_common") and self._common is not None:
+                new_signal = self._common.pop_latest_signal(trade_key)
+                update_signal_context(new_signal)
+
+        if did_place_any_trade:
+            if step_idx >= max_steps:
+                log(f"[{symbol}] 🛑 Достигнут лимит шагов ({max_steps}).")
+            series_left = max(0, series_left - 1)
+            log(f"[{symbol}] ▶ Осталось серий: {series_left}")
+
+        return series_left
 
 async def _wait_for_new_signal(self, trade_key: str, log, symbol: str, timeframe: str, timeout: float = 30.0) -> Optional[dict]:
     """Ожидает новый сигнал в течение timeout секунд"""
