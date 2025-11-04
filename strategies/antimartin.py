@@ -61,6 +61,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
         symbol = signal_data['symbol']
         timeframe = signal_data['timeframe']
         direction = signal_data['direction']
+        trade_key = f"{symbol}_{timeframe}"
        
         log = self.log or (lambda s: None)
         log(f"[{symbol}] Начало обработки сигнала (Антимартингейл)")
@@ -99,16 +100,37 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
                 log(f"[{symbol}] ❌ Сигнал неактуален для sprint: {reason}")
                 return
 
-        # Запускаем серию Антимартингейла для этого сигнала
-        await self._run_antimartingale_series(symbol, timeframe, direction, log, signal_data['timestamp'], signal_data)
-
-    async def _run_antimartingale_series(self, symbol: str, timeframe: str, initial_direction: int, log, signal_received_time: datetime, signal_data: dict):
-        """Запускает серию Антимартингейла для конкретного сигнала"""
-        series_left = int(self.params.get("repeat_count", 10))
+        series_left = self._get_series_left(trade_key)
         if series_left <= 0:
             log(f"[{symbol}] 🛑 repeat_count={series_left} — нечего выполнять.")
             return
-            
+
+        # Запускаем серию Антимартингейла для этого сигнала
+        updated = await self._run_antimartingale_series(
+            trade_key,
+            symbol,
+            timeframe,
+            direction,
+            log,
+            series_left,
+            signal_data['timestamp'],
+            signal_data,
+        )
+        self._set_series_left(trade_key, updated)
+
+    async def _run_antimartingale_series(
+        self,
+        trade_key: str,
+        symbol: str,
+        timeframe: str,
+        initial_direction: int,
+        log,
+        series_left: int,
+        signal_received_time: datetime,
+        signal_data: dict,
+    ) -> int:
+        """Запускает серию Антимартингейла для конкретного сигнала"""
+
         step = 0
         did_place_any_trade = False
         max_steps = int(self.params.get("max_steps", 3))
@@ -128,12 +150,12 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
                     is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
                     if not is_valid:
                         log(f"[{symbol}] ❌ Сигнал неактуален для размещения: {reason}")
-                        return
+                        return series_left
                 else:
                     is_valid, reason = self._is_signal_valid_for_sprint(signal_data, current_time)
                     if not is_valid:
                         log(f"[{symbol}] ❌ Сигнал неактуален для размещения: {reason}")
-                        return
+                        return series_left
                         
             min_pct = int(self.params.get("min_percent", 70))
             wait_low = float(self.params.get("wait_on_low_percent", 1))
@@ -161,10 +183,10 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
                    
             if not trade_id:
                 log(f"[{symbol}] ❌ Не удалось разместить сделку. Ждем новый сигнал.")
-                return  # ВЫХОДИМ ИЗ СЕРИИ, ЖДЕМ НОВЫЙ СИГНАЛ
-                
+                return series_left  # ВЫХОДИМ ИЗ СЕРИИ, ЖДЕМ НОВЫЙ СИГНАЛ
+
             did_place_any_trade = True
-            
+
             # Определяем длительность сделки
             trade_seconds, expected_end_ts = self._calculate_trade_duration(symbol)
             wait_seconds = self.params.get("result_wait_s")
@@ -172,14 +194,14 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
                 wait_seconds = trade_seconds
             else:
                 wait_seconds = float(wait_seconds)
-                
+
             # Уведомляем о pending сделке
             self._notify_pending_trade(
                 trade_id, symbol, timeframe, initial_direction, current_stake, pct,
                 trade_seconds, account_mode, expected_end_ts
             )
             self._register_pending_trade(trade_id, symbol, timeframe)
-            
+
             # Ожидаем результат сделки
             profit = await self.wait_for_trade_result(
                 trade_id=trade_id,
@@ -203,12 +225,18 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
                 log(f"[{symbol}] ✅ WIN: profit={format_amount(profit)}. Увеличиваем ставку.")
                 # Антимартингейл: увеличиваем ставку на размер выигрыша
                 current_stake += float(profit)
+                removed = self._common.discard_signals_for(trade_key)
+                if removed:
+                    log(f"[{symbol}] 🧹 Удалено сигналов из очереди: {removed}")
                 step += 1
                 if step >= max_steps:
                     log(f"[{symbol}] 🎯 Достигнут лимит шагов ({max_steps}).")
                     break
             elif abs(profit) < 1e-9:
                 log(f"[{symbol}] 🤝 PUSH: возврат ставки. Повтор шага без изменения ставки.")
+                removed = self._common.discard_signals_for(trade_key)
+                if removed:
+                    log(f"[{symbol}] 🧹 Удалено сигналов из очереди: {removed}")
             else:
                 log(f"[{symbol}] ❌ LOSS: profit={format_amount(profit)}. Серия завершена.")
                 break
@@ -224,6 +252,8 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
         if did_place_any_trade:
             series_left -= 1
             log(f"[{symbol}] ▶ Осталось серий: {series_left}")
+
+        return series_left
 
     def _calculate_trade_duration(self, symbol: str) -> tuple[float, float]:
         """Рассчитывает длительность сделки"""

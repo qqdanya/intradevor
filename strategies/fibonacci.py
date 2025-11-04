@@ -70,7 +70,8 @@ class FibonacciStrategy(BaseTradingStrategy):
         symbol = signal_data['symbol']
         timeframe = signal_data['timeframe']
         direction = signal_data['direction']
-       
+        trade_key = f"{symbol}_{timeframe}"
+
         log = self.log or (lambda s: None)
         log(f"[{symbol}] Начало обработки сигнала Фибоначчи")
        
@@ -108,16 +109,37 @@ class FibonacciStrategy(BaseTradingStrategy):
                 log(f"[{symbol}] ❌ Сигнал неактуален для sprint: {reason}")
                 return
 
-        # Запускаем серию Фибоначчи для этого сигнала
-        await self._run_fibonacci_series(symbol, timeframe, direction, log, signal_data['timestamp'], signal_data)
-
-    async def _run_fibonacci_series(self, symbol: str, timeframe: str, initial_direction: int, log, signal_received_time: datetime, signal_data: dict):
-        """Запускает серию Фибоначчи для конкретного сигнала"""
-        series_left = int(self.params.get("repeat_count", 10))
+        series_left = self._get_series_left(trade_key)
         if series_left <= 0:
             log(f"[{symbol}] 🛑 repeat_count={series_left} — нечего выполнять.")
             return
-            
+
+        # Запускаем серию Фибоначчи для этого сигнала
+        updated = await self._run_fibonacci_series(
+            trade_key,
+            symbol,
+            timeframe,
+            direction,
+            log,
+            series_left,
+            signal_data['timestamp'],
+            signal_data,
+        )
+        self._set_series_left(trade_key, updated)
+
+    async def _run_fibonacci_series(
+        self,
+        trade_key: str,
+        symbol: str,
+        timeframe: str,
+        initial_direction: int,
+        log,
+        series_left: int,
+        signal_received_time: datetime,
+        signal_data: dict,
+    ) -> int:
+        """Запускает серию Фибоначчи для конкретного сигнала"""
+
         next_start_step = 1
         did_place_any_trade = False
         max_steps = int(self.params.get("max_steps", 5))
@@ -165,15 +187,15 @@ class FibonacciStrategy(BaseTradingStrategy):
                         is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
                         if not is_valid:
                             log(f"[{symbol}] ❌ Сигнал неактуален для размещения: {reason}")
-                            return
+                            return series_left
                     else:
                         is_valid, reason = self._is_signal_valid_for_sprint(
-                            {'timestamp': signal_received_time}, 
+                            {'timestamp': signal_received_time},
                             current_time
                         )
                         if not is_valid:
                             log(f"[{symbol}] ❌ Сигнал неактуален для размещения: {reason}")
-                            return
+                            return series_left
                     
                 # Фибоначчи: ставка = база * число Фибоначчи
                 stake = base * _fib(step)
@@ -274,8 +296,9 @@ class FibonacciStrategy(BaseTradingStrategy):
                 # Если серии закончились, выходим
                 if series_left <= 0:
                     break
-                    
+
         log(f"[{symbol}] Завершение серии Фибоначчи")
+        return series_left
 
     def _calculate_trade_duration(self, symbol: str) -> tuple[float, float]:
         """Рассчитывает длительность сделки"""

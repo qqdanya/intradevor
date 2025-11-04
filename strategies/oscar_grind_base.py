@@ -61,6 +61,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         symbol = signal_data['symbol']
         timeframe = signal_data['timeframe']
         direction = signal_data['direction']
+        trade_key = f"{symbol}_{timeframe}"
         
         log = self.log or (lambda s: None)
         log(f"[{symbol}] Начало обработки сигнала Oscar Grind")
@@ -83,23 +84,36 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                 log(f"[{symbol}] ❌ Сигнал неактуален для размещения: {reason}")
                 return
 
-        await self._run_oscar_grind_series(symbol, timeframe, direction, log, signal_received_time, signal_data)
-
-    async def _run_oscar_grind_series(
-        self, 
-        symbol: str, 
-        timeframe: str, 
-        initial_direction: int, 
-        log, 
-        signal_received_time: datetime, 
-        signal_data: dict
-    ):
-        """Запускает серию Oscar Grind для конкретного сигнала"""
-        series_left = int(self.params.get("repeat_count", 10))
+        series_left = self._get_series_left(trade_key)
         if series_left <= 0:
             log(f"[{symbol}] repeat_count=0")
             return
-            
+
+        updated = await self._run_oscar_grind_series(
+            trade_key,
+            symbol,
+            timeframe,
+            direction,
+            log,
+            series_left,
+            signal_received_time,
+            signal_data,
+        )
+        self._set_series_left(trade_key, updated)
+
+    async def _run_oscar_grind_series(
+        self,
+        trade_key: str,
+        symbol: str,
+        timeframe: str,
+        initial_direction: int,
+        log,
+        series_left: int,
+        signal_received_time: datetime,
+        signal_data: dict
+    ) -> int:
+        """Запускает серию Oscar Grind для конкретного сигнала"""
+
         base_unit = float(self.params.get("base_investment", 100))
         target_profit = base_unit
         max_steps = int(self.params.get("max_steps", 20))
@@ -108,7 +122,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         double_entry = bool(self.params.get("double_entry", True))
         
         if max_steps <= 0:
-            return
+            return series_left
             
         step_idx = 0
         cum_profit = 0.0
@@ -130,7 +144,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                     is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
                     if not is_valid:
                         log(f"[{symbol}] ❌ Сигнал стал неактуален для размещения: {reason}")
-                        return
+                        return series_left
                 else:
                     is_valid, reason = self._is_signal_valid_for_sprint(
                         {'timestamp': signal_received_time}, 
@@ -138,7 +152,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                     )
                     if not is_valid:
                         log(f"[{symbol}] ❌ Сигнал стал неактуален для размещения: {reason}")
-                        return
+                        return series_left
                     
             pct, balance = await self.check_payout_and_balance(symbol, stake, min_pct, wait_low)
             if pct is None:
@@ -159,7 +173,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                 log(f"[{symbol}] ❌ Не удалось разместить сделку. Ждем новый сигнал.")
                 # ШАГ НЕ УВЕЛИЧИВАЕМ - ждем новый сигнал для этого же шага
                 await self.sleep(2.0)
-                return  # Выходим из серии, ждем новый сигнал
+                return series_left  # Выходим из серии, ждем новый сигнал
             
             series_started = True
                 
@@ -232,6 +246,8 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         if step_idx > 0:
             series_left -= 1
             log(f"[{symbol}] Осталось серий: {series_left}")
+
+        return series_left
 
     def _next_stake(
         self, 
