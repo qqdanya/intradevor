@@ -3,6 +3,7 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, Dict
 from zoneinfo import ZoneInfo
+from core.policy import can_open_new_trade, get_max_open_trades  # Добавляем импорт
 from strategies.constants import MOSCOW_TZ
 
 class StrategyCommon:
@@ -21,6 +22,9 @@ class StrategyCommon:
         
         # Глобальная блокировка — только одна сделка в системе
         self._global_trade_lock = asyncio.Lock()
+        
+        # Добавляем отслеживание общего количества открытых сделок
+        self._total_open_trades = 0  # Общий счетчик для всех символов/таймфреймов
 
     async def signal_listener(self, queue: asyncio.Queue):
         """Прослушиватель — кладёт в нужную очередь по trade_key"""
@@ -122,6 +126,14 @@ class StrategyCommon:
             try:
                 signal_data = await queue.get()
                 
+                # ПРОВЕРКА ЛИМИТА ОТКРЫТЫХ СДЕЛОК
+                if not can_open_new_trade(self._total_open_trades):
+                    max_trades = get_max_open_trades()
+                    log(f"[{symbol}] ⚠ Достигнут лимит {max_trades} открытых сделок. Сигнал отложен.")
+                    await self._handle_pending_signal(trade_key, signal_data)
+                    queue.task_done()
+                    continue
+                
                 if not allow_parallel:
                     # Глобальная блокировка для всех символов
                     if self._global_trade_lock.locked():
@@ -132,8 +144,12 @@ class StrategyCommon:
                     # Блокируем и обрабатываем - ОДНА сделка на всю систему
                     async with self._global_trade_lock:
                         log(f"[{symbol}] Получена глобальная блокировка, начало обработки")
-                        task = asyncio.create_task(self.strategy._process_single_signal(signal_data))
-                        await task  # Ждём завершения ПОД блокировкой
+                        self._total_open_trades += 1  # Увеличиваем счетчик
+                        try:
+                            task = asyncio.create_task(self.strategy._process_single_signal(signal_data))
+                            await task  # Ждём завершения ПОД блокировкой
+                        finally:
+                            self._total_open_trades = max(0, self._total_open_trades - 1)  # Уменьшаем счетчик
                         log(f"[{symbol}] Освобождение глобальной блокировки")
                         
                 else:
@@ -141,11 +157,13 @@ class StrategyCommon:
                     if trade_key in self._active_trades:
                         await self._handle_pending_signal(trade_key, signal_data)
                     else:
+                        self._total_open_trades += 1  # Увеличиваем счетчик
                         task = asyncio.create_task(self.strategy._process_single_signal(signal_data))
                         self._active_trades[trade_key] = task
                         
                         def cleanup(fut):
                             self._active_trades.pop(trade_key, None)
+                            self._total_open_trades = max(0, self._total_open_trades - 1)  # Уменьшаем счетчик
                             queue.task_done()
                             asyncio.create_task(self._check_more_pending_signals(trade_key))
                         
@@ -233,6 +251,12 @@ class StrategyCommon:
         symbol, _ = trade_key.split('_', 1)
         log = self.log
         
+        # ПРОВЕРКА ЛИМИТА ДЛЯ ОТЛОЖЕННЫХ СИГНАЛОВ
+        if not can_open_new_trade(self._total_open_trades):
+            max_trades = get_max_open_trades()
+            log(f"[{symbol}] ⚠ Лимит {max_trades} сделок - отложенный сигнал не обработан")
+            return
+        
         if trade_key not in self._pending_signals or self._pending_signals[trade_key].empty():
             return
         
@@ -246,13 +270,24 @@ class StrategyCommon:
         
         if last_signal:
             log(f"[{symbol}] Запуск отложенного сигнала")
-            task = asyncio.create_task(self.strategy._process_single_signal(last_signal))
             
             if not self.strategy.params.get("allow_parallel_trades", True):
-                await task  # Ждём
+                self._total_open_trades += 1  # Увеличиваем счетчик
+                try:
+                    task = asyncio.create_task(self.strategy._process_single_signal(last_signal))
+                    await task  # Ждём
+                finally:
+                    self._total_open_trades = max(0, self._total_open_trades - 1)  # Уменьшаем счетчик
             else:
+                self._total_open_trades += 1  # Увеличиваем счетчик
+                task = asyncio.create_task(self.strategy._process_single_signal(last_signal))
                 self._active_trades[trade_key] = task
-                task.add_done_callback(lambda f: self._active_trades.pop(trade_key, None))
+                
+                def cleanup(fut):
+                    self._active_trades.pop(trade_key, None)
+                    self._total_open_trades = max(0, self._total_open_trades - 1)
+                
+                task.add_done_callback(cleanup)
 
     async def _check_more_pending_signals(self, trade_key: str):
         """Проверяет наличие дополнительных отложенных сигналов"""
@@ -268,6 +303,9 @@ class StrategyCommon:
 
     def stop(self):
         """Остановка с очисткой всех очередей и задач"""
+        # Сбрасываем счетчик сделок
+        self._total_open_trades = 0
+        
         # Отменяем все задачи
         all_tasks = []
         all_tasks.extend(self._signal_processors.values())
