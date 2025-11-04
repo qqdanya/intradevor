@@ -41,13 +41,6 @@ async def handle(ws):
             if data.get("type") == "hello":
                 acc = data.get("account", "?")
                 log(f"[HELLO] account={acc}")
-                await ws.send('{"type":"pong"}')
-                continue
-
-            # === PING ===
-            if data.get("type") == "ping":
-                await ws.send('{"type":"pong"}')
-                log(f"[PONG→] {ip}:{port} (ответ на ping)")
                 continue
 
             # === SIGNAL ===
@@ -64,8 +57,10 @@ async def handle(ws):
                 delay = None
                 if bar_time and detect_time:
                     delay = (detect_time - bar_time).total_seconds()
+                    if delay < 0:
+                        delay = None
 
-                delay_str = f" | задержка={delay:.1f}с" if delay else ""
+                delay_str = f" | задержка={delay:.1f}с" if delay is not None else ""
                 log(f"[SIGNAL] {sym} {tf} → {direction} | ind={ind}{delay_str}")
 
                 # Рассылка другим клиентам
@@ -76,6 +71,9 @@ async def handle(ws):
                         await asyncio.wait_for(c.send(raw), timeout=1.0)
                     except Exception:
                         connected.discard(c)
+
+            else:
+                log(f"[i] Получен неизвестный пакет: {data}")
 
     except websockets.exceptions.ConnectionClosed as e:
         log(f"[-] Клиент отключился: {ip}:{port} | code={e.code} reason={e.reason or ''}")
@@ -98,11 +96,11 @@ async def main():
         ping_timeout=None,
         max_size=2**20,
     ):
-        # держим сервер активным и чистим старые подключения
         while True:
+            # безопасная проверка соединений (для websockets 13+)
             for c in list(connected):
-                # Новая проверка для websockets 13+
-                if c.state.name != "OPEN":
+                state = getattr(c, "state", None)
+                if state is None or getattr(state, "name", "") != "OPEN":
                     connected.discard(c)
             await asyncio.sleep(5)
 
