@@ -11,6 +11,7 @@ from core.time_utils import format_local_time
 from strategies.log_messages import (
     start_processing,
     signal_not_actual,
+    signal_not_actual_for_placement,
     trade_placement_failed,
     payout_missing,
     payout_too_low,
@@ -202,6 +203,27 @@ class FixedStakeStrategy(BaseTradingStrategy):
             return
 
         if not await self.ensure_account_conditions():
+            return
+
+        # Финальная проверка актуальности перед размещением сделки
+        current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
+        if self._trade_type == "classic":
+            is_valid, reason = self._is_signal_valid_for_classic(
+                signal_data,
+                current_time,
+                for_placement=True,
+            )
+        else:
+            sprint_payload = signal_data
+            if not sprint_payload.get('timestamp'):
+                sprint_payload = {'timestamp': signal_received_time}
+            is_valid, reason = self._is_signal_valid_for_sprint(
+                sprint_payload,
+                current_time,
+            )
+
+        if not is_valid:
+            log(signal_not_actual_for_placement(symbol, reason))
             return
 
         log(trade_summary(symbol, format_amount(stake), self._trade_minutes, direction, pct))
