@@ -150,15 +150,17 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                     is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
                     if not is_valid:
                         log(signal_not_actual_for_placement(symbol, reason))
-                        return series_left
+                        await self.sleep(0.5)
+                        continue
                 else:
                     is_valid, reason = self._is_signal_valid_for_sprint(
-                        {'timestamp': signal_received_time}, 
+                        {'timestamp': signal_received_time},
                         current_time
                     )
                     if not is_valid:
                         log(signal_not_actual_for_placement(symbol, reason))
-                        return series_left
+                        await self.sleep(0.5)
+                        continue
                     
             pct, balance = await self.check_payout_and_balance(symbol, stake, min_pct, wait_low)
             if pct is None:
@@ -185,7 +187,8 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
 
             if not is_valid:
                 log(signal_not_actual_for_placement(symbol, reason))
-                return series_left
+                await self.sleep(0.5)
+                continue
 
             try:
                 demo_now = await is_demo_account(self.http_client)
