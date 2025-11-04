@@ -1,7 +1,7 @@
 # core/signal_waiter.py
 import asyncio
 from dataclasses import dataclass, field
-from collections import defaultdict
+from collections import defaultdict, deque
 from typing import Optional, Tuple, Dict, Callable, Awaitable
 from datetime import datetime, timezone
 
@@ -40,6 +40,7 @@ class _State:
     last_timeframe: Optional[str] = None
     next_timestamp: Optional[datetime] = None  # начало следующей свечи
     timestamp: Optional[datetime] = None  # время текущей свечи сигнала
+    history: deque = field(default_factory=lambda: deque(maxlen=100))
 
 _states: Dict[tuple[str, str], _State] = defaultdict(_State)
 
@@ -90,9 +91,10 @@ def push_signal(
 
     async def _update_and_notify(st: _State):
         async with st.cond:
+            now_monotonic = asyncio.get_running_loop().time()
             st.version += 1
             st.value = direction if direction in (1, 2) else None
-            st.last_monotonic = asyncio.get_running_loop().time()
+            st.last_monotonic = now_monotonic
             sec = _tf_to_seconds(timeframe)
             if sec:
                 st.tf_sec = sec
@@ -102,6 +104,23 @@ def push_signal(
             st.last_timeframe = timeframe
             st.next_timestamp = next_timestamp
             st.timestamp = timestamp
+            if st.value in (1, 2):
+                meta_snapshot = {
+                    "indicator": st.last_indicator,
+                    "tf_sec": st.tf_sec,
+                    "symbol": st.last_symbol,
+                    "timeframe": st.last_timeframe,
+                    "next_timestamp": st.next_timestamp,
+                    "timestamp": st.timestamp,
+                }
+                st.history.append(
+                    {
+                        "version": int(st.version),
+                        "direction": int(st.value),
+                        "monotonic": now_monotonic,
+                        "meta": meta_snapshot,
+                    }
+                )
             st.cond.notify_all()
 
     loop = asyncio.get_running_loop()
@@ -133,16 +152,28 @@ async def wait_for_signal_versioned(
     st = _states[_key(symbol, timeframe)]
     start = asyncio.get_running_loop().time()
 
-    async def _await_next_change() -> Tuple[Optional[int], int]:
+    def _select_event() -> Optional[dict]:
+        cutoff = start - float(max_age_sec)
+        for event in st.history:
+            direction = event.get("direction")
+            version = event.get("version")
+            monotonic = event.get("monotonic")
+            if direction not in (1, 2):
+                continue
+            if since_version is not None and version is not None and version <= since_version:
+                continue
+            if monotonic is not None and monotonic < cutoff:
+                continue
+            return event
+        return None
+
+    async def _await_next_change() -> dict:
         async with st.cond:
-            if (
-                st.value in (1, 2)
-                and (since_version is None or st.version > since_version)
-                and (st.last_monotonic or 0) >= (start - float(max_age_sec))
-            ):
-                return st.value, st.version
-            await st.cond.wait()
-            return st.value, st.version
+            while True:
+                event = _select_event()
+                if event is not None:
+                    return event
+                await st.cond.wait()
 
     while True:
         try:
@@ -164,11 +195,11 @@ async def wait_for_signal_versioned(
 
         try:
             if timeout is None:
-                direction, ver = await _await_next_change()
+                event = await _await_next_change()
             else:
                 elapsed = asyncio.get_running_loop().time() - start
                 left = max(0.0, float(timeout) - elapsed)
-                direction, ver = await asyncio.wait_for(
+                event = await asyncio.wait_for(
                     _await_next_change(), timeout=left
                 )
         except asyncio.TimeoutError:
@@ -176,21 +207,17 @@ async def wait_for_signal_versioned(
                 raise
             continue
 
+        direction = event.get("direction")
+        ver = event.get("version")
+        monotonic = event.get("monotonic")
         if (
             direction in (1, 2)
             and (since_version is None or ver > since_version)
-            and st.last_monotonic is not None
-            and st.last_monotonic >= (start - float(max_age_sec))
+            and monotonic is not None
+            and monotonic >= (start - float(max_age_sec))
         ):
             if include_meta:
-                meta = {
-                    "indicator": st.last_indicator,
-                    "tf_sec": st.tf_sec,
-                    "symbol": st.last_symbol,
-                    "timeframe": st.last_timeframe,
-                    "next_timestamp": st.next_timestamp,
-                    "timestamp": st.timestamp,
-                }
+                meta = event.get("meta", {})
                 return int(direction), int(ver), meta
             return int(direction), int(ver)
 
