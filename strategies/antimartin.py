@@ -164,6 +164,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
 
         step = 0
         did_place_any_trade = False
+        needs_signal_validation = True
         series_direction = initial_direction
         max_steps = int(self.params.get("max_steps", 3))
 
@@ -179,15 +180,22 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
                 continue
 
             # валидируем сигнал только перед первой ставкой серии
-            current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
-            if not did_place_any_trade:
+            if needs_signal_validation:
+                current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
                 if self._trade_type == "classic":
-                    is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
+                    is_valid, reason = self._is_signal_valid_for_classic(
+                        signal_data,
+                        current_time,
+                        for_placement=True,
+                    )
                     if not is_valid:
                         log(signal_not_actual_for_placement(symbol, reason))
                         return
                 else:
-                    is_valid, reason = self._is_signal_valid_for_sprint({'timestamp': signal_received_time}, current_time)
+                    is_valid, reason = self._is_signal_valid_for_sprint(
+                        {'timestamp': signal_received_time},
+                        current_time,
+                    )
                     if not is_valid:
                         log(signal_not_actual_for_placement(symbol, reason))
                         return
@@ -203,25 +211,28 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
                 f"side={'UP' if series_direction == 1 else 'DOWN'} payout={pct}%")
 
             # Финальная проверка актуальности перед размещением сделки
-            current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
-            if self._trade_type == "classic":
-                is_valid, reason = self._is_signal_valid_for_classic(
-                    signal_data,
-                    current_time,
-                    for_placement=True,
-                )
-            else:
-                sprint_payload = signal_data
-                if not sprint_payload.get('timestamp'):
-                    sprint_payload = {'timestamp': signal_received_time}
-                is_valid, reason = self._is_signal_valid_for_sprint(
-                    sprint_payload,
-                    current_time,
-                )
+            if needs_signal_validation:
+                current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
+                if self._trade_type == "classic":
+                    is_valid, reason = self._is_signal_valid_for_classic(
+                        signal_data,
+                        current_time,
+                        for_placement=True,
+                    )
+                else:
+                    sprint_payload = signal_data
+                    if not sprint_payload.get('timestamp'):
+                        sprint_payload = {'timestamp': signal_received_time}
+                    is_valid, reason = self._is_signal_valid_for_sprint(
+                        sprint_payload,
+                        current_time,
+                    )
 
-            if not is_valid:
-                log(signal_not_actual_for_placement(symbol, reason))
-                return
+                if not is_valid:
+                    log(signal_not_actual_for_placement(symbol, reason))
+                    return
+
+                needs_signal_validation = False
 
             try:
                 demo_now = await is_demo_account(self.http_client)
