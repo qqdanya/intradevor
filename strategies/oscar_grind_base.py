@@ -187,6 +187,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         series_direction = initial_direction
         has_repeated = False
         signal_at_str = signal_data.get('signal_time_str') or format_local_time(signal_received_time)
+        series_finished = False
 
         while self._running and step_idx < max_steps:
             await self._pause_point()
@@ -312,6 +313,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             if cum_profit >= target_profit:
                 log(f"[{symbol}] Цель достигнута: {format_amount(cum_profit)}")
                 self._series_state.pop(trade_key, None)
+                series_finished = True
                 break
 
             need = max(0.0, target_profit - cum_profit)
@@ -323,6 +325,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             step_idx += 1
 
             if step_idx >= max_steps or not self._running:
+                series_finished = True
                 self._series_state.pop(trade_key, None)
             else:
                 self._series_state[trade_key] = {
@@ -342,13 +345,18 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                 continue
 
             await self.sleep(0.2)
-            break
-                
-        if step_idx > 0:
-            series_left -= 1
-            log(f"[{symbol}] Осталось серий: {series_left}")
+            continue
 
-        if series_left <= 0 or not self._running:
+        if series_finished:
+            series_left = max(0, series_left - 1)
+            log(f"[{symbol}] Осталось серий: {series_left}")
+        elif step_idx > 0:
+            log(
+                f"[{symbol}] Серия продолжается: накоплено "
+                f"{format_amount(cum_profit)}/{format_amount(target_profit)}"
+            )
+
+        if series_left <= 0 or not self._running or series_finished:
             self._series_state.pop(trade_key, None)
 
         return series_left
