@@ -380,24 +380,31 @@ class FibonacciStrategy(BaseTradingStrategy):
 
         return series_left
 
-async def _wait_for_new_signal(self, trade_key: str, log, symbol: str, timeframe: str, timeout: float = 30.0) -> Optional[dict]:
-    """Ожидает новый сигнал в течение timeout секунд"""
-    start_time = asyncio.get_event_loop().time()
-    
-    while self._running and (asyncio.get_event_loop().time() - start_time) < timeout:
-        await self._pause_point()
-        
-        # Проверяем наличие нового сигнала
-        if hasattr(self, "_common") and self._common is not None:
-            new_signal = self._common.pop_latest_signal(trade_key)
-            if new_signal:
-                return new_signal
-        
-        # Ждем немного перед следующей проверкой
-        await asyncio.sleep(0.5)
-    
-    log(f"[{symbol}] ⏰ Таймаут ожидания нового сигнала ({timeout}с)")
-    return None
+    async def _wait_for_new_signal(
+        self,
+        trade_key: str,
+        log,
+        symbol: str,
+        timeframe: str,
+        timeout: float = 30.0,
+    ) -> Optional[dict]:
+        """Ожидает новый сигнал в течение timeout секунд"""
+        start_time = asyncio.get_event_loop().time()
+
+        while self._running and (asyncio.get_event_loop().time() - start_time) < timeout:
+            await self._pause_point()
+
+            # Проверяем наличие нового сигнала
+            if hasattr(self, "_common") and self._common is not None:
+                new_signal = self._common.pop_latest_signal(trade_key)
+                if new_signal:
+                    return new_signal
+
+            # Ждем немного перед следующей проверкой
+            await asyncio.sleep(0.5)
+
+        log(f"[{symbol}] ⏰ Таймаут ожидания нового сигнала ({timeout}с)")
+        return None
 
     def _calculate_trade_duration(self, symbol: str) -> tuple[float, float]:
         """Рассчитывает длительность сделки"""
@@ -414,9 +421,16 @@ async def _wait_for_new_signal(self, trade_key: str, log, symbol: str, timeframe
         return trade_seconds, expected_end_ts
 
     def _notify_pending_trade(
-        self, trade_id: str, symbol: str, timeframe: str, direction: int,
-        stake: float, percent: int, trade_seconds: float,
-        account_mode: str, expected_end_ts: float
+        self,
+        trade_id: str,
+        symbol: str,
+        timeframe: str,
+        direction: int,
+        stake: float,
+        percent: int,
+        trade_seconds: float,
+        account_mode: str,
+        expected_end_ts: float,
     ):
         """Уведомляет о pending сделке"""
         placed_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
