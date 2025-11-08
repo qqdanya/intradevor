@@ -184,17 +184,19 @@ class FibonacciStrategy(BaseTradingStrategy):
         fib_index = 1  # Позиция в последовательности Фибоначчи (1-indexed)
         step_idx = 0
         did_place_any_trade = False
+        needs_signal_validation = True
         series_direction = initial_direction
         signal_at_str = signal_data.get('signal_time_str') or format_local_time(signal_received_time)
 
         def update_signal_context(new_signal: Optional[dict]) -> None:
-            nonlocal signal_data, signal_received_time, series_direction, signal_at_str
+            nonlocal signal_data, signal_received_time, series_direction, signal_at_str, needs_signal_validation
             if not new_signal:
                 return
 
             signal_data = new_signal
             signal_received_time = new_signal['timestamp']
             series_direction = new_signal['direction']
+            needs_signal_validation = True
 
             self._last_signal_ver = new_signal.get('version', self._last_signal_ver)
             self._last_indicator = new_signal.get('indicator', self._last_indicator)
@@ -210,10 +212,9 @@ class FibonacciStrategy(BaseTradingStrategy):
             if not await self.ensure_account_conditions():
                 continue
 
-            current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
+            if needs_signal_validation:
+                current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
 
-            # Проверка актуальности сигнала перед первой ставкой
-            if not did_place_any_trade:
                 if self._trade_type == "classic":
                     is_valid, reason = self._is_signal_valid_for_classic(
                         signal_data,
@@ -253,26 +254,28 @@ class FibonacciStrategy(BaseTradingStrategy):
                 ) + f" (Fibo #{fib_index})"
             )
 
-            # Финальная проверка актуальности перед размещением сделки
-            current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
-            if self._trade_type == "classic":
-                is_valid, reason = self._is_signal_valid_for_classic(
-                    signal_data,
-                    current_time,
-                    for_placement=True,
-                )
-            else:
-                sprint_payload = signal_data
-                if not sprint_payload.get('timestamp'):
-                    sprint_payload = {'timestamp': signal_received_time}
-                is_valid, reason = self._is_signal_valid_for_sprint(
-                    sprint_payload,
-                    current_time,
-                )
+            if needs_signal_validation:
+                current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
+                if self._trade_type == "classic":
+                    is_valid, reason = self._is_signal_valid_for_classic(
+                        signal_data,
+                        current_time,
+                        for_placement=True,
+                    )
+                else:
+                    sprint_payload = signal_data
+                    if not sprint_payload.get('timestamp'):
+                        sprint_payload = {'timestamp': signal_received_time}
+                    is_valid, reason = self._is_signal_valid_for_sprint(
+                        sprint_payload,
+                        current_time,
+                    )
 
-            if not is_valid:
-                log(signal_not_actual_for_placement(symbol, reason))
-                return series_left
+                if not is_valid:
+                    log(signal_not_actual_for_placement(symbol, reason))
+                    return series_left
+
+                needs_signal_validation = False
 
             try:
                 demo_now = await is_demo_account(self.http_client)

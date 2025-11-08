@@ -175,27 +175,32 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         cum_profit = 0.0
         stake = base_unit
         series_started = False
+        needs_signal_validation = True
         series_direction = initial_direction
         repeat_trade = False
         signal_at_str = signal_data.get('signal_time_str') or format_local_time(signal_received_time)
-        
+
         while self._running and step_idx < max_steps:
             await self._pause_point()
             if not await self.ensure_account_conditions():
                 continue
                 
             # ПРОВЕРКА АКТУАЛЬНОСТИ ТОЛЬКО ДЛЯ ПЕРВОЙ СТАВКИ
-            current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
-            
-            if not series_started:  # ТОЛЬКО перед первой ставкой
+            if needs_signal_validation:
+                current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
+
                 if self._trade_type == "classic":
-                    is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
+                    is_valid, reason = self._is_signal_valid_for_classic(
+                        signal_data,
+                        current_time,
+                        for_placement=True,
+                    )
                     if not is_valid:
                         log(signal_not_actual_for_placement(symbol, reason))
                         return series_left
                 else:
                     is_valid, reason = self._is_signal_valid_for_sprint(
-                        {'timestamp': signal_received_time}, 
+                        {'timestamp': signal_received_time},
                         current_time
                     )
                     if not is_valid:
@@ -208,26 +213,28 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                 
             log(trade_summary(symbol, format_amount(stake), self._trade_minutes, series_direction, pct) + f" (step {step_idx + 1})")
 
-            # Финальная проверка актуальности перед размещением сделки
-            current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
-            if self._trade_type == "classic":
-                is_valid, reason = self._is_signal_valid_for_classic(
-                    signal_data,
-                    current_time,
-                    for_placement=True,
-                )
-            else:
-                sprint_payload = signal_data
-                if not sprint_payload.get('timestamp'):
-                    sprint_payload = {'timestamp': signal_received_time}
-                is_valid, reason = self._is_signal_valid_for_sprint(
-                    sprint_payload,
-                    current_time,
-                )
+            if needs_signal_validation:
+                current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
+                if self._trade_type == "classic":
+                    is_valid, reason = self._is_signal_valid_for_classic(
+                        signal_data,
+                        current_time,
+                        for_placement=True,
+                    )
+                else:
+                    sprint_payload = signal_data
+                    if not sprint_payload.get('timestamp'):
+                        sprint_payload = {'timestamp': signal_received_time}
+                    is_valid, reason = self._is_signal_valid_for_sprint(
+                        sprint_payload,
+                        current_time,
+                    )
 
-            if not is_valid:
-                log(signal_not_actual_for_placement(symbol, reason))
-                return series_left
+                if not is_valid:
+                    log(signal_not_actual_for_placement(symbol, reason))
+                    return series_left
+
+                needs_signal_validation = False
 
             try:
                 demo_now = await is_demo_account(self.http_client)
