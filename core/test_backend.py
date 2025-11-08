@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import time
 import uuid
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
@@ -32,8 +33,13 @@ _SYMBOLS = {
 @dataclass
 class _Trade:
     investment: float
+    profit: float
+    percent: int
     win: bool
-    payout: float
+    option: str
+    direction: int
+    created_at: float
+    expected_close: float
 
 
 _FAKE_BALANCE: float = 10_000.0
@@ -41,6 +47,7 @@ _FAKE_CCY: str = "USD"
 _IS_DEMO: bool = True
 _RISK: Tuple[float, float] = (0.0, 0.0)
 _TRADES: Dict[str, _Trade] = {}
+_RECORDED_PERCENTS: Dict[Tuple[str, str, str], int] = {}
 _LOCK = asyncio.Lock()
 
 
@@ -63,7 +70,35 @@ async def get_balance_info(*_: object, **__: object) -> Tuple[float, str, str]:
 
 async def get_current_percent(*_: object, **__: object) -> Optional[int]:
     """Return a random payout percent between 60 and 95."""
-    return random.randint(60, 95)
+    option = str(__.get("option", "")).upper()
+    minutes = str(__.get("minutes", "1"))
+    trade_type = str(__.get("trade_type", "sprint")).lower()
+    percent = random.randint(60, 95)
+    async with _LOCK:
+        _RECORDED_PERCENTS[(option, minutes, trade_type)] = percent
+    return percent
+
+
+def _minutes_to_seconds(value: float | int | str, trade_type: str) -> float:
+    """Convert minutes / HH:MM strings into seconds for bookkeeping."""
+    if isinstance(value, (int, float)):
+        return max(0.0, float(value) * 60.0)
+
+    text = str(value).strip()
+    try:
+        return max(0.0, float(text.replace(",", ".")) * 60.0)
+    except ValueError:
+        pass
+
+    if trade_type == "classic" and ":" in text:
+        try:
+            hours, minutes = text.split(":", 1)
+            total_minutes = int(hours) * 60 + int(minutes)
+            return max(0.0, float(total_minutes) * 60.0)
+        except (TypeError, ValueError):
+            return 60.0
+
+    return 60.0
 
 
 async def place_trade(
@@ -84,11 +119,31 @@ async def place_trade(
         return None
 
     trade_id = str(uuid.uuid4())
-    win = random.random() < 0.5
-    payout = random.uniform(0.65, 0.9)
+    now = time.time()
+    trade_kind = str(__.get("trade_type", "sprint")).lower()
+    minutes_value = minutes
 
     async with _LOCK:
-        _TRADES[trade_id] = _Trade(investment=investment_value, win=win, payout=payout)
+        key = (str(option).upper(), str(minutes_value), trade_kind)
+        percent = _RECORDED_PERCENTS.pop(key, None)
+        if percent is None:
+            percent = random.randint(60, 95)
+
+        win = random.random() < 0.5
+        profit = investment_value * (percent / 100.0) if win else -investment_value
+        duration = _minutes_to_seconds(minutes_value, trade_kind)
+        expected_close = now + duration
+
+        _TRADES[trade_id] = _Trade(
+            investment=investment_value,
+            profit=profit,
+            percent=percent,
+            win=win,
+            option=str(option),
+            direction=int(status),
+            created_at=now,
+            expected_close=expected_close,
+        )
 
     if on_log:
         on_log(
@@ -108,15 +163,23 @@ async def check_trade_result(
     """Return the simulated profit/loss for the given trade."""
     await asyncio.sleep(wait_time)
 
+    remaining = 0.0
+    async with _LOCK:
+        trade = _TRADES.get(trade_id)
+        if trade is not None:
+            remaining = max(0.0, trade.expected_close - time.time())
+
+    if remaining > 0:
+        await asyncio.sleep(remaining)
+
     async with _LOCK:
         trade = _TRADES.pop(trade_id, None)
         global _FAKE_BALANCE
         if trade is None:
             return None
 
-        profit = trade.investment * trade.payout if trade.win else -trade.investment
-        _FAKE_BALANCE = max(0.0, _FAKE_BALANCE + profit)
-        return profit
+        _FAKE_BALANCE = max(0.0, _FAKE_BALANCE + trade.profit)
+        return trade.profit
 
 
 async def change_currency(*_: object, **__: object) -> bool:
