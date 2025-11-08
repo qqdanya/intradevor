@@ -136,6 +136,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
 
     async def _process_fixed_trade(self, symbol: str, timeframe: str, direction: int, log, signal_received_time: datetime, signal_data: dict):
         """Обрабатывает одну сделку с фиксированной ставкой"""
+        signal_at_str = signal_data.get('signal_time_str') or format_local_time(signal_received_time)
         # Проверяем баланс
         try:
             bal, _, _ = await get_balance_info(
@@ -257,8 +258,16 @@ class FixedStakeStrategy(BaseTradingStrategy):
 
         # Уведомляем о pending сделке
         self._notify_pending_trade(
-            trade_id, symbol, timeframe, direction, stake, pct,
-            trade_seconds, account_mode, expected_end_ts
+            trade_id,
+            symbol,
+            timeframe,
+            direction,
+            stake,
+            pct,
+            trade_seconds,
+            account_mode,
+            expected_end_ts,
+            signal_at=signal_at_str,
         )
         self._register_pending_trade(trade_id, symbol, timeframe)
 
@@ -267,7 +276,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
             trade_id=trade_id,
             wait_seconds=float(wait_seconds),
             placed_at=datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
-            signal_at=self._last_signal_at_str,
+            signal_at=signal_at_str,
             symbol=symbol,
             timeframe=timeframe,
             direction=direction,
@@ -309,9 +318,18 @@ class FixedStakeStrategy(BaseTradingStrategy):
         return trade_seconds, expected_end_ts
 
     def _notify_pending_trade(
-        self, trade_id: str, symbol: str, timeframe: str, direction: int,
-        stake: float, percent: int, trade_seconds: float,
-        account_mode: str, expected_end_ts: float
+        self,
+        trade_id: str,
+        symbol: str,
+        timeframe: str,
+        direction: int,
+        stake: float,
+        percent: int,
+        trade_seconds: float,
+        account_mode: str,
+        expected_end_ts: float,
+        *,
+        signal_at: Optional[str] = None,
     ):
         """Уведомляет о pending сделке"""
         placed_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
@@ -321,7 +339,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
                     trade_id=trade_id,
                     symbol=symbol,
                     timeframe=timeframe,
-                    signal_at=self._last_signal_at_str,
+                    signal_at=signal_at or self._last_signal_at_str,
                     placed_at=placed_at_str,
                     direction=direction,
                     stake=float(stake),

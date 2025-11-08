@@ -185,9 +185,10 @@ class FibonacciStrategy(BaseTradingStrategy):
         step_idx = 0
         did_place_any_trade = False
         series_direction = initial_direction
+        signal_at_str = signal_data.get('signal_time_str') or format_local_time(signal_received_time)
 
         def update_signal_context(new_signal: Optional[dict]) -> None:
-            nonlocal signal_data, signal_received_time, series_direction
+            nonlocal signal_data, signal_received_time, series_direction, signal_at_str
             if not new_signal:
                 return
 
@@ -197,7 +198,8 @@ class FibonacciStrategy(BaseTradingStrategy):
 
             self._last_signal_ver = new_signal.get('version', self._last_signal_ver)
             self._last_indicator = new_signal.get('indicator', self._last_indicator)
-            self._last_signal_at_str = format_local_time(signal_received_time)
+            signal_at_str = new_signal.get('signal_time_str') or format_local_time(signal_received_time)
+            self._last_signal_at_str = signal_at_str
 
             ts = new_signal.get('meta', {}).get('next_timestamp') if new_signal.get('meta') else None
             self._next_expire_dt = ts.astimezone(ZoneInfo(MOSCOW_TZ)) if ts else None
@@ -304,6 +306,7 @@ class FibonacciStrategy(BaseTradingStrategy):
                 trade_seconds,
                 account_mode,
                 expected_end_ts,
+                signal_at=signal_at_str,
             )
             self._register_pending_trade(trade_id, symbol, timeframe)
 
@@ -311,7 +314,7 @@ class FibonacciStrategy(BaseTradingStrategy):
                 trade_id=trade_id,
                 wait_seconds=float(wait_seconds),
                 placed_at=datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
-                signal_at=self._last_signal_at_str,
+                signal_at=signal_at_str,
                 symbol=symbol,
                 timeframe=timeframe,
                 direction=series_direction,
@@ -431,6 +434,8 @@ class FibonacciStrategy(BaseTradingStrategy):
         trade_seconds: float,
         account_mode: str,
         expected_end_ts: float,
+        *,
+        signal_at: Optional[str] = None,
     ):
         """Уведомляет о pending сделке"""
         placed_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
@@ -440,7 +445,7 @@ class FibonacciStrategy(BaseTradingStrategy):
                     trade_id=trade_id,
                     symbol=symbol,
                     timeframe=timeframe,
-                    signal_at=self._last_signal_at_str,
+                    signal_at=signal_at or self._last_signal_at_str,
                     placed_at=placed_at_str,
                     direction=direction,
                     stake=float(stake),

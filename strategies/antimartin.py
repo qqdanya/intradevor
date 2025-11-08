@@ -167,6 +167,8 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
         series_direction = initial_direction
         max_steps = int(self.params.get("max_steps", 3))
 
+        signal_at_str = signal_data.get('signal_time_str') or format_local_time(signal_received_time)
+
         # парлей: начинаем с базовой ставки и увеличиваем на размер профита после каждой победы
         base_stake = float(self.params.get("base_investment", 100))
         current_stake = base_stake
@@ -240,8 +242,16 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
             wait_seconds = trade_seconds if wait_seconds is None else float(wait_seconds)
 
             self._notify_pending_trade(
-                trade_id, symbol, timeframe, series_direction, current_stake, pct,
-                trade_seconds, account_mode, expected_end_ts
+                trade_id,
+                symbol,
+                timeframe,
+                series_direction,
+                current_stake,
+                pct,
+                trade_seconds,
+                account_mode,
+                expected_end_ts,
+                signal_at=signal_at_str,
             )
             self._register_pending_trade(trade_id, symbol, timeframe)
 
@@ -249,7 +259,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
                 trade_id=trade_id,
                 wait_seconds=float(wait_seconds),
                 placed_at=datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
-                signal_at=self._last_signal_at_str,
+                signal_at=signal_at_str,
                 symbol=symbol,
                 timeframe=timeframe,
                 direction=series_direction,
@@ -308,9 +318,18 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
         return trade_seconds, expected_end_ts
 
     def _notify_pending_trade(
-        self, trade_id: str, symbol: str, timeframe: str, direction: int,
-        stake: float, percent: int, trade_seconds: float,
-        account_mode: str, expected_end_ts: float
+        self,
+        trade_id: str,
+        symbol: str,
+        timeframe: str,
+        direction: int,
+        stake: float,
+        percent: int,
+        trade_seconds: float,
+        account_mode: str,
+        expected_end_ts: float,
+        *,
+        signal_at: Optional[str] = None,
     ):
         placed_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
         if callable(self._on_trade_pending):
@@ -319,7 +338,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
                     trade_id=trade_id,
                     symbol=symbol,
                     timeframe=timeframe,
-                    signal_at=self._last_signal_at_str,
+                    signal_at=signal_at or self._last_signal_at_str,
                     placed_at=placed_at_str,
                     direction=direction,
                     stake=float(stake),
