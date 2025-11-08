@@ -83,6 +83,10 @@ class FibonacciStrategy(BaseTradingStrategy):
         """Показывает, выполняется ли серия для указанного ключа."""
         return self._active_series.get(trade_key, False)
 
+    def should_request_fresh_signal_after_loss(self) -> bool:
+        """Fibonacci требует обновления сигнала после убыточной сделки."""
+        return True
+
     async def _process_single_signal(self, signal_data: dict):
         """Обработка одного сигнала для стратегии Фибоначчи"""
         symbol = signal_data['symbol']
@@ -185,6 +189,7 @@ class FibonacciStrategy(BaseTradingStrategy):
         step_idx = 0
         did_place_any_trade = False
         needs_signal_validation = True
+        requires_fresh_signal = self.should_request_fresh_signal_after_loss()
         need_new_signal = False
         series_direction = initial_direction
         signal_at_str = signal_data.get('signal_time_str') or format_local_time(signal_received_time)
@@ -342,7 +347,8 @@ class FibonacciStrategy(BaseTradingStrategy):
                 log(result_unknown(symbol, treat_as_loss=True))
                 fib_index += 1
                 discard_after("после LOSS")
-                need_new_signal = True
+                if requires_fresh_signal:
+                    need_new_signal = True
             elif profit > 0:
                 fib_index = max(1, fib_index - 2)
                 log(
@@ -364,7 +370,8 @@ class FibonacciStrategy(BaseTradingStrategy):
                 )
                 fib_index += 1
                 discard_after("после LOSS")
-                need_new_signal = True
+                if requires_fresh_signal:
+                    need_new_signal = True
 
             await self.sleep(0.2)
 
@@ -377,7 +384,7 @@ class FibonacciStrategy(BaseTradingStrategy):
             if step_idx >= max_steps:
                 break
 
-            if need_new_signal:
+            if requires_fresh_signal and need_new_signal:
                 if hasattr(self, "_common") and self._common is not None:
                     timeout = float(self.params.get("signal_timeout_sec", 30.0))
                     new_signal = await self._wait_for_new_signal(

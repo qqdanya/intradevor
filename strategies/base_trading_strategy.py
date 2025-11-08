@@ -165,6 +165,10 @@ class BaseTradingStrategy(StrategyBase):
         self._trade_type = str(self.params.get("trade_type", "sprint")).lower()
         self.params["trade_type"] = self._trade_type
 
+    def should_request_fresh_signal_after_loss(self) -> bool:
+        """Возвращает True, если стратегии нужен новый сигнал после убыточной сделки."""
+        return False
+
     # === SIGNAL VALIDATION METHODS ===
     def _is_signal_valid_for_classic(self, signal_data: dict, current_time: datetime, for_placement: bool = True) -> tuple[bool, str]:
         """
