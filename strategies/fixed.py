@@ -137,6 +137,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
     async def _process_fixed_trade(self, symbol: str, timeframe: str, direction: int, log, signal_received_time: datetime, signal_data: dict):
         """Обрабатывает одну сделку с фиксированной ставкой"""
         signal_at_str = signal_data.get('signal_time_str') or format_local_time(signal_received_time)
+        trade_key = f"{symbol}_{timeframe}"
         # Проверяем баланс
         try:
             bal, _, _ = await get_balance_info(
@@ -257,6 +258,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
             wait_seconds = float(wait_seconds)
 
         # Уведомляем о pending сделке
+        series_label = self.format_series_label(trade_key)
         self._notify_pending_trade(
             trade_id,
             symbol,
@@ -268,6 +270,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
             account_mode,
             expected_end_ts,
             signal_at=signal_at_str,
+            series_label=series_label,
         )
         self._register_pending_trade(trade_id, symbol, timeframe)
 
@@ -284,6 +287,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
             percent=int(pct),
             account_mode=account_mode,
             indicator=self._last_indicator,
+            series_label=series_label,
         )
 
         # Логируем результат
@@ -330,9 +334,14 @@ class FixedStakeStrategy(BaseTradingStrategy):
         expected_end_ts: float,
         *,
         signal_at: Optional[str] = None,
+        series_label: Optional[str] = None,
     ):
         """Уведомляет о pending сделке"""
         placed_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+        trade_key = f"{symbol}_{timeframe}"
+        if series_label is None:
+            series_label = self.format_series_label(trade_key)
+        self._set_planned_stake(trade_key, stake)
         if callable(self._on_trade_pending):
             try:
                 self._on_trade_pending(
@@ -348,9 +357,22 @@ class FixedStakeStrategy(BaseTradingStrategy):
                     account_mode=account_mode,
                     indicator=self._last_indicator,
                     expected_end_ts=expected_end_ts,
+                    series=series_label,
                 )
             except Exception:
                 pass
+
+    def format_series_label(
+        self, trade_key: str, *, series_left: int | None = None
+    ) -> str | None:
+        try:
+            total = int(self.params.get("repeat_count", 0))
+        except Exception:
+            total = 0
+        if total <= 0:
+            return None
+        current = max(1, min(total, int(self._trades_counter)))
+        return f"{current}/{total}"
 
     def stop(self):
         """Остановка стратегии"""

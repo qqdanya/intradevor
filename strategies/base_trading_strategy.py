@@ -126,6 +126,50 @@ class BaseTradingStrategy(StrategyBase):
         # Общая логика обработки сигналов
         self._common = StrategyCommon(self)
 
+        # Планируемые ставки по ключу сделки (для отображения в UI)
+        self._planned_stakes: dict[str, float] = {}
+
+    # === UI HELPERS ===
+    def format_series_label(
+        self, trade_key: str, *, series_left: int | None = None
+    ) -> str | None:
+        """Формирует строку вида "Текущая/Всего" для отображения серии."""
+
+        try:
+            total = int(self.params.get("repeat_count", 0))
+        except Exception:
+            total = 0
+
+        if total <= 0:
+            return None
+
+        if series_left is None:
+            remaining = self._series_counters.get(trade_key)
+        else:
+            remaining = series_left
+
+        try:
+            remaining_int = int(remaining) if remaining is not None else total
+        except Exception:
+            remaining_int = total
+
+        remaining_int = max(0, min(remaining_int, total))
+        current = max(1, min(total, total - remaining_int + 1))
+        return f"{current}/{total}"
+
+    def get_planned_stake(self, trade_key: str) -> float | None:
+        """Возвращает последнюю рассчитанную ставку для ключа сделки."""
+
+        return self._planned_stakes.get(trade_key)
+
+    def _set_planned_stake(self, trade_key: str, stake: float) -> None:
+        """Сохраняет ставку для дальнейшего отображения в очередях."""
+
+        try:
+            self._planned_stakes[trade_key] = float(stake)
+        except Exception:
+            pass
+
     # === SERIES COUNTERS ===
     def _get_series_left(self, trade_key: str) -> int:
         """Возвращает оставшееся количество серий для ключа сделки."""
@@ -336,6 +380,7 @@ class BaseTradingStrategy(StrategyBase):
         percent: int,
         account_mode: Optional[str],
         indicator: str,
+        series_label: str | None = None,
     ) -> Optional[float]:
         """Ожидание результата сделки"""
         self._status("ожидание результата")
@@ -349,7 +394,7 @@ class BaseTradingStrategy(StrategyBase):
             )
         except Exception:
             profit = None
-            
+
         # Вызов колбэка результата
         if callable(self._on_trade_result):
             try:
@@ -365,10 +410,15 @@ class BaseTradingStrategy(StrategyBase):
                     profit=(None if profit is None else float(profit)),
                     account_mode=account_mode,
                     indicator=indicator,
+                    series=series_label,
                 )
             except Exception:
                 pass
-                
+
+        trade_key = f"{symbol}_{timeframe}"
+        # После завершения сделки планируемая ставка может измениться
+        self._planned_stakes.pop(trade_key, None)
+
         self._unregister_pending_trade(trade_id)
         return None if profit is None else float(profit)
 
