@@ -159,6 +159,7 @@ class MartingaleStrategy(BaseTradingStrategy):
             
         step = 0
         did_place_any_trade = False
+        last_outcome_was_loss = False
         series_direction = initial_direction
         signal_at_str = signal_data.get('signal_time_str') or format_local_time(signal_received_time)
         max_steps = int(self.params.get("max_steps", 5))
@@ -202,26 +203,28 @@ class MartingaleStrategy(BaseTradingStrategy):
             log(f"[{symbol}] step={step} stake={format_amount(stake)} min={self._trade_minutes} "
                 f"side={'UP' if series_direction == 1 else 'DOWN'} payout={pct}%")
 
-            # Финальная проверка актуальности перед размещением сделки
-            current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
-            if self._trade_type == "classic":
-                is_valid, reason = self._is_signal_valid_for_classic(
-                    signal_data,
-                    current_time,
-                    for_placement=True,
-                )
-            else:
-                sprint_payload = signal_data
-                if not sprint_payload.get('timestamp'):
-                    sprint_payload = {'timestamp': signal_received_time}
-                is_valid, reason = self._is_signal_valid_for_sprint(
-                    sprint_payload,
-                    current_time,
-                )
+            should_check_signal = not did_place_any_trade or not last_outcome_was_loss
+            if should_check_signal:
+                # Финальная проверка актуальности перед размещением сделки
+                current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
+                if self._trade_type == "classic":
+                    is_valid, reason = self._is_signal_valid_for_classic(
+                        signal_data,
+                        current_time,
+                        for_placement=True,
+                    )
+                else:
+                    sprint_payload = signal_data
+                    if not sprint_payload.get('timestamp'):
+                        sprint_payload = {'timestamp': signal_received_time}
+                    is_valid, reason = self._is_signal_valid_for_sprint(
+                        sprint_payload,
+                        current_time,
+                    )
 
-            if not is_valid:
-                log(signal_not_actual_for_placement(symbol, reason))
-                return
+                if not is_valid:
+                    log(signal_not_actual_for_placement(symbol, reason))
+                    return
 
             # Определяем режим аккаунта
             try:
@@ -284,6 +287,7 @@ class MartingaleStrategy(BaseTradingStrategy):
             if profit is None:
                 log(result_unknown(symbol, treat_as_loss=True))
                 step += 1
+                last_outcome_was_loss = True
                 if hasattr(self, "_common") and self._common is not None:
                     removed = self._common.discard_signals_for(trade_key)
                     if removed:
@@ -293,6 +297,7 @@ class MartingaleStrategy(BaseTradingStrategy):
                 break
             elif abs(profit) < 1e-9:
                 log(f"[{symbol}] 🤝 PUSH: возврат ставки. Повтор шага без увеличения.")
+                last_outcome_was_loss = False
                 if hasattr(self, "_common") and self._common is not None:
                     removed = self._common.discard_signals_for(trade_key)
                     if removed:
@@ -300,6 +305,7 @@ class MartingaleStrategy(BaseTradingStrategy):
             else:
                 log(f"[{symbol}] ❌ LOSS: profit={format_amount(profit)}. Увеличиваем ставку.")
                 step += 1  # Продолжаем с тем же направлением и исходным сигналом
+                last_outcome_was_loss = True
                 if hasattr(self, "_common") and self._common is not None:
                     removed = self._common.discard_signals_for(trade_key)
                     if removed:
