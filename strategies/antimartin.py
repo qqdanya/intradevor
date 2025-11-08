@@ -169,6 +169,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
         max_steps = int(self.params.get("max_steps", 3))
 
         signal_at_str = signal_data.get('signal_time_str') or format_local_time(signal_received_time)
+        series_label = self.format_series_label(trade_key, series_left=series_left)
 
         # парлей: начинаем с базовой ставки и увеличиваем на размер профита после каждой победы
         base_stake = float(self.params.get("base_investment", 100))
@@ -263,6 +264,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
                 account_mode,
                 expected_end_ts,
                 signal_at=signal_at_str,
+                series_label=series_label,
             )
             self._register_pending_trade(trade_id, symbol, timeframe)
 
@@ -278,6 +280,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
                 percent=int(pct),
                 account_mode=account_mode,
                 indicator=self._last_indicator,
+                series_label=series_label,
             )
 
             # === Парлей-логика ===
@@ -341,8 +344,13 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
         expected_end_ts: float,
         *,
         signal_at: Optional[str] = None,
+        series_label: Optional[str] = None,
     ):
         placed_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+        trade_key = f"{symbol}_{timeframe}"
+        if series_label is None:
+            series_label = self.format_series_label(trade_key)
+        self._set_planned_stake(trade_key, stake)
         if callable(self._on_trade_pending):
             try:
                 self._on_trade_pending(
@@ -358,9 +366,17 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
                     account_mode=account_mode,
                     indicator=self._last_indicator,
                     expected_end_ts=expected_end_ts,
+                    series=series_label,
                 )
             except Exception:
                 pass
+
+    def format_series_label(
+        self, trade_key: str, *, series_left: int | None = None
+    ) -> str | None:
+        if series_left is None:
+            series_left = self._series_remaining.get(trade_key)
+        return super().format_series_label(trade_key, series_left=series_left)
 
     def stop(self):
         super().stop()

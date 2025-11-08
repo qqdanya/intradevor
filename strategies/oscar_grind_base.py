@@ -188,6 +188,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         has_repeated = False
         signal_at_str = signal_data.get('signal_time_str') or format_local_time(signal_received_time)
         series_finished = False
+        series_label = self.format_series_label(trade_key, series_left=series_left)
 
         while self._running and step_idx < max_steps:
             await self._pause_point()
@@ -276,6 +277,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                 account_mode,
                 expected_end_ts,
                 signal_at=signal_at_str,
+                series_label=series_label,
             )
             self._register_pending_trade(trade_id, symbol, timeframe)
 
@@ -291,6 +293,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                 percent=int(pct),
                 account_mode=account_mode,
                 indicator=self._last_indicator,
+                series_label=series_label,
             )
             
             if profit is None:
@@ -413,24 +416,30 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         expected_end_ts: float,
         *,
         signal_at: Optional[str] = None,
+        series_label: Optional[str] = None,
     ):
         """Уведомляет о pending сделке"""
         placed_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+        trade_key = f"{symbol}_{timeframe}"
+        if series_label is None:
+            series_label = self.format_series_label(trade_key)
+        self._set_planned_stake(trade_key, stake)
         if callable(self._on_trade_pending):
             try:
                 self._on_trade_pending(
-                    trade_id=trade_id, 
-                    symbol=symbol, 
+                    trade_id=trade_id,
+                    symbol=symbol,
                     timeframe=timeframe,
                     signal_at=signal_at or self._last_signal_at_str,
                     placed_at=placed_at_str,
-                    direction=direction, 
-                    stake=float(stake), 
+                    direction=direction,
+                    stake=float(stake),
                     percent=int(percent),
-                    wait_seconds=float(trade_seconds), 
+                    wait_seconds=float(trade_seconds),
                     account_mode=account_mode,
-                    indicator=self._last_indicator, 
+                    indicator=self._last_indicator,
                     expected_end_ts=expected_end_ts,
+                    series=series_label,
                 )
             except Exception:
                 pass

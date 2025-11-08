@@ -100,20 +100,21 @@ class StrategyControlDialog(QWidget):
 
         # ---------- ТАБЛИЦА СДЕЛОК (справа) ----------
         self.trades_table = QTableWidget(self)
-        self.trades_table.setColumnCount(11)
+        self.trades_table.setColumnCount(12)
         self.trades_table.setHorizontalHeaderLabels(
             [
                 "Время сигнала",  # 0
                 "Время ставки",  # 1
                 "Пара",  # 2
                 "ТФ",  # 3
-                "Индикатор",  # 4  (если не прилетит — ставим "—")
-                "Направление",  # 5
-                "Ставка",  # 6
-                "Время",  # 7
-                "Процент",  # 8
-                "P/L",  # 9
-                "Счёт",  # 10
+                "Серия",  # 4
+                "Индикатор",  # 5  (если не прилетит — ставим "—")
+                "Направление",  # 6
+                "Ставка",  # 7
+                "Время",  # 8
+                "Процент",  # 9
+                "P/L",  # 10
+                "Счёт",  # 11
             ]
         )
         hdr = self.trades_table.horizontalHeader()
@@ -127,7 +128,7 @@ class StrategyControlDialog(QWidget):
 
         # ---------- Очередь сигналов ----------
         self.signal_queue_table = QTableWidget(self)
-        self.signal_queue_table.setColumnCount(6)
+        self.signal_queue_table.setColumnCount(7)
         self.signal_queue_table.setHorizontalHeaderLabels(
             [
                 "Символ",
@@ -136,6 +137,7 @@ class StrategyControlDialog(QWidget):
                 "След. свеча",
                 "Направление",
                 "Индикатор",
+                "Сумма сделки",
             ]
         )
         qhdr = self.signal_queue_table.horizontalHeader()
@@ -686,6 +688,7 @@ class StrategyControlDialog(QWidget):
         wait_seconds: float,
         account_mode: str | None = None,
         indicator: str | None = None,
+        series: str | None = None,
         expected_end_ts: float | None = None,  # ⬅️ НОВОЕ: абсолютный дедлайн
     ):
         """
@@ -728,17 +731,18 @@ class StrategyControlDialog(QWidget):
             placed_at,  # 1 Время ставки
             symbol,  # 2 Пара
             timeframe,  # 3 ТФ
-            ind_txt,  # 4 Индикатор
-            dir_text,  # 5 Направление
-            self._fmt_money(stake, ccy),  # 6 Ставка
-            duration_txt,  # 7 Время
-            f"{percent}%",  # 8 %
-            f"Ожидание ({_fmt_left(left_now)})",  # 9 P/L
-            account_txt,  # 10 Счёт
+            series or "—",  # 4 Серия
+            ind_txt,  # 5 Индикатор
+            dir_text,  # 6 Направление
+            self._fmt_money(stake, ccy),  # 7 Ставка
+            duration_txt,  # 8 Время
+            f"{percent}%",  # 9 %
+            f"Ожидание ({_fmt_left(left_now)})",  # 10 P/L
+            account_txt,  # 11 Счёт
         ]
         for col, v in enumerate(vals):
             it = QTableWidgetItem(str(v))
-            if col in (5, 9):
+            if col in (6, 10):
                 it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.trades_table.setItem(row, col, it)
 
@@ -761,7 +765,7 @@ class StrategyControlDialog(QWidget):
             if not isinstance(cur_row, int) or cur_row >= self.trades_table.rowCount():
                 timer.stop()
                 return
-            item = self.trades_table.item(cur_row, 9)
+            item = self.trades_table.item(cur_row, 10)
             if item:
                 item.setText(f"Ожидание ({_fmt_left(left)})")
             if left <= 0:
@@ -792,6 +796,7 @@ class StrategyControlDialog(QWidget):
             "signal_at": signal_at,
             "placed_at": placed_at,
             "wait_seconds": float(wait_seconds),
+            "series": series,
         }
 
         if was_sort:
@@ -811,6 +816,7 @@ class StrategyControlDialog(QWidget):
         profit: float | None,
         account_mode: str | None = None,
         indicator: str | None = None,
+        series: str | None = None,
     ):
         """
         Обновляем/добавляем зелёную/красную/серую строку по результату.
@@ -828,6 +834,7 @@ class StrategyControlDialog(QWidget):
         sig_time = signal_at
         place_time = placed_at
         duration_txt = ""
+        series_txt = series or "—"
         if trade_id and trade_id in self._pending_rows:
             info = self._pending_rows.pop(trade_id, {})
             timer = info.get("timer")
@@ -843,6 +850,7 @@ class StrategyControlDialog(QWidget):
                 sig_time = info.get("signal_at", sig_time)
                 place_time = info.get("placed_at", place_time)
                 duration_txt = f"{int(round(info.get('wait_seconds', 0.0) / 60))} мин"
+                series_txt = info.get("series", series_txt) or "—"
 
         was_sort = self.trades_table.isSortingEnabled()
         if was_sort:
@@ -868,17 +876,18 @@ class StrategyControlDialog(QWidget):
             place_time,  # 1
             symbol,  # 2
             timeframe,  # 3
-            ind_txt,  # 4
-            dir_text,  # 5
-            self._fmt_money(stake, ccy),  # 6
-            duration_txt,  # 7
-            f"{percent}%",  # 8
-            fmt_pl(profit, ccy),  # 9
-            account_txt,  # 10
+            series_txt,  # 4
+            ind_txt,  # 5
+            dir_text,  # 6
+            self._fmt_money(stake, ccy),  # 7
+            duration_txt,  # 8
+            f"{percent}%",  # 9
+            fmt_pl(profit, ccy),  # 10
+            account_txt,  # 11
         ]
         for col, v in enumerate(vals):
             item = QTableWidgetItem(str(v))
-            if col in (5, 9):
+            if col in (6, 10):
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.trades_table.setItem(row_to_update, col, item)
 
@@ -919,7 +928,7 @@ class StrategyControlDialog(QWidget):
     # ---- очередь сигналов ----
     def _collect_signal_queue_snapshot(
         self,
-    ) -> list[tuple[str, str, str, str, str, str, str]]:
+    ) -> list[tuple[str, str, str, str, str, str, str, str]]:
         strategy = getattr(self.bot, "strategy", None)
         if strategy is None:
             return []
@@ -927,7 +936,20 @@ class StrategyControlDialog(QWidget):
         if common is None:
             return []
 
-        snapshot: list[tuple[str, str, str, str, str, str, str]] = []
+        snapshot: list[tuple[str, str, str, str, str, str, str, str]] = []
+        ccy = getattr(strategy, "_anchor_ccy", getattr(strategy, "params", {}).get("account_currency", "RUB"))
+
+        def _planned_amount(trade_key: str) -> str:
+            getter = getattr(strategy, "get_planned_stake", None)
+            planned = getter(trade_key) if callable(getter) else None
+            if planned is None:
+                try:
+                    planned = float(getattr(strategy, "params", {}).get("base_investment", 0))
+                except Exception:
+                    planned = None
+            if planned is None:
+                return "—"
+            return format_money(planned, ccy)
 
         def _fmt_dt(value) -> str:
             if isinstance(value, datetime):
@@ -992,6 +1014,7 @@ class StrategyControlDialog(QWidget):
                     if isinstance(data, dict):
                         indicator = str(data.get("indicator") or "—")
                         direction = _fmt_dir(data.get("direction"))
+                    amount = _planned_amount(trade_key)
                     snapshot.append(
                         (
                             str(symbol),
@@ -1000,6 +1023,7 @@ class StrategyControlDialog(QWidget):
                             next_expire,
                             direction,
                             indicator,
+                            amount,
                             status,
                         )
                     )
@@ -1007,7 +1031,7 @@ class StrategyControlDialog(QWidget):
         _extract(getattr(common, "_signal_queues", {}), "в очереди")
         _extract(getattr(common, "_pending_signals", {}), "отложен")
 
-        snapshot.sort(key=lambda item: (item[0], item[1], item[6], item[2], item[3]))
+        snapshot.sort(key=lambda item: (item[0], item[1], item[7], item[2], item[3]))
         return snapshot
 
     def _refresh_signal_queue_table(self) -> None:
