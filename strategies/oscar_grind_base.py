@@ -177,7 +177,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         series_started = False
         needs_signal_validation = True
         series_direction = initial_direction
-        repeat_trade = False
+        has_repeated = False
         signal_at_str = signal_data.get('signal_time_str') or format_local_time(signal_received_time)
 
         while self._running and step_idx < max_steps:
@@ -312,20 +312,18 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             )
             stake = float(next_stake)
             step_idx += 1
-            
-            if repeat_trade:
-                repeat_trade = False
-                series_direction = None
-            else:
-                if double_entry and outcome == "loss":
-                    repeat_trade = True
-                else:
-                    series_direction = None
-                    
-            await self.sleep(0.2)
-            
+
             if self._trade_type == "classic" and self._next_expire_dt is not None:
                 self._next_expire_dt += timedelta(minutes=_minutes_from_timeframe(timeframe))
+
+            should_repeat = double_entry and outcome == "loss" and not has_repeated
+            if should_repeat:
+                has_repeated = True
+                await self.sleep(0.2)
+                continue
+
+            await self.sleep(0.2)
+            break
                 
         if step_idx > 0:
             series_left -= 1
