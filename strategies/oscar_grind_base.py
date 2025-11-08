@@ -66,6 +66,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         )
 
         self._active_series: Dict[str, bool] = {}
+        self._series_state: Dict[str, dict] = {}
 
     async def _process_single_signal(self, signal_data: dict):
         """Обработка одного сигнала для Oscar Grind"""
@@ -171,10 +172,17 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         if max_steps <= 0:
             return series_left
 
-        step_idx = 0
-        cum_profit = 0.0
-        stake = base_unit
-        series_started = False
+        state = self._series_state.get(trade_key)
+        if state:
+            step_idx = int(state.get("step_idx", 0))
+            cum_profit = float(state.get("cum_profit", 0.0))
+            stake = float(state.get("stake", base_unit))
+            series_started = bool(state.get("series_started", False))
+        else:
+            step_idx = 0
+            cum_profit = 0.0
+            stake = base_unit
+            series_started = False
         needs_signal_validation = True
         series_direction = initial_direction
         has_repeated = False
@@ -303,8 +311,9 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                 
             if cum_profit >= target_profit:
                 log(f"[{symbol}] Цель достигнута: {format_amount(cum_profit)}")
+                self._series_state.pop(trade_key, None)
                 break
-                
+
             need = max(0.0, target_profit - cum_profit)
             next_stake = self._next_stake(
                 outcome=outcome, stake=stake, base_unit=base_unit, pct=pct,
@@ -312,6 +321,16 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             )
             stake = float(next_stake)
             step_idx += 1
+
+            if step_idx >= max_steps or not self._running:
+                self._series_state.pop(trade_key, None)
+            else:
+                self._series_state[trade_key] = {
+                    "stake": stake,
+                    "cum_profit": cum_profit,
+                    "step_idx": step_idx,
+                    "series_started": series_started,
+                }
 
             if self._trade_type == "classic" and self._next_expire_dt is not None:
                 self._next_expire_dt += timedelta(minutes=_minutes_from_timeframe(timeframe))
@@ -329,7 +348,16 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             series_left -= 1
             log(f"[{symbol}] Осталось серий: {series_left}")
 
+        if series_left <= 0 or not self._running:
+            self._series_state.pop(trade_key, None)
+
         return series_left
+
+    def stop(self):
+        """Останавливает стратегию и очищает состояние серий."""
+        super().stop()
+        self._series_state.clear()
+        self._active_series.clear()
 
     def is_series_active(self, trade_key: str) -> bool:
         """Возвращает статус активности серии для указанного ключа"""
