@@ -95,16 +95,17 @@ class StrategyCommon:
                     'symbol': meta.get('symbol') if meta else self.strategy.symbol,
                     'timeframe': meta.get('timeframe') if meta else self.strategy.timeframe,
                     'timestamp': signal_timestamp,
+                    'signal_time_str': format_local_time(signal_timestamp),
                     'indicator': meta.get('indicator') if meta else '-',
                     'next_expire': next_expire,
                 }
-                
+
                 symbol = signal_data['symbol']
                 timeframe = signal_data['timeframe']
                 trade_key = f"{symbol}_{timeframe}"
-                
+
                 self.strategy._last_signal_ver = ver
-                self.strategy._last_signal_at_str = format_local_time(signal_timestamp)
+                self.strategy._last_signal_at_str = signal_data['signal_time_str']
                 
                 # Создаём очередь если её нет
                 if trade_key not in self._signal_queues:

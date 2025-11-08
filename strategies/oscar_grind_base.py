@@ -126,16 +126,17 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         min_pct = int(self.params.get("min_percent", 70))
         wait_low = float(self.params.get("wait_on_low_percent", 1))
         double_entry = bool(self.params.get("double_entry", True))
-        
+
         if max_steps <= 0:
             return series_left
-            
+
         step_idx = 0
         cum_profit = 0.0
         stake = base_unit
         series_started = False
         series_direction = initial_direction
         repeat_trade = False
+        signal_at_str = signal_data.get('signal_time_str') or format_local_time(signal_received_time)
         
         while self._running and step_idx < max_steps:
             await self._pause_point()
@@ -208,16 +209,24 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             wait_seconds = self.params.get("result_wait_s", trade_seconds)
             
             self._notify_pending_trade(
-                trade_id, symbol, timeframe, series_direction, stake, pct, 
-                trade_seconds, account_mode, expected_end_ts
+                trade_id,
+                symbol,
+                timeframe,
+                series_direction,
+                stake,
+                pct,
+                trade_seconds,
+                account_mode,
+                expected_end_ts,
+                signal_at=signal_at_str,
             )
             self._register_pending_trade(trade_id, symbol, timeframe)
-            
+
             profit = await self.wait_for_trade_result(
                 trade_id=trade_id,
                 wait_seconds=float(wait_seconds),
                 placed_at=datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
-                signal_at=self._last_signal_at_str,
+                signal_at=signal_at_str,
                 symbol=symbol,
                 timeframe=timeframe,
                 direction=series_direction,
@@ -306,16 +315,18 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         return trade_seconds, expected_end_ts
 
     def _notify_pending_trade(
-        self, 
-        trade_id: str, 
-        symbol: str, 
-        timeframe: str, 
+        self,
+        trade_id: str,
+        symbol: str,
+        timeframe: str,
         direction: int,
-        stake: float, 
-        percent: int, 
+        stake: float,
+        percent: int,
         trade_seconds: float,
-        account_mode: str, 
-        expected_end_ts: float
+        account_mode: str,
+        expected_end_ts: float,
+        *,
+        signal_at: Optional[str] = None,
     ):
         """Уведомляет о pending сделке"""
         placed_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
@@ -325,7 +336,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                     trade_id=trade_id, 
                     symbol=symbol, 
                     timeframe=timeframe,
-                    signal_at=self._last_signal_at_str, 
+                    signal_at=signal_at or self._last_signal_at_str,
                     placed_at=placed_at_str,
                     direction=direction, 
                     stake=float(stake), 
