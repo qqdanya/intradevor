@@ -10,7 +10,8 @@ from typing import Dict, Tuple
 
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
-from core.config import get_base_url, get_domain
+from core import test_backend
+from core.config import get_base_url, get_domain, is_test_mode
 from core.http_async import HttpClient, HttpConfig
 
 
@@ -164,6 +165,11 @@ async def create_http_client_from_browser_cookies(
         user_agent="Mozilla/5.0 (X11; Linux x86_64; rv:141.0) Gecko/20100101 Firefox/141.0",
     )
 
+    if is_test_mode():
+        client = HttpClient(cfg, cookies=test_backend.initial_cookies())
+        await client.ensure_session()
+        return client
+
     cookies: Dict[str, str] | None = None
     if not force_refresh:
         cookies = load_cookies()
@@ -198,6 +204,10 @@ async def create_http_client_from_browser_cookies(
 
 async def refresh_http_client_cookies(client: HttpClient) -> None:
     """Перечитать куки из текущей сессии клиента и сохранить их."""
+    if is_test_mode():
+        await client.update_cookies(test_backend.initial_cookies())
+        return
+
     session = await client.ensure_session()
     simple = session.cookie_jar.filter_cookies(get_base_url())
     new_cookies = {name: cookie.value for name, cookie in simple.items()}
@@ -212,6 +222,16 @@ async def extract_user_credentials_from_client(
     """
     Достать user_id и user_hash из cookie_jar клиента.
     """
+    if is_test_mode():
+        session = await client.ensure_session()
+        simple = session.cookie_jar.filter_cookies(get_base_url())
+        user_id = simple.get("user_id").value if "user_id" in simple else None
+        user_hash = simple.get("user_hash").value if "user_hash" in simple else None
+        return (
+            user_id or test_backend.TEST_USER_ID,
+            user_hash or test_backend.TEST_USER_HASH,
+        )
+
     session = await client.ensure_session()
     simple = session.cookie_jar.filter_cookies(get_base_url())
     user_id = simple.get("user_id").value if "user_id" in simple else None

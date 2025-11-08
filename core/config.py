@@ -11,6 +11,13 @@ _CONFIG_FILE = "config.json"
 APP_NAME: str = os.getenv("APP_NAME", "Intradevor")
 APP_VERSION: str = os.getenv("APP_VERSION", "1.1.0")
 
+# Режим работы приложения: normal / test
+MODE: str = (
+    os.getenv("APP_MODE")
+    or os.getenv("MODE")
+    or "normal"
+)
+
 domain: str = os.getenv("DOMAIN", "intrade27.bar")
 base_url: str = f"https://{domain}"
 
@@ -57,7 +64,7 @@ def load_config() -> None:
       3) Значения по умолчанию
     Если файла нет — он будет создан с текущими значениями (дефолты/окружение).
     """
-    global APP_NAME, APP_VERSION, domain, base_url, ws_url, FONT_FAMILY, FONT_SIZE, THEME
+    global APP_NAME, APP_VERSION, domain, base_url, ws_url, FONT_FAMILY, FONT_SIZE, THEME, MODE
 
     if not os.path.exists(_CONFIG_FILE):
         # создаём файл с текущими (дефолт/окружение) значениями
@@ -90,6 +97,10 @@ def load_config() -> None:
     if "THEME" not in os.environ:
         THEME = data.get("theme", THEME)
 
+    if "APP_MODE" not in os.environ and "MODE" not in os.environ:
+        value = str(data.get("mode", MODE) or MODE).lower()
+        MODE = value if value in {"normal", "test"} else MODE
+
     base_url = f"https://{domain}"
 
 
@@ -108,6 +119,7 @@ def save_config() -> None:
             "font_family": FONT_FAMILY,
             "font_size": FONT_SIZE,
             "theme": THEME,
+            "mode": MODE,
         }
     )
     _write_json(_CONFIG_FILE, data)
@@ -153,6 +165,14 @@ def get_theme() -> str:
     return THEME
 
 
+def get_mode() -> str:
+    return MODE
+
+
+def is_test_mode() -> bool:
+    return get_mode().lower() == "test"
+
+
 # ===== Опционально: апдейтеры из кода =====
 def set_app_name(name: str) -> None:
     global APP_NAME
@@ -177,3 +197,10 @@ def set_font_size(size: int | None) -> None:
 def set_theme(theme: str) -> None:
     global THEME
     THEME = theme
+
+
+def set_mode(mode: str) -> None:
+    global MODE
+    mode_normalized = (mode or "").strip().lower()
+    if mode_normalized in {"normal", "test"}:
+        MODE = mode_normalized
