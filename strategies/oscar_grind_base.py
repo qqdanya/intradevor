@@ -5,11 +5,14 @@ from typing import Optional, Dict
 from zoneinfo import ZoneInfo
 from strategies.base_trading_strategy import BaseTradingStrategy, _minutes_from_timeframe
 from strategies.constants import MOSCOW_TZ
+from core.time_utils import format_local_time
 from core.money import format_amount
 from core.intrade_api_async import is_demo_account
 from strategies.log_messages import (
+    repeat_count_empty,
     signal_not_actual_for_placement,
     start_processing,
+    series_already_active,
     trade_placement_failed,
     trade_summary,
 )
@@ -62,23 +65,52 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             **kwargs,
         )
 
+        self._active_series: Dict[str, bool] = {}
+
     async def _process_single_signal(self, signal_data: dict):
         """Обработка одного сигнала для Oscar Grind"""
         symbol = signal_data['symbol']
         timeframe = signal_data['timeframe']
         direction = signal_data['direction']
         trade_key = f"{symbol}_{timeframe}"
-        
+
         log = self.log or (lambda s: None)
+        if self._active_series.get(trade_key):
+            log(series_already_active(symbol, timeframe))
+            common = getattr(self, "_common", None)
+            if common is not None:
+                await common._handle_pending_signal(trade_key, signal_data)
+            return
+
         log(start_processing(symbol, "Oscar Grind"))
-        
+
+        self._last_signal_ver = signal_data['version']
         self._last_indicator = signal_data['indicator']
-        self._next_expire_dt = signal_data.get('next_expire')
         signal_received_time = signal_data['timestamp']
-       
+        self._last_signal_at_str = (
+            signal_data.get('signal_time_str')
+            or format_local_time(signal_received_time)
+        )
+
+        next_expire = signal_data.get('next_expire')
+        if next_expire and next_expire.tzinfo is None:
+            next_expire = next_expire.replace(tzinfo=ZoneInfo(MOSCOW_TZ))
+        self._next_expire_dt = next_expire
+
+        if self._use_any_symbol:
+            self.symbol = symbol
+        if self._use_any_timeframe:
+            self.timeframe = timeframe
+            self.params["timeframe"] = self.timeframe
+
+        try:
+            self._last_signal_monotonic = asyncio.get_running_loop().time()
+        except RuntimeError:
+            self._last_signal_monotonic = None
+
         # ПРОВЕРКА АКТУАЛЬНОСТИ СИГНАЛА С НОВОЙ ЛОГИКОЙ
         current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
-        
+
         if self._trade_type == "classic":
             is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
             if not is_valid:
@@ -92,20 +124,29 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
 
         series_left = self._get_series_left(trade_key)
         if series_left <= 0:
-            log(f"[{symbol}] repeat_count=0")
+            log(repeat_count_empty(symbol, series_left))
             return
 
-        updated = await self._run_oscar_grind_series(
-            trade_key,
-            symbol,
-            timeframe,
-            direction,
-            log,
-            series_left,
-            signal_received_time,
-            signal_data,
-        )
-        self._set_series_left(trade_key, updated)
+        series_started = False
+        try:
+            self._active_series[trade_key] = True
+            series_started = True
+
+            updated = await self._run_oscar_grind_series(
+                trade_key,
+                symbol,
+                timeframe,
+                direction,
+                log,
+                series_left,
+                signal_received_time,
+                signal_data,
+            )
+            self._set_series_left(trade_key, updated)
+        finally:
+            if series_started:
+                self._active_series.pop(trade_key, None)
+                log(f"[{symbol}] Серия Oscar Grind завершена для {timeframe}")
 
     async def _run_oscar_grind_series(
         self,
@@ -285,11 +326,15 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
 
         return series_left
 
+    def is_series_active(self, trade_key: str) -> bool:
+        """Возвращает статус активности серии для указанного ключа"""
+        return self._active_series.get(trade_key, False)
+
     def _next_stake(
-        self, 
-        *, 
-        outcome: str, 
-        stake: float, 
+        self,
+        *,
+        outcome: str,
+        stake: float,
         base_unit: float, 
         pct: float, 
         need: float, 
