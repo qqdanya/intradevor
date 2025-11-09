@@ -53,7 +53,9 @@ class Signal:
     indicator: str
     candle_open: str
     detected_time: str
+    trade_type: str = "sprint"
     next_candle_open: str | None = None
+    next_expire_dt: str | None = None
 
     def to_json(self) -> str:
         payload = {
@@ -66,6 +68,11 @@ class Signal:
         }
         if self.next_candle_open:
             payload["next_datetime"] = self.next_candle_open
+        trade_type = self.trade_type.lower()
+        if trade_type in {"classic", "sprint"}:
+            payload["trade_type"] = trade_type
+        if trade_type == "classic" and self.next_expire_dt:
+            payload["_next_expire_dt"] = self.next_expire_dt
         return json.dumps(payload)
 
 
@@ -80,6 +87,7 @@ def build_signal(
     *,
     direction_bias: float = 0.5,
     candle_age: int = 0,
+    trade_type: str = "sprint",
 ) -> Signal:
     """Generate a pseudo random signal.
 
@@ -103,10 +111,13 @@ def build_signal(
     detected_dt = datetime.now(MOSCOW_TZ).replace(microsecond=0)
     candle_dt = detected_dt - timedelta(minutes=candle_age)
 
-    # emulate the next candle open for timeframes that are at least 5 minutes
+    # Calculate the next candle open; classic mode always includes it
     tf_minutes = _timeframe_to_minutes(timeframe)
     next_dt = candle_dt + timedelta(minutes=tf_minutes)
-    next_candle = next_dt.isoformat() if tf_minutes >= 5 else None
+    trade_type_norm = str(trade_type).lower()
+    include_next = tf_minutes >= 5 or trade_type_norm == "classic"
+    next_candle = next_dt.isoformat() if include_next else None
+    next_expire = next_dt.isoformat() if trade_type_norm == "classic" else None
 
     return Signal(
         symbol=symbol,
@@ -115,7 +126,9 @@ def build_signal(
         indicator=indicator,
         candle_open=candle_dt.isoformat(),
         detected_time=detected_dt.isoformat(),
+        trade_type=trade_type_norm,
         next_candle_open=next_candle,
+        next_expire_dt=next_expire,
     )
 
 
@@ -147,6 +160,7 @@ async def signal_loop(
     indicators: Sequence[str],
     direction_bias: float,
     candle_age: int,
+    trade_type: str,
     once: bool = False,
 ) -> None:
     """Connect to the WS server and repeatedly send test signals."""
@@ -166,6 +180,7 @@ async def signal_loop(
                         indicators,
                         direction_bias=direction_bias,
                         candle_age=candle_age,
+                        trade_type=trade_type,
                     )
                     await ws.send(sig.to_json())
                     print(
@@ -174,6 +189,7 @@ async def signal_loop(
                         sig.timeframe,
                         "UP" if sig.direction == 1 else "DOWN",
                         sig.indicator,
+                        f"[{sig.trade_type}]",
                     )
                     if once:
                         return
@@ -243,6 +259,12 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         help="Задержка между открытием свечи и сигналом в минутах.",
     )
     parser.add_argument(
+        "--trade-type",
+        choices=["sprint", "classic"],
+        default="sprint",
+        help="Тип торговли, который нужно эмулировать (sprint или classic).",
+    )
+    parser.add_argument(
         "--once",
         action="store_true",
         help="Отправить только один сигнал и завершиться.",
@@ -263,6 +285,7 @@ def main(argv: Iterable[str] | None = None) -> None:
             indicators=args.indicators or list(DEFAULT_INDICATORS),
             direction_bias=min(max(args.direction_bias, 0.0), 1.0),
             candle_age=max(args.candle_age, 0),
+            trade_type=args.trade_type,
             once=args.once,
         )
     )
