@@ -6,6 +6,7 @@ import random
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Dict, Optional, Tuple
 
 __all__ = [
@@ -93,8 +94,11 @@ def _minutes_to_seconds(value: float | int | str, trade_type: str) -> float:
     if trade_type == "classic" and ":" in text:
         try:
             hours, minutes = text.split(":", 1)
-            total_minutes = int(hours) * 60 + int(minutes)
-            return max(0.0, float(total_minutes) * 60.0)
+            now = datetime.now()
+            target = now.replace(hour=int(hours), minute=int(minutes), second=0, microsecond=0)
+            if target <= now:
+                target += timedelta(days=1)
+            return max(0.0, (target - now).total_seconds())
         except (TypeError, ValueError):
             return 60.0
 
