@@ -12,6 +12,26 @@ from core.policy import (
 )
 from core.time_utils import format_local_time
 from strategies.constants import MOSCOW_TZ
+from strategies.log_messages import (
+    global_limit_before_start,
+    global_lock_acquired,
+    global_lock_released,
+    handler_error,
+    handler_stopped,
+    listener_error,
+    open_trades_limit,
+    pending_signals_restart,
+    queue_processor_started,
+    queue_signal_outdated,
+    removed_stale_signals,
+    signal_deferred,
+    signal_enqueued,
+    signal_listener_started,
+    signal_not_actual_generic,
+    strategy_limit_deferred,
+    deferred_signal_outdated,
+    deferred_signal_start,
+)
 
 class StrategyCommon:
     """Общая логика для всех стратегий с системой очередей"""
@@ -34,7 +54,7 @@ class StrategyCommon:
         """Прослушиватель — кладёт в нужную очередь по trade_key"""
         log = self.log
         strategy_name = getattr(self.strategy, 'strategy_name', 'Strategy')
-        log(f"[*] Запуск прослушивателя сигналов ({strategy_name})")
+        log(signal_listener_started(strategy_name))
         
         while self.strategy._running:
             await self.strategy._pause_point()
@@ -69,7 +89,7 @@ class StrategyCommon:
                     if not is_valid:
                         # Обновляем версию, чтобы не обрабатывать сигнал повторно
                         self.strategy._last_signal_ver = ver
-                        log(f"[{symbol}] ⏰ Сигнал неактуален для classic: {reason} -> пропуск")
+                        log(signal_not_actual_generic(symbol, "classic", reason))
                         continue
                 else:
                     # Для sprint - используем старую логику
@@ -82,7 +102,7 @@ class StrategyCommon:
                     if not is_valid:
                         # Обновляем версию, чтобы не обрабатывать сигнал повторно
                         self.strategy._last_signal_ver = ver
-                        log(f"[{symbol}] ⏰ Сигнал неактуален для sprint: {reason} -> пропуск")
+                        log(signal_not_actual_generic(symbol, "sprint", reason))
                         continue
 
                 direction_value: Optional[int]
@@ -131,18 +151,20 @@ class StrategyCommon:
                         break
 
                 if removed:
-                    log(
-                        f"[{symbol}] 🗑 Удалено устаревших сигналов в очереди: {removed}"
-                    )
+                    log(removed_stale_signals(symbol, removed))
 
                 await queue.put(signal_data)
                 next_time_str = next_expire.strftime('%H:%M:%S') if next_expire else '?'
-                log(f"[{symbol}] Сигнал добавлен: свеча {signal_timestamp.strftime('%H:%M:%S')} (до {next_time_str})")
+                log(
+                    signal_enqueued(
+                        symbol, signal_timestamp.strftime('%H:%M:%S'), next_time_str
+                    )
+                )
 
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                log(f"[*] Ошибка в прослушивателе: {e}")
+                log(listener_error(e))
                 await asyncio.sleep(1.0)
 
     async def _process_signal_queue(self, trade_key: str):
@@ -152,7 +174,7 @@ class StrategyCommon:
         log = self.log
         
         allow_parallel = self.strategy.params.get("allow_parallel_trades", True)
-        log(f"[{symbol}] Запуск обработчика очереди {trade_key} (allow_parallel={allow_parallel})")
+        log(queue_processor_started(symbol, trade_key, allow_parallel))
         
         while self.strategy._running:
             await self.strategy._pause_point()
@@ -162,9 +184,7 @@ class StrategyCommon:
                 is_valid, reason = self._validate_signal_for_processing(signal_data)
                 if not is_valid:
                     symbol_to_log = signal_data.get('symbol') or symbol
-                    log(
-                        f"[{symbol_to_log}] ⏰ Сигнал устарел при обработке очереди: {reason} -> пропуск"
-                    )
+                    log(queue_signal_outdated(symbol_to_log, reason))
                     queue.task_done()
                     continue
 
@@ -174,8 +194,9 @@ class StrategyCommon:
                 if not can_open_new_trade():
                     max_trades = get_max_open_trades()
                     log(
-                        f"[{symbol}] ⚠ Достигнут лимит {max_trades} открытых сделок (факт: {get_current_open_trades()}). "
-                        "Сигнал отложен."
+                        global_limit_before_start(
+                            symbol, max_trades, get_current_open_trades()
+                        )
                     )
                     await self._handle_pending_signal(trade_key, signal_data)
                     processed_immediately = True
@@ -188,12 +209,17 @@ class StrategyCommon:
                     else:
                         limit_reached = False
                         async with self._global_trade_lock:
-                            log(f"[{symbol}] Получена глобальная блокировка, начало обработки")
+                            log(global_lock_acquired(symbol))
                             acquired = await try_acquire_trade_slot()
                             if not acquired:
                                 limit_reached = True
                                 log(
-                                    f"[{symbol}] ⚠ Лимит {get_max_open_trades()} сделок достигнут перед стартом."
+                                    open_trades_limit(
+                                        symbol,
+                                        get_max_open_trades(),
+                                        get_current_open_trades(),
+                                        "перед стартом.",
+                                    )
                                 )
                             else:
                                 try:
@@ -203,7 +229,7 @@ class StrategyCommon:
                                     await task
                                 finally:
                                     await release_trade_slot()
-                            log(f"[{symbol}] Освобождение глобальной блокировки")
+                            log(global_lock_released(symbol))
 
                         if limit_reached:
                             await self._handle_pending_signal(trade_key, signal_data)
@@ -222,9 +248,7 @@ class StrategyCommon:
                         acquired = await try_acquire_trade_slot()
                         if not acquired:
                             max_trades = get_max_open_trades()
-                            log(
-                                f"[{symbol}] ⚠ Лимит {max_trades} сделок достигнут (факт: {get_current_open_trades()})."
-                            )
+                            log(open_trades_limit(symbol, max_trades, get_current_open_trades()))
                             await self._handle_pending_signal(trade_key, signal_data)
                             processed_immediately = True
                         else:
@@ -253,10 +277,10 @@ class StrategyCommon:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                log(f"[{symbol}] Ошибка в обработчике: {e}")
+                log(handler_error(symbol, e))
                 queue.task_done()
 
-        log(f"[{symbol}] Остановка обработчика {trade_key}")
+        log(handler_stopped(symbol, trade_key))
 
     def _validate_signal_for_processing(self, signal_data: dict) -> tuple[bool, str]:
         """Проверяет, что сигнал всё ещё актуален перед запуском сделки."""
@@ -298,8 +322,8 @@ class StrategyCommon:
             except asyncio.QueueEmpty:
                 pass
             self._pending_signals[trade_key].put_nowait(signal_data)
-        
-        log(f"[{symbol}] Сигнал отложен (активная сделка)")
+
+        log(signal_deferred(symbol))
 
         if trade_key not in self._pending_processing:
             self._pending_processing[trade_key] = asyncio.create_task(
@@ -342,9 +366,9 @@ class StrategyCommon:
             if not allow_parallel:
                 # Для непараллельного режима - обрабатываем только один отложенный сигнал
                 async with self._global_trade_lock:
-                    log(f"[{symbol}] Получена глобальная блокировка для отложенного сигнала")
+                    log(global_lock_acquired(symbol))
                     await self._process_one_pending(trade_key)
-                    log(f"[{symbol}] Освобождение глобальной блокировки для отложенного сигнала")
+                    log(global_lock_released(symbol))
             else:
                 # Для параллельного режима - ждём завершения активной сделки
                 wait_start = asyncio.get_event_loop().time()
@@ -372,7 +396,7 @@ class StrategyCommon:
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            log(f"[{symbol}] Ошибка в отложке: {e}")
+            log(handler_error(symbol, e))
         finally:
             self._pending_processing.pop(trade_key, None)
 
@@ -385,7 +409,12 @@ class StrategyCommon:
         if not can_open_new_trade():
             max_trades = get_max_open_trades()
             log(
-                f"[{symbol}] ⚠ Лимит {max_trades} сделок (факт: {get_current_open_trades()}) - отложенный сигнал не обработан"
+                open_trades_limit(
+                    symbol,
+                    max_trades,
+                    get_current_open_trades(),
+                    "- отложенный сигнал не обработан",
+                )
             )
             self._reschedule_pending_processing(trade_key)
             return
@@ -405,19 +434,15 @@ class StrategyCommon:
             signal_symbol = last_signal.get('symbol') or symbol
             is_valid, reason = self._validate_signal_for_processing(last_signal)
             if not is_valid:
-                log(
-                    f"[{signal_symbol}] ⏰ Отложенный сигнал устарел: {reason} -> пропуск"
-                )
+                log(deferred_signal_outdated(signal_symbol, reason))
                 return
 
-            log(f"[{signal_symbol}] Запуск отложенного сигнала")
+            log(deferred_signal_start(signal_symbol))
 
             acquired = await try_acquire_trade_slot()
             if not acquired:
                 max_trades = get_max_open_trades()
-                log(
-                    f"[{signal_symbol}] ⚠ Лимит {max_trades} сделок (факт: {get_current_open_trades()}) - отложенный сигнал оставлен в ожидании"
-                )
+                log(strategy_limit_deferred(signal_symbol, max_trades, get_current_open_trades()))
 
                 queue = self._pending_signals.setdefault(trade_key, asyncio.Queue(maxsize=1))
                 while not queue.empty():
@@ -456,7 +481,7 @@ class StrategyCommon:
         if trade_key in self._pending_signals and not self._pending_signals[trade_key].empty():
             symbol, _ = trade_key.split('_', 1)
             log = self.log
-            log(f"[{symbol}] Есть отложенные — перезапуск")
+            log(pending_signals_restart(symbol))
 
             if trade_key not in self._pending_processing:
                 self._pending_processing[trade_key] = asyncio.create_task(

@@ -16,6 +16,14 @@ from strategies.log_messages import (
     start_processing,
     trade_placement_failed,
     result_unknown,
+    series_completed,
+    trade_step,
+    trade_result_removed,
+    win_with_series_finish,
+    push_repeat,
+    loss_with_increase,
+    steps_limit_reached,
+    series_remaining,
 )
 
 MARTINGALE_DEFAULTS = {
@@ -148,7 +156,7 @@ class MartingaleStrategy(BaseTradingStrategy):
             if series_started:
                 # 🔴 ВАЖНО: Освобождаем серию после завершения
                 self._active_series.pop(trade_key, None)
-                log(f"[{symbol}] Серия Мартингейла завершена для {timeframe}")
+                log(series_completed(symbol, timeframe, "Мартингейл"))
 
     async def _run_martingale_series(self, trade_key: str, symbol: str, timeframe: str, initial_direction: int, log, signal_received_time: datetime, signal_data: dict):
         """Запускает серию Мартингейла для конкретного сигнала"""
@@ -201,8 +209,16 @@ class MartingaleStrategy(BaseTradingStrategy):
             if pct is None:
                 continue
                 
-            log(f"[{symbol}] step={step} stake={format_amount(stake)} min={self._trade_minutes} "
-                f"side={'UP' if series_direction == 1 else 'DOWN'} payout={pct}%")
+            log(
+                trade_step(
+                    symbol,
+                    step,
+                    format_amount(stake),
+                    self._trade_minutes,
+                    series_direction,
+                    pct,
+                )
+            )
 
             should_check_signal = not did_place_any_trade or not last_outcome_was_loss
             if should_check_signal:
@@ -294,25 +310,25 @@ class MartingaleStrategy(BaseTradingStrategy):
                 if hasattr(self, "_common") and self._common is not None:
                     removed = self._common.discard_signals_for(trade_key)
                     if removed:
-                        log(f"[{symbol}] 🗑 Удалено сигналов из очередей после LOSS: {removed}")
+                        log(trade_result_removed(symbol, removed, "LOSS"))
             elif profit > 0:
-                log(f"[{symbol}] ✅ WIN: profit={format_amount(profit)}. Серия завершена.")
+                log(win_with_series_finish(symbol, format_amount(profit)))
                 break
             elif abs(profit) < 1e-9:
-                log(f"[{symbol}] 🤝 PUSH: возврат ставки. Повтор шага без увеличения.")
+                log(push_repeat(symbol))
                 last_outcome_was_loss = False
                 if hasattr(self, "_common") and self._common is not None:
                     removed = self._common.discard_signals_for(trade_key)
                     if removed:
-                        log(f"[{symbol}] 🗑 Удалено сигналов из очередей после PUSH: {removed}")
+                        log(trade_result_removed(symbol, removed, "PUSH"))
             else:
-                log(f"[{symbol}] ❌ LOSS: profit={format_amount(profit)}. Увеличиваем ставку.")
+                log(loss_with_increase(symbol, format_amount(profit)))
                 step += 1  # Продолжаем с тем же направлением и исходным сигналом
                 last_outcome_was_loss = True
                 if hasattr(self, "_common") and self._common is not None:
                     removed = self._common.discard_signals_for(trade_key)
                     if removed:
-                        log(f"[{symbol}] 🗑 Удалено сигналов из очередей после LOSS: {removed}")
+                        log(trade_result_removed(symbol, removed, "LOSS"))
 
             await self.sleep(0.2)
             
@@ -324,10 +340,10 @@ class MartingaleStrategy(BaseTradingStrategy):
                 
         if did_place_any_trade:
             if step >= max_steps:
-                log(f"[{symbol}] 🛑 Достигнут лимит шагов ({max_steps}).")
+                log(steps_limit_reached(symbol, max_steps))
             series_left = max(0, series_left - 1)
             self._series_remaining[trade_key] = series_left
-            log(f"[{symbol}] ▶ Осталось серий: {series_left}")
+            log(series_remaining(symbol, series_left))
 
     def _calculate_trade_duration(self, symbol: str) -> tuple[float, float]:
         """Рассчитывает длительность сделки"""

@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any, Optional, TYPE_CHECKING
+from strategies.log_messages import params_updated, signal_queue_error
 if TYPE_CHECKING:
     from core.http_async import HttpClient
 
@@ -166,7 +167,7 @@ class StrategyBase:
                 k: (round(v, 8) if isinstance(v, float) else v)
                 for k, v in params.items()
             }
-            self.log(f"[{self.symbol}] ⚙ Параметры обновлены: {pretty}")
+            self.log(params_updated(self.symbol, pretty))
 
     def get_param(self, key, default=None):
         """Получение параметра стратегии"""
@@ -182,7 +183,7 @@ class StrategyBase:
         cb = getattr(self, "log", None)
         if callable(cb):
             try:
-                cb(f"[{self.symbol}] ⚠ Ошибка очереди сигналов: {exc}")
+                cb(signal_queue_error(self.symbol, exc))
             except Exception:
                 pass
 

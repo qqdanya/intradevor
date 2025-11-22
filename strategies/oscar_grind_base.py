@@ -15,6 +15,9 @@ from strategies.log_messages import (
     series_already_active,
     trade_placement_failed,
     trade_summary,
+    series_completed,
+    target_profit_reached,
+    series_remaining_oscar,
 )
 
 OSCAR_GRIND_DEFAULTS = {
@@ -147,7 +150,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         finally:
             if series_started:
                 self._active_series.pop(trade_key, None)
-                log(f"[{symbol}] Серия Oscar Grind завершена для {timeframe}")
+                log(series_completed(symbol, timeframe, "Oscar Grind"))
 
     async def _run_oscar_grind_series(
         self,
@@ -314,7 +317,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                 cum_profit += profit_val
                 
             if cum_profit >= target_profit:
-                log(f"[{symbol}] Цель достигнута: {format_amount(cum_profit)}")
+                log(target_profit_reached(symbol, format_amount(cum_profit)))
                 self._series_state.pop(trade_key, None)
                 series_finished = True
                 break
@@ -352,7 +355,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
 
         if series_finished:
             series_left = max(0, series_left - 1)
-            log(f"[{symbol}] Осталось серий: {series_left}")
+            log(series_remaining_oscar(symbol, series_left))
         elif step_idx > 0:
             log(
                 f"[{symbol}] Серия продолжается: накоплено "

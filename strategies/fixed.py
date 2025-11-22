@@ -21,6 +21,9 @@ from strategies.log_messages import (
     result_unknown,
     result_win,
     result_loss,
+    balance_below_min,
+    trade_limit_reached,
+    fixed_stake_stopped,
 )
 
 FIXED_DEFAULTS = {
@@ -123,10 +126,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
         max_trades = int(self.params.get("repeat_count", 10))
         if self._trades_counter >= max_trades:
             if not self._stop_when_idle_requested:
-                log(
-                    f"[{symbol}] 🛑 Достигнут лимит сделок ({self._trades_counter}/{max_trades}). "
-                    "Ожидание завершения открытых сделок."
-                )
+                log(trade_limit_reached(symbol, self._trades_counter, max_trades))
                 self._status("достигнут лимит сделок")
             self._request_stop_when_idle("достигнут лимит сделок")
             return
@@ -148,7 +148,11 @@ class FixedStakeStrategy(BaseTradingStrategy):
             
         min_balance = float(self.params.get("min_balance", 100))
         if bal < min_balance:
-            log(f"[{symbol}] ⛔ Баланс ниже минимума ({format_amount(bal)} < {format_amount(min_balance)}). Пропускаем сигнал.")
+            log(
+                balance_below_min(
+                    symbol, format_amount(bal), format_amount(min_balance)
+                )
+            )
             return
 
         stake = float(self.params.get("base_investment", 100))
@@ -377,7 +381,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
     def stop(self):
         """Остановка стратегии"""
         log = self.log or (lambda s: None)
-        log(f"[{self.symbol}] Fixed Stake остановлена. Выполнено сделок: {self._trades_counter}")
+        log(fixed_stake_stopped(self.symbol, self._trades_counter))
         super().stop()
 
     def update_params(self, **params):
