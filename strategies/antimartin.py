@@ -17,6 +17,14 @@ from strategies.log_messages import (
     start_processing,
     trade_placement_failed,
     result_unknown,
+    series_completed,
+    trade_step,
+    win_with_parlay,
+    push_repeat_same_stake,
+    loss_series_finish,
+    steps_limit_reached,
+    series_remaining,
+    trade_result_removed,
 )
 
 ANTIMARTINGALE_DEFAULTS = {
@@ -144,7 +152,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
         finally:
             if series_started:
                 self._active_series.pop(trade_key, None)
-                log(f"[{symbol}] Серия Антимартингейла завершена для {timeframe}")
+                log(series_completed(symbol, timeframe, "Антимартингейл"))
 
     async def _run_antimartingale_series(
         self,
@@ -208,8 +216,16 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
             if pct is None:
                 continue
 
-            log(f"[{symbol}] step={step} stake={format_amount(current_stake)} min={self._trade_minutes} "
-                f"side={'UP' if series_direction == 1 else 'DOWN'} payout={pct}%")
+            log(
+                trade_step(
+                    symbol,
+                    step,
+                    format_amount(current_stake),
+                    self._trade_minutes,
+                    series_direction,
+                    pct,
+                )
+            )
 
             # Финальная проверка актуальности перед размещением сделки
             if needs_signal_validation:
@@ -288,23 +304,23 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
                 log(result_unknown(symbol, treat_as_loss=True) + " Серия завершается.")
                 break
             elif profit > 0:
-                log(f"[{symbol}] ✅ WIN: profit={format_amount(profit)}. Увеличиваем ставку на размер выигрыша (парлей).")
+                log(win_with_parlay(symbol, format_amount(profit)))
                 # очистка отложенных сигналов после WIN
                 if hasattr(self, "_common") and self._common is not None:
                     removed = self._common.discard_signals_for(trade_key)
                     if removed:
-                        log(f"[{symbol}] 🗑 Удалено сигналов из очередей после WIN: {removed}")
+                        log(trade_result_removed(symbol, removed, "WIN"))
                 current_stake += float(profit)  # парлей
                 step += 1  # продолжаем только после WIN
             elif abs(profit) < 1e-9:
-                log(f"[{symbol}] 🤝 PUSH: возврат ставки. Повтор шага без изменения ставки.")
+                log(push_repeat_same_stake(symbol))
                 if hasattr(self, "_common") and self._common is not None:
                     removed = self._common.discard_signals_for(trade_key)
                     if removed:
-                        log(f"[{symbol}] 🗑 Удалено сигналов из очередей после PUSH: {removed}")
+                        log(trade_result_removed(symbol, removed, "PUSH"))
                 # step не меняем — повторим с тем же current_stake
             else:
-                log(f"[{symbol}] ❌ LOSS: profit={format_amount(profit)}. Серия завершается.")
+                log(loss_series_finish(symbol, format_amount(profit)))
                 # при LOSS в Антисерии — стоп; очередь не очищаем
                 break
 
@@ -315,10 +331,10 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
 
         if did_place_any_trade:
             if step >= max_steps:
-                log(f"[{symbol}] ⛳ Достигнут лимит шагов (max_steps={max_steps}). Серия остановлена.")
+                log(steps_limit_reached(symbol, max_steps, flag="⛳"))
             series_left = max(0, series_left - 1)
             self._series_remaining[trade_key] = series_left
-            log(f"[{symbol}] ▶ Осталось серий: {series_left}")
+            log(series_remaining(symbol, series_left))
 
     def _calculate_trade_duration(self, symbol: str) -> tuple[float, float]:
         if self._trade_type == "classic" and self._next_expire_dt is not None:

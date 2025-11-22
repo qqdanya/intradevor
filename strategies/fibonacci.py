@@ -18,6 +18,13 @@ from strategies.log_messages import (
     trade_placement_failed,
     trade_summary,
     result_unknown,
+    series_completed,
+    steps_limit_reached,
+    series_remaining,
+    trade_timeout,
+    fibonacci_win,
+    fibonacci_push,
+    fibonacci_loss,
 )
 
 FIBONACCI_DEFAULTS = {
@@ -162,7 +169,7 @@ class FibonacciStrategy(BaseTradingStrategy):
         finally:
             if series_started:
                 self._active_series.pop(trade_key, None)
-                log(f"[{symbol}] Серия Фибоначчи завершена для {timeframe}")
+                log(series_completed(symbol, timeframe, "Фибоначчи"))
 
     async def _run_fibonacci_series(
         self,
@@ -347,22 +354,13 @@ class FibonacciStrategy(BaseTradingStrategy):
                     need_new_signal = True
             elif profit > 0:
                 fib_index = max(1, fib_index - 2)
-                log(
-                    f"[{symbol}] ✅ WIN: profit={format_amount(profit)}. "
-                    f"Шаг назад по Фибоначчи -> {fib_index}."
-                )
+                log(fibonacci_win(symbol, format_amount(profit), fib_index))
                 if fib_index <= 1:
                     continue_series = False
             elif abs(profit) < 1e-9:
-                log(
-                    f"[{symbol}] 🤝 PUSH: возврат ставки. "
-                    f"Остаемся на числе Фибоначчи {fib_index}."
-                )
+                log(fibonacci_push(symbol, fib_index))
             else:
-                log(
-                    f"[{symbol}] ❌ LOSS: profit={format_amount(profit)}. "
-                    f"Следующее число Фибоначчи."
-                )
+                log(fibonacci_loss(symbol, format_amount(profit)))
                 fib_index += 1
                 if requires_fresh_signal:
                     need_new_signal = True
@@ -400,9 +398,9 @@ class FibonacciStrategy(BaseTradingStrategy):
 
         if did_place_any_trade:
             if step_idx >= max_steps:
-                log(f"[{symbol}] 🛑 Достигнут лимит шагов ({max_steps}).")
+                log(steps_limit_reached(symbol, max_steps))
             series_left = max(0, series_left - 1)
-            log(f"[{symbol}] ▶ Осталось серий: {series_left}")
+            log(series_remaining(symbol, series_left))
 
         return series_left
 
@@ -429,7 +427,7 @@ class FibonacciStrategy(BaseTradingStrategy):
             # Ждем немного перед следующей проверкой
             await asyncio.sleep(0.5)
 
-        log(f"[{symbol}] ⏰ Таймаут ожидания нового сигнала ({timeout}с)")
+        log(trade_timeout(symbol, timeout))
         return None
 
     def _calculate_trade_duration(self, symbol: str) -> tuple[float, float]:

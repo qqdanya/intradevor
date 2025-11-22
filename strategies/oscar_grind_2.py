@@ -3,6 +3,11 @@ import math
 from typing import Optional
 from strategies.oscar_grind_base import OscarGrindBaseStrategy
 from core.money import format_amount
+from strategies.log_messages import (
+    oscar_win_with_requirements,
+    oscar_refund,
+    oscar_loss,
+)
 
 class OscarGrind2Strategy(OscarGrindBaseStrategy):
     """Oscar Grind 2 стратегия (расширенная версия с расчетом требуемой ставки)"""
@@ -48,20 +53,24 @@ class OscarGrind2Strategy(OscarGrindBaseStrategy):
             next_req = math.ceil(need / k) if k > 0 else stake
             next_stake = max(base_unit, min(stake + base_unit, float(next_req)))
             log(
-                f"[{self.symbol}] ✅ WIN: profit={format_amount(profit)}. "
-                f"Накоплено {format_amount(cum_profit)}/{format_amount(base_unit)}. "
-                f"Следующая ставка = min(stake+unit, req) → {format_amount(stake + base_unit)} / {format_amount(next_req)} = {format_amount(next_stake)}"
+                oscar_win_with_requirements(
+                    self.symbol,
+                    format_amount(profit),
+                    format_amount(cum_profit),
+                    format_amount(base_unit),
+                    format_amount(stake + base_unit),
+                    format_amount(next_req),
+                    format_amount(next_stake),
+                )
             )
         else:
             next_stake = stake
             if outcome == "refund":
-                log(
-                    f"[{self.symbol}] ↩️ REFUND: ставка возвращена. "
-                    f"Следующая ставка остаётся {format_amount(next_stake)}."
-                )
+                log(oscar_refund(self.symbol, format_amount(next_stake)))
             else:
                 log(
-                    f"[{self.symbol}] ❌ LOSS: profit={format_amount(profit)}. "
-                    f"Следующая ставка остаётся {format_amount(next_stake)}."
+                    oscar_loss(
+                        self.symbol, format_amount(profit), format_amount(next_stake)
+                    )
                 )
         return float(next_stake)

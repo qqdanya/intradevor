@@ -17,6 +17,18 @@ from core.policy import normalize_sprint
 from strategies.base import StrategyBase
 from strategies.strategy_common import StrategyCommon
 from strategies.constants import *  # Импортируем все константы
+from strategies.log_messages import (
+    account_mode,
+    account_mode_error,
+    balance_error,
+    balance_info,
+    classic_expire_missing,
+    classic_timeframe_unavailable,
+    currency_change_ignored,
+    minutes_invalid,
+    strategy_shutdown,
+    trade_retry,
+)
 
 def _minutes_from_timeframe(tf: str) -> int:
     """Конвертация таймфрейма в минуты"""
@@ -203,7 +215,7 @@ class BaseTradingStrategy(StrategyBase):
             fallback = _minutes_from_timeframe(self.timeframe)
             norm = normalize_sprint(self.symbol, fallback) or fallback
             if self.log:
-                self.log(f"[{self.symbol}] ⚠ Минуты {raw_minutes} недопустимы. Использую {norm}.")
+                self.log(minutes_invalid(self.symbol, raw_minutes, norm))
         self._trade_minutes = int(norm)
         self.params["minutes"] = self._trade_minutes
         self._trade_type = str(self.params.get("trade_type", "sprint")).lower()
@@ -339,7 +351,7 @@ class BaseTradingStrategy(StrategyBase):
         time_arg = self._trade_minutes
         if self._trade_type == "classic":
             if not self._next_expire_dt:
-                log(f"[{symbol}] ❌ Нет времени экспирации для classic.")
+                log(classic_expire_missing(symbol))
                 return None
             time_arg = self._next_expire_dt.strftime("%H:%M")
             trade_kwargs["date"] = self._next_expire_dt.strftime("%d-%m-%Y")
@@ -361,7 +373,7 @@ class BaseTradingStrategy(StrategyBase):
             if trade_id:
                 return trade_id
             if attempt < max_attempts - 1:
-                log(f"[{symbol}] ❌ Сделка не размещена. Пауза и повтор.")
+                log(trade_retry(symbol))
                 await self.sleep(1.0)
                    
         return None
@@ -570,9 +582,7 @@ class BaseTradingStrategy(StrategyBase):
                 and sig_tf not in CLASSIC_ALLOWED_TFS
             ):
                 if self.log:
-                    self.log(
-                        f"[{sig_symbol}] ⚠ Таймфрейм {sig_tf} недоступен для Classic — пропуск."
-                    )
+                    self.log(classic_timeframe_unavailable(sig_symbol, sig_tf))
                 continue
             return int(direction), int(ver), meta
 
@@ -625,17 +635,17 @@ class BaseTradingStrategy(StrategyBase):
         try:
             self._anchor_is_demo = await is_demo_account(self.http_client)
             mode_txt = "ДЕМО" if self._anchor_is_demo else "РЕАЛ"
-            log(f"[{self.symbol}] Режим счёта: {mode_txt} ({self.strategy_name})")
+            log(account_mode(self.symbol, mode_txt, self.strategy_name))
         except Exception as e:
-            log(f"[{self.symbol}] ⚠ Не удалось определить режим счёта: {e}")
+            log(account_mode_error(self.symbol, e))
             self._anchor_is_demo = False
         try:
             amount, cur_ccy, display = await get_balance_info(
                 self.http_client, self.user_id, self.user_hash
             )
-            log(f"[{self.symbol}] Баланс: {display} ({format_amount(amount)}), валюта: {cur_ccy}")
+            log(balance_info(self.symbol, display, format_amount(amount), cur_ccy))
         except Exception as e:
-            log(f"[{self.symbol}] ⚠ Не удалось получить баланс: {e}")
+            log(balance_error(self.symbol, e))
 
     async def _shutdown(self):
         """Завершение работы стратегии"""
@@ -656,7 +666,7 @@ class BaseTradingStrategy(StrategyBase):
         self._pending_tasks.clear()
         self._active_trades.clear()
         self._pending_for_status.clear()
-        (self.log or (lambda s: None))(f"[{self.symbol}] Завершение стратегии {self.strategy_name}")
+        (self.log or (lambda s: None))(strategy_shutdown(self.symbol, self.strategy_name))
 
     def stop(self):
         """Остановка стратегии"""
@@ -712,7 +722,7 @@ class BaseTradingStrategy(StrategyBase):
             else:
                 norm = 1 if requested < 3 else max(3, min(500, requested))
             if self.log:
-                self.log(f"[{self.symbol}] ⚠ Минуты {requested} недопустимы. Исправлено на {norm}.")
+                self.log(minutes_invalid(self.symbol, requested, norm, corrected=True))
         self._trade_minutes = int(norm)
         self.params["minutes"] = self._trade_minutes
 
@@ -733,5 +743,5 @@ class BaseTradingStrategy(StrategyBase):
         """Обновление параметра валюты"""
         want = str(currency).upper()
         if want != self._anchor_ccy and self.log:
-            self.log(f"[{self.symbol}] ⚠ Игнорирую попытку сменить валюту на лету {self._anchor_ccy} → {want}.")
+            self.log(currency_change_ignored(self.symbol, self._anchor_ccy, want))
         self.params["account_currency"] = self._anchor_ccy

@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Optional
 from strategies.oscar_grind_base import OscarGrindBaseStrategy
 from core.money import format_amount
+from strategies.log_messages import oscar_win_basic, oscar_refund, oscar_loss
 
 class OscarGrind1Strategy(OscarGrindBaseStrategy):
     """Oscar Grind 1 стратегия (упрощенная версия)"""
@@ -45,20 +46,22 @@ class OscarGrind1Strategy(OscarGrindBaseStrategy):
         if outcome == "win":
             next_stake = stake + base_unit
             log(
-                f"[{self.symbol}] ✅ WIN: profit={format_amount(profit)}. "
-                f"Накоплено {format_amount(cum_profit)}/{format_amount(base_unit)}. "
-                f"Следующая ставка = stake+unit → {format_amount(next_stake)}"
+                oscar_win_basic(
+                    self.symbol,
+                    format_amount(profit),
+                    format_amount(cum_profit),
+                    format_amount(base_unit),
+                    format_amount(next_stake),
+                )
             )
         else:
             next_stake = stake
             if outcome == "refund":
-                log(
-                    f"[{self.symbol}] ↩️ REFUND: ставка возвращена. "
-                    f"Следующая ставка остаётся {format_amount(next_stake)}."
-                )
+                log(oscar_refund(self.symbol, format_amount(next_stake)))
             else:
                 log(
-                    f"[{self.symbol}] ❌ LOSS: profit={format_amount(profit)}. "
-                    f"Следующая ставка остаётся {format_amount(next_stake)}."
+                    oscar_loss(
+                        self.symbol, format_amount(profit), format_amount(next_stake)
+                    )
                 )
         return float(next_stake)
