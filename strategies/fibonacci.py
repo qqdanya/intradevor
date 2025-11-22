@@ -338,18 +338,11 @@ class FibonacciStrategy(BaseTradingStrategy):
 
             step_idx += 1
 
-            def discard_after(message_suffix: str) -> None:
-                if hasattr(self, "_common") and self._common is not None:
-                    removed = self._common.discard_signals_for(trade_key)
-                    if removed:
-                        log(f"[{symbol}] 🗑 Удалено сигналов из очередей {message_suffix}: {removed}")
-
             continue_series = True
 
             if profit is None:
                 log(result_unknown(symbol, treat_as_loss=True))
                 fib_index += 1
-                discard_after("после LOSS")
                 if requires_fresh_signal:
                     need_new_signal = True
             elif profit > 0:
@@ -365,14 +358,12 @@ class FibonacciStrategy(BaseTradingStrategy):
                     f"[{symbol}] 🤝 PUSH: возврат ставки. "
                     f"Остаемся на числе Фибоначчи {fib_index}."
                 )
-                discard_after("после PUSH")
             else:
                 log(
                     f"[{symbol}] ❌ LOSS: profit={format_amount(profit)}. "
                     f"Следующее число Фибоначчи."
                 )
                 fib_index += 1
-                discard_after("после LOSS")
                 if requires_fresh_signal:
                     need_new_signal = True
 
