@@ -103,7 +103,7 @@ class MartingaleStrategy(BaseTradingStrategy):
         tf_minutes = _minutes_from_timeframe(timeframe)
         grace = float(self.params.get("grace_delay_sec", 0.0))
 
-        k = max(1, non_win_streak + 1)
+        k = non_win_streak + 2
         timeout_sec = int(k * tf_minutes * 60 + grace)
         self.params["signal_timeout_sec"] = timeout_sec
 
