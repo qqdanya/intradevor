@@ -220,28 +220,28 @@ class MartingaleStrategy(BaseTradingStrategy):
                 )
             )
 
-            should_check_signal = not did_place_any_trade or not last_outcome_was_loss
-            if should_check_signal:
-                # Финальная проверка актуальности перед размещением сделки
-                current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
-                if self._trade_type == "classic":
-                    is_valid, reason = self._is_signal_valid_for_classic(
-                        signal_data,
-                        current_time,
-                        for_placement=True,
-                    )
-                else:
-                    sprint_payload = signal_data
-                    if not sprint_payload.get('timestamp'):
-                        sprint_payload = {'timestamp': signal_received_time}
-                    is_valid, reason = self._is_signal_valid_for_sprint(
-                        sprint_payload,
-                        current_time,
-                    )
+            # Финальная проверка актуальности перед размещением сделки
+            # Нужна на каждом шаге: при ожидании высокого payout мы можем перепрыгнуть
+            # через 1-2 свечи и вернуться к ставке по уже устаревшему сигналу.
+            current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
+            if self._trade_type == "classic":
+                is_valid, reason = self._is_signal_valid_for_classic(
+                    signal_data,
+                    current_time,
+                    for_placement=True,
+                )
+            else:
+                sprint_payload = signal_data
+                if not sprint_payload.get('timestamp'):
+                    sprint_payload = {'timestamp': signal_received_time}
+                is_valid, reason = self._is_signal_valid_for_sprint(
+                    sprint_payload,
+                    current_time,
+                )
 
-                if not is_valid:
-                    log(signal_not_actual_for_placement(symbol, reason))
-                    return
+            if not is_valid:
+                log(signal_not_actual_for_placement(symbol, reason))
+                return
 
             # Определяем режим аккаунта
             try:
