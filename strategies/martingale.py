@@ -3,6 +3,7 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
+
 from strategies.base_trading_strategy import BaseTradingStrategy, _minutes_from_timeframe
 from strategies.constants import MOSCOW_TZ
 from core.time_utils import format_local_time
@@ -42,6 +43,7 @@ MARTINGALE_DEFAULTS = {
     "allow_parallel_trades": True,
 }
 
+
 class MartingaleStrategy(BaseTradingStrategy):
     """Стратегия Мартингейла с системой очередей и параллельной обработкой"""
 
@@ -61,7 +63,7 @@ class MartingaleStrategy(BaseTradingStrategy):
         martingale_params = dict(MARTINGALE_DEFAULTS)
         if params:
             martingale_params.update(params)
-           
+
         super().__init__(
             http_client=http_client,
             user_id=user_id,
@@ -78,24 +80,55 @@ class MartingaleStrategy(BaseTradingStrategy):
         self._active_series: dict[str, bool] = {}
         self._series_remaining: dict[str, int] = {}
 
+    # =====================================================================
+    # ВСПОМОГАТЕЛЬНОЕ: актуальность сигнала по ТФ и количеству подряд не-WIN
+    # =====================================================================
+
+    def _update_signal_timeout_from_timeframe(
+        self,
+        timeframe: str,
+        *,
+        non_win_streak: int,
+    ) -> None:
+        """
+        Окно актуальности сигнала для Мартингейла:
+        исходный timestamp + (non_win_streak + 1) * длительность таймфрейма (+ grace_delay_sec).
+
+        non_win_streak:
+          0 → ещё не было подряд ни LOSS, ни PUSH, ни UNKNOWN → окно = 1 * TF
+          1 → один подряд не-WIN (LOSS или PUSH или UNKNOWN) → 2 * TF
+          2 → два подряд не-WIN                             → 3 * TF
+          и т.д.
+        """
+        tf_minutes = _minutes_from_timeframe(timeframe)
+        grace = float(self.params.get("grace_delay_sec", 0.0))
+
+        k = max(1, non_win_streak + 1)
+        timeout_sec = int(k * tf_minutes * 60 + grace)
+        self.params["signal_timeout_sec"] = timeout_sec
+
+    # =====================================================================
+    # ПУБЛИЧНЫЕ МЕТОДЫ СЕРИИ
+    # =====================================================================
+
     def is_series_active(self, trade_key: str) -> bool:
         """Проверка, выполняется ли серия для указанного ключа."""
         return self._active_series.get(trade_key, False)
 
     async def _process_single_signal(self, signal_data: dict):
         """Обработка одного сигнала для Мартингейла"""
-        symbol = signal_data['symbol']
-        timeframe = signal_data['timeframe']
-        direction = signal_data['direction']
-       
+        symbol = signal_data["symbol"]
+        timeframe = signal_data["timeframe"]
+        direction = signal_data["direction"]
+
         log = self.log or (lambda s: None)
-        
+
         # 🔴 ПРОВЕРКА: нет ли активной серии для этой пары+таймфрейма
         trade_key = f"{symbol}_{timeframe}"
         if trade_key in self._active_series and self._active_series[trade_key]:
             log(series_already_active(symbol, timeframe))
             # Передаем сигнал в систему очередей StrategyCommon
-            if hasattr(self, '_common'):
+            if hasattr(self, "_common"):
                 await self._common._handle_pending_signal(trade_key, signal_data)
             return
 
@@ -107,24 +140,24 @@ class MartingaleStrategy(BaseTradingStrategy):
         if remaining_series <= 0:
             log(repeat_count_empty(symbol, remaining_series))
             return
-        
+
         series_started = False
         try:
             # Обновляем информацию о сигнале
-            self._last_signal_ver = signal_data['version']
-            self._last_indicator = signal_data['indicator']
-            self._last_signal_at_str = format_local_time(signal_data['timestamp'])
-           
-            ts = signal_data['meta'].get('next_timestamp') if signal_data['meta'] else None
+            self._last_signal_ver = signal_data["version"]
+            self._last_indicator = signal_data["indicator"]
+            self._last_signal_at_str = format_local_time(signal_data["timestamp"])
+
+            ts = signal_data["meta"].get("next_timestamp") if signal_data.get("meta") else None
             self._next_expire_dt = ts.astimezone(ZoneInfo(MOSCOW_TZ)) if ts else None
-            
+
             # Обновляем символ и таймфрейм если используются "все"
             if self._use_any_symbol:
                 self.symbol = symbol
             if self._use_any_timeframe:
                 self.timeframe = timeframe
                 self.params["timeframe"] = self.timeframe
-                
+
             try:
                 self._last_signal_monotonic = asyncio.get_running_loop().time()
             except RuntimeError:
@@ -132,9 +165,19 @@ class MartingaleStrategy(BaseTradingStrategy):
 
             # ПРОВЕРКА АКТУАЛЬНОСТИ СИГНАЛА ПЕРЕД НАЧАЛОМ НОВОЙ СЕРИИ
             current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
-            
+
+            # На входе в серию по этому сигналу ещё не было подряд LOSS/PUSH → non_win_streak = 0
+            self._update_signal_timeout_from_timeframe(
+                timeframe,
+                non_win_streak=0,
+            )
+
             if self._trade_type == "classic":
-                is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
+                is_valid, reason = self._is_signal_valid_for_classic(
+                    signal_data,
+                    current_time,
+                    for_placement=True,
+                )
                 if not is_valid:
                     log(signal_not_actual(symbol, "classic", reason))
                     return
@@ -150,7 +193,15 @@ class MartingaleStrategy(BaseTradingStrategy):
             log(start_processing(symbol, "Мартингейл"))
 
             # Запускаем серию Мартингейла
-            await self._run_martingale_series(trade_key, symbol, timeframe, direction, log, signal_data['timestamp'], signal_data)
+            await self._run_martingale_series(
+                trade_key,
+                symbol,
+                timeframe,
+                direction,
+                log,
+                signal_data["timestamp"],
+                signal_data,
+            )
 
         finally:
             if series_started:
@@ -158,57 +209,84 @@ class MartingaleStrategy(BaseTradingStrategy):
                 self._active_series.pop(trade_key, None)
                 log(series_completed(symbol, timeframe, "Мартингейл"))
 
-    async def _run_martingale_series(self, trade_key: str, symbol: str, timeframe: str, initial_direction: int, log, signal_received_time: datetime, signal_data: dict):
+    async def _run_martingale_series(
+        self,
+        trade_key: str,
+        symbol: str,
+        timeframe: str,
+        initial_direction: int,
+        log,
+        signal_received_time: datetime,
+        signal_data: dict,
+    ):
         """Запускает серию Мартингейла для конкретного сигнала"""
-        series_left = self._series_remaining.get(trade_key, int(self.params.get("repeat_count", 10)))
+        series_left = self._series_remaining.get(
+            trade_key,
+            int(self.params.get("repeat_count", 10)),
+        )
         if series_left <= 0:
             log(repeat_count_empty(symbol, series_left))
             return
-            
+
         step = 0
         did_place_any_trade = False
         last_outcome_was_loss = False
+
+        # Счётчик подряд идущих не-WIN (LOSS / PUSH / UNKNOWN treat_as_loss)
+        consecutive_non_win = 0
+
         series_direction = initial_direction
-        signal_at_str = signal_data.get('signal_time_str') or format_local_time(signal_received_time)
+        signal_at_str = signal_data.get("signal_time_str") or format_local_time(signal_received_time)
         max_steps = int(self.params.get("max_steps", 5))
         series_label = self.format_series_label(trade_key, series_left=series_left)
-        
+
         while self._running and step < max_steps:
             await self._pause_point()
             if not await self.ensure_account_conditions():
                 continue
-                
-            # ПРОВЕРКА АКТУАЛЬНОСТИ ТОЛЬКО ДЛЯ ПЕРВОЙ СТАВКИ В СЕРИИ
+
             current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
-            
+
+            # Окно актуальности растёт только с подряд идущими не-WIN
+            # 0 → 1*TF, 1 → 2*TF, 2 → 3*TF, ...
+            self._update_signal_timeout_from_timeframe(
+                timeframe,
+                non_win_streak=consecutive_non_win,
+            )
+
+            # ПРОВЕРКА АКТУАЛЬНОСТИ ТОЛЬКО ДЛЯ ПЕРВОЙ СТАВКИ В СЕРИИ
             if not did_place_any_trade:  # ТОЛЬКО перед первой ставкой в новой серии
                 if self._trade_type == "classic":
-                    is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
+                    is_valid, reason = self._is_signal_valid_for_classic(
+                        signal_data,
+                        current_time,
+                        for_placement=True,
+                    )
                     if not is_valid:
                         log(signal_not_actual_for_placement(symbol, reason))
                         return
                 else:
                     is_valid, reason = self._is_signal_valid_for_sprint(
-                        {'timestamp': signal_received_time},
-                        current_time
+                        {"timestamp": signal_received_time},
+                        current_time,
                     )
                     if not is_valid:
                         log(signal_not_actual_for_placement(symbol, reason))
                         return
-                        
+
             # Рассчитываем ставку
             base_stake = float(self.params.get("base_investment", 100))
             coeff = float(self.params.get("coefficient", 2.0))
             stake = base_stake * (coeff ** step) if step > 0 else base_stake
-            
+
             min_pct = int(self.params.get("min_percent", 70))
             wait_low = float(self.params.get("wait_on_low_percent", 1))
-            
+
             # Проверяем выплату и баланс
             pct, balance = await self.check_payout_and_balance(symbol, stake, min_pct, wait_low)
             if pct is None:
                 continue
-                
+
             log(
                 trade_step(
                     symbol,
@@ -220,10 +298,15 @@ class MartingaleStrategy(BaseTradingStrategy):
                 )
             )
 
-            # Финальная проверка актуальности перед размещением сделки
-            # Нужна на каждом шаге: при ожидании высокого payout мы можем перепрыгнуть
-            # через 1-2 свечи и вернуться к ставке по уже устаревшему сигналу.
+            # Финальная проверка актуальности перед размещением сделки.
+            # Здесь важно, что окно всё ещё зависит только от подряд не-WIN,
+            # а не от номера шага.
             current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
+            self._update_signal_timeout_from_timeframe(
+                timeframe,
+                non_win_streak=consecutive_non_win,
+            )
+
             if self._trade_type == "classic":
                 is_valid, reason = self._is_signal_valid_for_classic(
                     signal_data,
@@ -232,8 +315,8 @@ class MartingaleStrategy(BaseTradingStrategy):
                 )
             else:
                 sprint_payload = signal_data
-                if not sprint_payload.get('timestamp'):
-                    sprint_payload = {'timestamp': signal_received_time}
+                if not sprint_payload.get("timestamp"):
+                    sprint_payload = {"timestamp": signal_received_time}
                 is_valid, reason = self._is_signal_valid_for_sprint(
                     sprint_payload,
                     current_time,
@@ -249,19 +332,22 @@ class MartingaleStrategy(BaseTradingStrategy):
             except Exception:
                 demo_now = False
             account_mode = "ДЕМО" if demo_now else "РЕАЛ"
-            
+
             # Размещаем сделку
             self._status("делает ставку")
             trade_id = await self.place_trade_with_retry(
-                symbol, series_direction, stake, self._anchor_ccy
+                symbol,
+                series_direction,
+                stake,
+                self._anchor_ccy,
             )
-                   
+
             if not trade_id:
                 log(trade_placement_failed(symbol, "Пропускаем сигнал."))
                 return  # ПРОПУСК СИГНАЛА
-                
+
             did_place_any_trade = True
-            
+
             # Определяем длительность сделки
             trade_seconds, expected_end_ts = self._calculate_trade_duration(symbol)
             wait_seconds = self.params.get("result_wait_s")
@@ -269,7 +355,7 @@ class MartingaleStrategy(BaseTradingStrategy):
                 wait_seconds = trade_seconds
             else:
                 wait_seconds = float(wait_seconds)
-                
+
             # Уведомляем о pending сделке
             self._notify_pending_trade(
                 trade_id,
@@ -301,49 +387,68 @@ class MartingaleStrategy(BaseTradingStrategy):
                 indicator=self._last_indicator,
                 series_label=series_label,
             )
-            
+
             # Обрабатываем результат
             if profit is None:
                 log(result_unknown(symbol, treat_as_loss=True))
                 step += 1
                 last_outcome_was_loss = True
+
+                # UNKNOWN считаем как не-WIN → удлиняем окно
+                consecutive_non_win += 1
+
                 if hasattr(self, "_common") and self._common is not None:
                     removed = self._common.discard_signals_for(trade_key)
                     if removed:
                         log(trade_result_removed(symbol, removed, "LOSS"))
             elif profit > 0:
                 log(win_with_series_finish(symbol, format_amount(profit)))
+
+                # WIN обнуляет цепочку не-WIN (но серия всё равно завершается)
+                consecutive_non_win = 0
                 break
             elif abs(profit) < 1e-9:
                 log(push_repeat(symbol))
                 last_outcome_was_loss = False
+
+                # PUSH теперь тоже удлиняет окно (как ты просил)
+                consecutive_non_win += 1
+
                 if hasattr(self, "_common") and self._common is not None:
                     removed = self._common.discard_signals_for(trade_key)
                     if removed:
                         log(trade_result_removed(symbol, removed, "PUSH"))
             else:
                 log(loss_with_increase(symbol, format_amount(profit)))
-                step += 1  # Продолжаем с тем же направлением и исходным сигналом
+                step += 1  # размер ставки растёт с шагом
                 last_outcome_was_loss = True
+
+                # Настоящий LOSS тоже удлиняет окно
+                consecutive_non_win += 1
+
                 if hasattr(self, "_common") and self._common is not None:
                     removed = self._common.discard_signals_for(trade_key)
                     if removed:
                         log(trade_result_removed(symbol, removed, "LOSS"))
 
             await self.sleep(0.2)
-            
+
             # Обновляем время экспирации для classic
             if self._trade_type == "classic" and self._next_expire_dt is not None:
                 self._next_expire_dt += timedelta(
                     minutes=_minutes_from_timeframe(timeframe)
                 )
-                
+
         if did_place_any_trade:
             if step >= max_steps:
                 log(steps_limit_reached(symbol, max_steps))
             series_left = max(0, series_left - 1)
             self._series_remaining[trade_key] = series_left
             log(series_remaining(symbol, series_left))
+
+    # =====================================================================
+    # СЛУЖЕБНЫЕ МЕТОДЫ
+    # =====================================================================
 
     def _calculate_trade_duration(self, symbol: str) -> tuple[float, float]:
         """Рассчитывает длительность сделки"""
@@ -356,7 +461,7 @@ class MartingaleStrategy(BaseTradingStrategy):
         else:
             trade_seconds = float(self._trade_minutes) * 60.0
             expected_end_ts = datetime.now().timestamp() + trade_seconds
-           
+
         return trade_seconds, expected_end_ts
 
     def _notify_pending_trade(
@@ -401,7 +506,10 @@ class MartingaleStrategy(BaseTradingStrategy):
                 pass
 
     def format_series_label(
-        self, trade_key: str, *, series_left: int | None = None
+        self,
+        trade_key: str,
+        *,
+        series_left: int | None = None,
     ) -> str | None:
         if series_left is None:
             series_left = self._series_remaining.get(trade_key)
