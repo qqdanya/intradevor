@@ -198,7 +198,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             if not await self.ensure_account_conditions():
                 continue
                 
-            # ПРОВЕРКА АКТУАЛЬНОСТИ ТОЛЬКО ДЛЯ ПЕРВОЙ СТАВКИ
+            # предварительная проверка актуальности перед стартом серии
             if needs_signal_validation:
                 current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
 
@@ -223,31 +223,34 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             pct, balance = await self.check_payout_and_balance(symbol, stake, min_pct, wait_low)
             if pct is None:
                 continue
-                
+
             log(trade_summary(symbol, format_amount(stake), self._trade_minutes, series_direction, pct) + f" (step {step_idx + 1})")
 
-            if needs_signal_validation:
-                current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
-                if self._trade_type == "classic":
-                    is_valid, reason = self._is_signal_valid_for_classic(
-                        signal_data,
-                        current_time,
-                        for_placement=True,
-                    )
-                else:
-                    sprint_payload = signal_data
-                    if not sprint_payload.get('timestamp'):
-                        sprint_payload = {'timestamp': signal_received_time}
-                    is_valid, reason = self._is_signal_valid_for_sprint(
-                        sprint_payload,
-                        current_time,
-                    )
+            # Финальная проверка актуальности перед размещением сделки
+            # Нужна на каждом шаге: при ожидании высокого payout можно
+            # перепрыгнуть одну-две свечи и вернуться к ставке по
+            # устаревшему сигналу или времени экспирации.
+            current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
+            if self._trade_type == "classic":
+                is_valid, reason = self._is_signal_valid_for_classic(
+                    signal_data,
+                    current_time,
+                    for_placement=True,
+                )
+            else:
+                sprint_payload = signal_data
+                if not sprint_payload.get('timestamp'):
+                    sprint_payload = {'timestamp': signal_received_time}
+                is_valid, reason = self._is_signal_valid_for_sprint(
+                    sprint_payload,
+                    current_time,
+                )
 
-                if not is_valid:
-                    log(signal_not_actual_for_placement(symbol, reason))
-                    return series_left
+            if not is_valid:
+                log(signal_not_actual_for_placement(symbol, reason))
+                return series_left
 
-                needs_signal_validation = False
+            needs_signal_validation = False
 
             try:
                 demo_now = await is_demo_account(self.http_client)
