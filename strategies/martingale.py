@@ -8,7 +8,7 @@ from strategies.base_trading_strategy import BaseTradingStrategy, _minutes_from_
 from strategies.constants import MOSCOW_TZ
 from core.time_utils import format_local_time
 from core.money import format_amount
-from core.intrade_api_async import is_demo_account
+from core.intrade_api_async import is_demo_account, get_current_percent
 from strategies.log_messages import (
     repeat_count_empty,
     series_already_active,
@@ -80,6 +80,87 @@ class MartingaleStrategy(BaseTradingStrategy):
         self._active_series: dict[str, bool] = {}
         self._series_remaining: dict[str, int] = {}
 
+        # Очередь сигналов на время низкого payout по ключу сделки
+        # trade_key -> list[signal_data]
+        self._low_payout_queues: dict[str, list[dict]] = {}
+
+    # =====================================================================
+    # ВСПОМОГАТЕЛЬНОЕ: расчёт времени следующей свечи для classic
+    # =====================================================================
+
+    def _calc_next_candle_from_now(self, timeframe: str) -> datetime:
+        """
+        Для classic: вернуть время начала СЛЕДУЮЩЕЙ свечи относительно текущего момента.
+        Привязка к размеру таймфрейма (M1, M5, M15 и т.д.).
+        """
+        now = datetime.now(ZoneInfo(MOSCOW_TZ))
+        tf_minutes = _minutes_from_timeframe(timeframe)
+
+        base = now.replace(second=0, microsecond=0)
+
+        total_min = base.hour * 60 + base.minute
+        next_total = (total_min // tf_minutes + 1) * tf_minutes  # ближайший следующий слот
+
+        days_add = next_total // (24 * 60)
+        minutes_in_day = next_total % (24 * 60)
+        hour = minutes_in_day // 60
+        minute = minutes_in_day % 60
+
+        next_dt = (base + timedelta(days=days_add)).replace(hour=hour, minute=minute)
+        return next_dt
+
+    async def _is_payout_low_now(self, symbol: str) -> bool:
+        """
+        Проверка, низкий ли payout прямо сейчас (без запуска серии).
+        Используем базовый размер ставки и текущие торговые минуты.
+        """
+        min_pct = int(self.params.get("min_percent", 70))
+        stake = float(self.params.get("base_investment", 100))
+        account_ccy = self._anchor_ccy
+
+        try:
+            pct = await get_current_percent(
+                self.http_client,
+                investment=stake,
+                option=symbol,
+                minutes=self._trade_minutes,
+                account_ccy=account_ccy,
+                trade_type=self._trade_type,
+            )
+        except Exception:
+            pct = None
+
+        if pct is None:
+            # Не смогли узнать payout — считаем, что сейчас торговать не хотим
+            self._status("ожидание процента")
+            return True
+
+        if pct < min_pct:
+            self._status("ожидание высокого процента")
+            return True
+
+        return False
+
+    def _enqueue_low_payout_signal(self, trade_key: str, signal_data: dict) -> None:
+        """Кладём сигнал в очередь, пока payout низкий."""
+        self._low_payout_queues.setdefault(trade_key, []).append(signal_data)
+
+    def _pop_latest_from_low_payout_queue(self, trade_key: str) -> Optional[dict]:
+        """
+        Берём самый свежий сигнал из очереди для данного trade_key.
+        После этого очередь очищается.
+        """
+        queue = self._low_payout_queues.get(trade_key)
+        if not queue:
+            return None
+        latest = queue[-1]
+        self._low_payout_queues[trade_key] = []
+        return latest
+
+    # =====================================================================
+    # ПУБЛИЧНЫЕ МЕТОДЫ
+    # =====================================================================
+
     def is_series_active(self, trade_key: str) -> bool:
         """Проверка, выполняется ли серия для указанного ключа."""
         return self._active_series.get(trade_key, False)
@@ -92,15 +173,41 @@ class MartingaleStrategy(BaseTradingStrategy):
 
         log = self.log or (lambda s: None)
 
-        # 🔴 ПРОВЕРКА: нет ли активной серии для этой пары+таймфрейма
         trade_key = f"{symbol}_{timeframe}"
+
+        # 1) Если уже есть активная серия по этому ключу — как раньше:
+        #    просто отдаём сигнал в общую очередь StrategyCommon
         if trade_key in self._active_series and self._active_series[trade_key]:
             log(series_already_active(symbol, timeframe))
-            # Передаем сигнал в систему очередей StrategyCommon
             if hasattr(self, "_common"):
                 await self._common._handle_pending_signal(trade_key, signal_data)
             return
 
+        # 2) Если НЕТ активной серии — сначала проверяем payout.
+        #    Если payout низкий — не запускаем серию, просто кладём сигнал в
+        #    нашу "low payout" очередь и выходим.
+        if await self._is_payout_low_now(symbol):
+            self._enqueue_low_payout_signal(trade_key, signal_data)
+            return
+
+        # 3) Payout уже нормальный. Если есть очередь "низкого payout" —
+        #    добавляем туда текущий сигнал и берём самый свежий оттуда.
+        queued_signal = self._pop_latest_from_low_payout_queue(trade_key)
+        if queued_signal is not None:
+            # Добавляем текущий в конец и снова берём последний — это будет
+            # либо самый новый из старых, либо этот сигнал, если он свежее.
+            self._enqueue_low_payout_signal(trade_key, signal_data)
+            queued_signal = self._pop_latest_from_low_payout_queue(trade_key)
+            if queued_signal is not None:
+                signal_data = queued_signal
+                symbol = signal_data["symbol"]
+                timeframe = signal_data["timeframe"]
+                direction = signal_data["direction"]
+
+        # 4) К этому моменту:
+        #    - нет активной серии
+        #    - payout нормальный
+        #    - signal_data — самый свежий актуальный сигнал
         max_series = int(self.params.get("repeat_count", 10))
         remaining_series = self._series_remaining.get(trade_key)
         if remaining_series is None:
@@ -171,7 +278,6 @@ class MartingaleStrategy(BaseTradingStrategy):
 
         finally:
             if series_started:
-                # 🔴 ВАЖНО: Освобождаем серию после завершения
                 self._active_series.pop(trade_key, None)
                 log(series_completed(symbol, timeframe, "Мартингейл"))
 
@@ -213,10 +319,10 @@ class MartingaleStrategy(BaseTradingStrategy):
             if not await self.ensure_account_conditions():
                 continue
 
-            # ПРОВЕРКА АКТУАЛЬНОСТИ ТОЛЬКО ДЛЯ ПЕРВОЙ СТАВКИ В СЕРИИ
             current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
 
-            if not did_place_any_trade:  # ТОЛЬКО перед первой ставкой в новой серии
+            # ПРОВЕРКА АКТУАЛЬНОСТИ ТОЛЬКО ДЛЯ ПЕРВОЙ СТАВКИ В СЕРИИ
+            if not did_place_any_trade:
                 if self._trade_type == "classic":
                     is_valid, reason = self._is_signal_valid_for_classic(
                         signal_data,
@@ -251,6 +357,8 @@ class MartingaleStrategy(BaseTradingStrategy):
                 wait_low,
             )
             if pct is None:
+                # payout низкий или проблема с балансом → ждём и пробуем позже,
+                # но сигнал и серия уже закреплены (это норм если серия уже идёт).
                 continue
 
             log(
@@ -268,15 +376,14 @@ class MartingaleStrategy(BaseTradingStrategy):
             current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
 
             if self._trade_type == "classic":
-                # Сохраняем исходный лимит возраста сигнала
                 original_max_age = self.params.get("classic_signal_max_age_sec", 170.0)
 
                 if had_non_win:
-                    # После LOSS/PUSH/UNKNOWN расширяем окно до 2 * TF
+                    # После LOSS/PUSH/UNKNOWN —
+                    #   расширяем окно до 2 * TF и отключаем проверку next_expire
                     tf_minutes = _minutes_from_timeframe(timeframe)
                     extended_max_age = tf_minutes * 2 * 60  # 2 * TF в секундах
                     self.params["classic_signal_max_age_sec"] = extended_max_age
-                    # Отключаем проверку next_expire и минимального времени до свечи
                     for_placement_flag = False
                 else:
                     # Первая сделка по сигналу — обычная базовая логика
@@ -289,7 +396,6 @@ class MartingaleStrategy(BaseTradingStrategy):
                         for_placement=for_placement_flag,
                     )
                 finally:
-                    # Восстанавливаем исходный лимит возраста
                     self.params["classic_signal_max_age_sec"] = original_max_age
             else:
                 sprint_payload = signal_data
@@ -303,6 +409,10 @@ class MartingaleStrategy(BaseTradingStrategy):
             if not is_valid:
                 log(signal_not_actual_for_placement(symbol, reason))
                 return
+
+            # Для classic: всегда следующая свеча от текущего момента
+            if self._trade_type == "classic":
+                self._next_expire_dt = self._calc_next_candle_from_now(timeframe)
 
             # Определяем режим аккаунта
             try:
@@ -371,20 +481,21 @@ class MartingaleStrategy(BaseTradingStrategy):
                 log(result_unknown(symbol, treat_as_loss=True))
                 step += 1
                 last_outcome_was_loss = True
-                had_non_win = True  # UNKNOWN считаем как не-WIN
+                had_non_win = True
 
                 if hasattr(self, "_common") and self._common is not None:
                     removed = self._common.discard_signals_for(trade_key)
                     if removed:
                         log(trade_result_removed(symbol, removed, "LOSS"))
+
             elif profit > 0:
                 log(win_with_series_finish(symbol, format_amount(profit)))
-                # WIN — серия завершается, расширенное окно дальше не нужно
                 break
+
             elif abs(profit) < 1e-9:
                 log(push_repeat(symbol))
                 last_outcome_was_loss = False
-                had_non_win = True  # PUSH — включаем расширенное окно
+                had_non_win = True
 
                 if hasattr(self, "_common") and self._common is not None:
                     removed = self._common.discard_signals_for(trade_key)
@@ -392,9 +503,9 @@ class MartingaleStrategy(BaseTradingStrategy):
                         log(trade_result_removed(symbol, removed, "PUSH"))
             else:
                 log(loss_with_increase(symbol, format_amount(profit)))
-                step += 1  # Продолжаем с тем же направлением и исходным сигналом
+                step += 1
                 last_outcome_was_loss = True
-                had_non_win = True  # LOSS — включаем расширенное окно
+                had_non_win = True
 
                 if hasattr(self, "_common") and self._common is not None:
                     removed = self._common.discard_signals_for(trade_key)
@@ -403,11 +514,8 @@ class MartingaleStrategy(BaseTradingStrategy):
 
             await self.sleep(0.2)
 
-            # Обновляем время экспирации для classic
-            if self._trade_type == "classic" and self._next_expire_dt is not None:
-                self._next_expire_dt += timedelta(
-                    minutes=_minutes_from_timeframe(timeframe)
-                )
+            # Для classic внутри серии НЕ сдвигаем _next_expire_dt вручную:
+            # он каждый раз рассчитывается заново в _calc_next_candle_from_now.
 
         if did_place_any_trade:
             if step >= max_steps:
@@ -415,6 +523,10 @@ class MartingaleStrategy(BaseTradingStrategy):
             series_left = max(0, series_left - 1)
             self._series_remaining[trade_key] = series_left
             log(series_remaining(symbol, series_left))
+
+    # =====================================================================
+    # СЛУЖЕБНЫЕ
+    # =====================================================================
 
     def _calculate_trade_duration(self, symbol: str) -> tuple[float, float]:
         """Рассчитывает длительность сделки"""
@@ -486,6 +598,7 @@ class MartingaleStrategy(BaseTradingStrategy):
         super().stop()
         self._active_series.clear()
         self._series_remaining.clear()
+        self._low_payout_queues.clear()
 
     def update_params(self, **params):
         """Обновление параметров стратегии"""
