@@ -96,6 +96,7 @@ class MartingaleStrategy(BaseTradingStrategy):
         now = datetime.now(ZoneInfo(MOSCOW_TZ))
         tf_minutes = _minutes_from_timeframe(timeframe)
 
+        # Отбрасываем секунды/микросекунды
         base = now.replace(second=0, microsecond=0)
 
         total_min = base.hour * 60 + base.minute
@@ -131,7 +132,6 @@ class MartingaleStrategy(BaseTradingStrategy):
             pct = None
 
         if pct is None:
-            # Не смогли узнать payout — считаем, что сейчас торговать не хотим
             self._status("ожидание процента")
             return True
 
@@ -194,8 +194,6 @@ class MartingaleStrategy(BaseTradingStrategy):
         #    добавляем туда текущий сигнал и берём самый свежий оттуда.
         queued_signal = self._pop_latest_from_low_payout_queue(trade_key)
         if queued_signal is not None:
-            # Добавляем текущий в конец и снова берём последний — это будет
-            # либо самый новый из старых, либо этот сигнал, если он свежее.
             self._enqueue_low_payout_signal(trade_key, signal_data)
             queued_signal = self._pop_latest_from_low_payout_queue(trade_key)
             if queued_signal is not None:
@@ -302,10 +300,9 @@ class MartingaleStrategy(BaseTradingStrategy):
 
         step = 0
         did_place_any_trade = False
-        last_outcome_was_loss = False
 
-        # Был ли уже по этому сигналу не-WIN (LOSS / PUSH / UNKNOWN)
-        had_non_win = False
+        # Счётчик подряд идущих не-WIN (LOSS / PUSH / UNKNOWN)
+        consecutive_non_win = 0
 
         series_direction = initial_direction
         signal_at_str = signal_data.get("signal_time_str") or format_local_time(
@@ -357,8 +354,7 @@ class MartingaleStrategy(BaseTradingStrategy):
                 wait_low,
             )
             if pct is None:
-                # payout низкий или проблема с балансом → ждём и пробуем позже,
-                # но сигнал и серия уже закреплены (это норм если серия уже идёт).
+                # payout низкий или проблема с балансом → ждём и пробуем позже
                 continue
 
             log(
@@ -378,16 +374,15 @@ class MartingaleStrategy(BaseTradingStrategy):
             if self._trade_type == "classic":
                 original_max_age = self.params.get("classic_signal_max_age_sec", 170.0)
 
-                if had_non_win:
-                    # После LOSS/PUSH/UNKNOWN —
-                    #   расширяем окно до 2 * TF и отключаем проверку next_expire
-                    tf_minutes = _minutes_from_timeframe(timeframe)
-                    extended_max_age = tf_minutes * 2 * 60  # 2 * TF в секундах
-                    self.params["classic_signal_max_age_sec"] = extended_max_age
-                    for_placement_flag = False
-                else:
-                    # Первая сделка по сигналу — обычная базовая логика
-                    for_placement_flag = True
+                # Окно: (consecutive_non_win + 1) * TF (в секундах)
+                tf_minutes = _minutes_from_timeframe(timeframe)
+                candles = max(1, 1 + consecutive_non_win)
+                extended_max_age = candles * tf_minutes * 60
+                self.params["classic_signal_max_age_sec"] = extended_max_age
+
+                # Для первой сделки (consecutive_non_win == 0) оставляем for_placement=True,
+                # чтобы учитывать next_expire. Для повторных (>=1) — только возраст.
+                for_placement_flag = consecutive_non_win == 0
 
                 try:
                     is_valid, reason = self._is_signal_valid_for_classic(
@@ -480,8 +475,7 @@ class MartingaleStrategy(BaseTradingStrategy):
             if profit is None:
                 log(result_unknown(symbol, treat_as_loss=True))
                 step += 1
-                last_outcome_was_loss = True
-                had_non_win = True
+                consecutive_non_win += 1
 
                 if hasattr(self, "_common") and self._common is not None:
                     removed = self._common.discard_signals_for(trade_key)
@@ -490,12 +484,12 @@ class MartingaleStrategy(BaseTradingStrategy):
 
             elif profit > 0:
                 log(win_with_series_finish(symbol, format_amount(profit)))
+                # WIN — серия завершается, окно дальше не растёт
                 break
 
             elif abs(profit) < 1e-9:
                 log(push_repeat(symbol))
-                last_outcome_was_loss = False
-                had_non_win = True
+                consecutive_non_win += 1
 
                 if hasattr(self, "_common") and self._common is not None:
                     removed = self._common.discard_signals_for(trade_key)
@@ -504,8 +498,7 @@ class MartingaleStrategy(BaseTradingStrategy):
             else:
                 log(loss_with_increase(symbol, format_amount(profit)))
                 step += 1
-                last_outcome_was_loss = True
-                had_non_win = True
+                consecutive_non_win += 1
 
                 if hasattr(self, "_common") and self._common is not None:
                     removed = self._common.discard_signals_for(trade_key)
