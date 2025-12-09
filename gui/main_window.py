@@ -934,6 +934,13 @@ class MainWindow(QWidget):
         if tid:
             self.bot_pending_trades.get(bot, set()).discard(tid)
 
+        indicator = kw.get("indicator")
+        if not indicator:
+            indicator = (kw.get("meta") or {}).get("indicator")
+            if indicator:
+                kw = dict(kw)
+                kw["indicator"] = indicator
+
         # дальше — обычное добавление в таблицу сделок
         key = bot.strategy_kwargs.get("strategy_key", "")
         strat_label = self.strategy_label(key)
@@ -955,6 +962,10 @@ class MainWindow(QWidget):
         from time import time as _now
 
         payload = dict(kw)
+        if not payload.get("indicator"):
+            indicator = (payload.get("meta") or {}).get("indicator")
+            if indicator:
+                payload["indicator"] = indicator
         wait_seconds = float(payload.get("wait_seconds", 0.0))
         expected_end_ts = payload.get("expected_end_ts")
         if expected_end_ts is None:
