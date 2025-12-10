@@ -60,6 +60,15 @@ class MartingaleSettingsDialog(QDialog):
         parallel_label = QLabel("Обрабатывать множество сигналов")
         parallel_label.mousePressEvent = lambda event: self.parallel_trades.toggle()
 
+        self.common_series = QCheckBox()
+        self.common_series.setChecked(
+            bool(self.params.get("use_common_series", False))
+        )
+        common_series_label = QLabel("Общая серия для всех сигналов")
+        common_series_label.mousePressEvent = (
+            lambda event: self.common_series.toggle()
+        )
+
         form = QFormLayout()
         form.addRow("Базовая ставка", self.base_investment)
         form.addRow("Время экспирации (мин)", self.minutes)
@@ -69,6 +78,7 @@ class MartingaleSettingsDialog(QDialog):
         form.addRow("Коэффициент", self.coefficient)
         form.addRow("Мин. процент", self.min_percent)
         form.addRow(parallel_label, self.parallel_trades)
+        form.addRow(common_series_label, self.common_series)
 
         btns = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -96,4 +106,5 @@ class MartingaleSettingsDialog(QDialog):
             "coefficient": self.coefficient.value(),
             "min_percent": self.min_percent.value(),
             "allow_parallel_trades": bool(self.parallel_trades.isChecked()),
+            "use_common_series": bool(self.common_series.isChecked()),
         }

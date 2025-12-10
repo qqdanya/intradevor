@@ -23,4 +23,5 @@ DEFAULTS = {
     "classic_signal_max_age_sec": 170.0,
     "classic_trade_buffer_sec": 10.0,
     "classic_min_time_before_next_sec": 180.0,
+    "use_common_series": False,
 }

@@ -142,6 +142,17 @@ class BaseTradingStrategy(StrategyBase):
         self._planned_stakes: dict[str, float] = {}
 
     # === UI HELPERS ===
+    def build_trade_key(self, symbol: str, timeframe: str) -> str:
+        """Формирует ключ серии/сделок с учётом настройки общей серии."""
+
+        base_symbol = (symbol or "*").strip()
+        base_timeframe = (timeframe or "*").strip()
+
+        if self.params.get("use_common_series"):
+            return f"common_{self.strategy_name}"
+
+        return f"{base_symbol}_{base_timeframe}"
+
     def format_series_label(
         self, trade_key: str, *, series_left: int | None = None
     ) -> str | None:
@@ -447,7 +458,7 @@ class BaseTradingStrategy(StrategyBase):
             except Exception:
                 pass
 
-        trade_key = f"{symbol}_{timeframe}"
+        trade_key = self.build_trade_key(symbol, timeframe)
         # После завершения сделки планируемая ставка может измениться
         self._planned_stakes.pop(trade_key, None)
 
@@ -719,6 +730,9 @@ class BaseTradingStrategy(StrategyBase):
         if "allow_parallel_trades" in params:
             self._allow_parallel_trades = bool(params["allow_parallel_trades"])
             self.params["allow_parallel_trades"] = self._allow_parallel_trades
+
+        if "use_common_series" in params:
+            self.params["use_common_series"] = bool(params["use_common_series"])
 
         if "repeat_count" in params:
             try:

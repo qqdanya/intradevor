@@ -125,7 +125,7 @@ class StrategyCommon:
 
                 symbol = signal_data['symbol']
                 timeframe = signal_data['timeframe']
-                trade_key = f"{symbol}_{timeframe}"
+                trade_key = self.strategy.build_trade_key(symbol, timeframe)
 
                 self.strategy._last_signal_ver = ver
                 self.strategy._last_signal_at_str = signal_data['signal_time_str']

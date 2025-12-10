@@ -137,7 +137,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
     async def _process_fixed_trade(self, symbol: str, timeframe: str, direction: int, log, signal_received_time: datetime, signal_data: dict):
         """Обрабатывает одну сделку с фиксированной ставкой"""
         signal_at_str = signal_data.get('signal_time_str') or format_local_time(signal_received_time)
-        trade_key = f"{symbol}_{timeframe}"
+        trade_key = self.build_trade_key(symbol, timeframe)
         # Проверяем баланс
         try:
             bal, _, _ = await get_balance_info(
@@ -342,7 +342,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
     ):
         """Уведомляет о pending сделке"""
         placed_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-        trade_key = f"{symbol}_{timeframe}"
+        trade_key = self.build_trade_key(symbol, timeframe)
         if series_label is None:
             series_label = self.format_series_label(trade_key)
         self._set_planned_stake(trade_key, stake)

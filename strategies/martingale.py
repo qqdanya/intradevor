@@ -173,7 +173,7 @@ class MartingaleStrategy(BaseTradingStrategy):
 
         log = self.log or (lambda s: None)
 
-        trade_key = f"{symbol}_{timeframe}"
+        trade_key = self.build_trade_key(symbol, timeframe)
 
         # 1) Если уже есть активная серия по этому ключу — как раньше:
         #    просто отдаём сигнал в общую очередь StrategyCommon
@@ -553,7 +553,7 @@ class MartingaleStrategy(BaseTradingStrategy):
     ):
         """Уведомляет о pending сделке"""
         placed_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-        trade_key = f"{symbol}_{timeframe}"
+        trade_key = self.build_trade_key(symbol, timeframe)
         if series_label is None:
             series_label = self.format_series_label(trade_key)
         self._set_planned_stake(trade_key, stake)
