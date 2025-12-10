@@ -201,11 +201,31 @@ class BaseTradingStrategy(StrategyBase):
         max_series = int(self.params.get("repeat_count", 10))
         clamped = max(0, min(int(value), max_series))
         self._series_counters[trade_key] = clamped
+        self._check_all_series_completed(self._series_counters)
         return clamped
 
     def _reset_series_counter(self, trade_key: str) -> None:
         """Сбрасывает счетчик серий для указанного ключа сделки."""
         self._series_counters.pop(trade_key, None)
+
+    def _check_all_series_completed(self, series_map: dict[str, int]) -> None:
+        """Останавливает стратегию, если все серии для всех пар и ТФ завершены."""
+
+        if not (self._use_any_symbol and self._use_any_timeframe):
+            return
+
+        if not series_map:
+            return
+
+        try:
+            has_remaining = any(int(v) > 0 for v in series_map.values())
+        except Exception:
+            has_remaining = True
+
+        if has_remaining:
+            return
+
+        self._request_stop_when_idle("все серии завершены для всех валютных пар и таймфреймов")
 
     def _init_trading_params(self):
         """Инициализация торговых параметров"""

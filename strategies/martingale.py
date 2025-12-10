@@ -516,6 +516,7 @@ class MartingaleStrategy(BaseTradingStrategy):
             series_left = max(0, series_left - 1)
             self._series_remaining[trade_key] = series_left
             log(series_remaining(symbol, series_left))
+            self._check_all_series_completed(self._series_remaining)
 
     # =====================================================================
     # СЛУЖЕБНЫЕ
