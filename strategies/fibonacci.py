@@ -99,7 +99,7 @@ class FibonacciStrategy(BaseTradingStrategy):
         symbol = signal_data['symbol']
         timeframe = signal_data['timeframe']
         direction = signal_data['direction']
-        trade_key = f"{symbol}_{timeframe}"
+        trade_key = self.build_trade_key(symbol, timeframe)
 
         log = self.log or (lambda s: None)
 
@@ -464,7 +464,7 @@ class FibonacciStrategy(BaseTradingStrategy):
     ):
         """Уведомляет о pending сделке"""
         placed_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-        trade_key = f"{symbol}_{timeframe}"
+        trade_key = self.build_trade_key(symbol, timeframe)
         if series_label is None:
             series_label = self.format_series_label(trade_key)
         self._set_planned_stake(trade_key, stake)

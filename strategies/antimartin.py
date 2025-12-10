@@ -92,7 +92,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
 
         log = self.log or (lambda s: None)
 
-        trade_key = f"{symbol}_{timeframe}"
+        trade_key = self.build_trade_key(symbol, timeframe)
         if trade_key in self._active_series and self._active_series[trade_key]:
             log(series_already_active(symbol, timeframe))
             if hasattr(self, '_common'):
@@ -365,7 +365,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
         series_label: Optional[str] = None,
     ):
         placed_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-        trade_key = f"{symbol}_{timeframe}"
+        trade_key = self.build_trade_key(symbol, timeframe)
         if series_label is None:
             series_label = self.format_series_label(trade_key)
         self._set_planned_stake(trade_key, stake)
