@@ -158,6 +158,47 @@ class MartingaleStrategy(BaseTradingStrategy):
         return latest
 
     # =====================================================================
+    # ВСПОМОГАТЕЛЬНОЕ: валидация sprint-сигнала для Мартингейла
+    # =====================================================================
+
+    def _is_sprint_signal_valid_for_martingale(
+        self,
+        signal_data: dict,
+        now_dt: datetime,
+        *,
+        consecutive_non_win: int,
+    ) -> tuple[bool, str]:
+        """
+        Специальная проверка актуальности sprint-сигнала для Мартингейла.
+
+        Базовый sprint в BaseTradingStrategy ограничен 5 секундами – это слишком жёстко
+        для повторных сделок по одному сигналу внутри серии.
+
+        Здесь окно растёт как:
+            window = (1 + consecutive_non_win) * trade_duration
+
+        где trade_duration = self._trade_minutes * 60 (секунд).
+        """
+        raw_ts = signal_data.get("timestamp")
+        if raw_ts is None:
+            return False, "нет timestamp у сигнала"
+
+        if raw_ts.tzinfo is None:
+            signal_ts = raw_ts.replace(tzinfo=ZoneInfo(MOSCOW_TZ))
+        else:
+            signal_ts = raw_ts.astimezone(ZoneInfo(MOSCOW_TZ))
+
+        trade_sec = float(self._trade_minutes) * 60.0
+        candles = max(1, 1 + consecutive_non_win)
+        max_age = candles * trade_sec
+
+        age = (now_dt - signal_ts).total_seconds()
+        if age > max_age:
+            return False, f"сигналу {age:.1f}с > {max_age:.0f}с"
+
+        return True, "актуален"
+
+    # =====================================================================
     # ПУБЛИЧНЫЕ МЕТОДЫ
     # =====================================================================
 
@@ -253,6 +294,7 @@ class MartingaleStrategy(BaseTradingStrategy):
                     log(signal_not_actual(symbol, "classic", reason))
                     return
             else:
+                # Для СПРИНТА при запуске серии — жёсткая проверка 5 секунд
                 is_valid, reason = self._is_signal_valid_for_sprint(
                     signal_data,
                     current_time,
@@ -333,6 +375,7 @@ class MartingaleStrategy(BaseTradingStrategy):
                         log(signal_not_actual_for_placement(symbol, reason))
                         return
                 else:
+                    # Первая ставка sprint — опять строгие 5 секунд
                     is_valid, reason = self._is_signal_valid_for_sprint(
                         {"timestamp": signal_received_time},
                         current_time,
@@ -395,13 +438,14 @@ class MartingaleStrategy(BaseTradingStrategy):
                     )
                 finally:
                     self.params["classic_signal_max_age_sec"] = original_max_age
+
             else:
-                sprint_payload = signal_data
-                if not sprint_payload.get("timestamp"):
-                    sprint_payload = {"timestamp": signal_received_time}
-                is_valid, reason = self._is_signal_valid_for_sprint(
-                    sprint_payload,
+                # СПРИНТ: для повторных ставок используем мягкую проверку по окну,
+                # а не строгие 5 секунд.
+                is_valid, reason = self._is_sprint_signal_valid_for_martingale(
+                    signal_data,
                     current_time,
+                    consecutive_non_win=consecutive_non_win,
                 )
 
             if not is_valid:
