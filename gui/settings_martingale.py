@@ -5,7 +5,9 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QDialogButtonBox,
     QCheckBox,
+    QHBoxLayout,
     QLabel,
+    QWidget,
 )
 from strategies.martingale import _minutes_from_timeframe
 from core.policy import normalize_sprint
@@ -27,6 +29,12 @@ class MartingaleSettingsDialog(QDialog):
         # Для BTC — минимум 5, для остальных — 1 (но 2 всё равно отфильтруем перед сохранением)
         self.minutes.setRange(5 if symbol == "BTCUSDT" else 1, 500)
         self.minutes.setValue(default_minutes)
+
+        self.auto_minutes = QCheckBox("Авто")
+        self.auto_minutes.setChecked(bool(self.params.get("auto_minutes", False)))
+        self.auto_minutes.toggled.connect(
+            lambda checked: self.minutes.setEnabled(not checked)
+        )
 
         self.base_investment = QSpinBox()
         self.base_investment.setRange(1, 50000)
@@ -70,8 +78,16 @@ class MartingaleSettingsDialog(QDialog):
         )
 
         form = QFormLayout()
+        minutes_row = QWidget()
+        minutes_layout = QHBoxLayout(minutes_row)
+        minutes_layout.setContentsMargins(0, 0, 0, 0)
+        minutes_layout.setSpacing(6)
+        minutes_layout.addWidget(self.minutes)
+        minutes_layout.addWidget(self.auto_minutes)
+        minutes_layout.addStretch(1)
+
         form.addRow("Базовая ставка", self.base_investment)
-        form.addRow("Время экспирации (мин)", self.minutes)
+        form.addRow("Время экспирации (мин)", minutes_row)
         form.addRow("Макс. шагов", self.max_steps)
         form.addRow("Повторов серии", self.repeat_count)
         form.addRow("Мин. баланс", self.min_balance)
@@ -92,13 +108,15 @@ class MartingaleSettingsDialog(QDialog):
     def get_params(self) -> dict:
         # Мягкая нормализация по policy: 2 → 3 (для не-BTC), <5 → 5 (для BTC), и т.д.
         symbol = str(self.params.get("symbol", ""))
-        m = int(self.minutes.value())
-        norm = normalize_sprint(symbol, m)
+        auto_minutes = bool(self.auto_minutes.isChecked())
+        raw_minutes = _minutes_from_timeframe(tf) if auto_minutes else int(self.minutes.value())
+        norm = normalize_sprint(symbol, raw_minutes)
         if norm is None:
-            norm = 5 if symbol == "BTCUSDT" else (1 if m < 3 else max(3, min(500, m)))
+            norm = 5 if symbol == "BTCUSDT" else (1 if raw_minutes < 3 else max(3, min(500, raw_minutes)))
 
         return {
             "minutes": int(norm),  # ⬅️ НОВОЕ: вернули минуты
+            "auto_minutes": auto_minutes,
             "base_investment": self.base_investment.value(),
             "max_steps": self.max_steps.value(),
             "repeat_count": self.repeat_count.value(),

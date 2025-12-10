@@ -240,15 +240,14 @@ class BaseTradingStrategy(StrategyBase):
 
     def _init_trading_params(self):
         """Инициализация торговых параметров"""
+        self._auto_minutes = bool(self.params.get("auto_minutes", False))
+        self.params["auto_minutes"] = self._auto_minutes
+
         raw_minutes = int(self.params.get("minutes", _minutes_from_timeframe(self.timeframe)))
-        norm = normalize_sprint(self.symbol, raw_minutes)
-        if norm is None:
-            fallback = _minutes_from_timeframe(self.timeframe)
-            norm = normalize_sprint(self.symbol, fallback) or fallback
-            if self.log:
-                self.log(minutes_invalid(self.symbol, raw_minutes, norm))
-        self._trade_minutes = int(norm)
-        self.params["minutes"] = self._trade_minutes
+        if self._auto_minutes and str(self.params.get("trade_type", "sprint")).lower() == "sprint":
+            raw_minutes = _minutes_from_timeframe(self.timeframe)
+
+        self._apply_minutes(raw_minutes)
         self._trade_type = str(self.params.get("trade_type", "sprint")).lower()
         self.params["trade_type"] = self._trade_type
 
@@ -726,7 +725,13 @@ class BaseTradingStrategy(StrategyBase):
         if "trade_type" in params:
             self._trade_type = str(params["trade_type"]).lower()
             self.params["trade_type"] = self._trade_type
-            
+
+        if "auto_minutes" in params:
+            self._auto_minutes = bool(params["auto_minutes"])
+            self.params["auto_minutes"] = self._auto_minutes
+            if self._auto_minutes and self._trade_type == "sprint":
+                self._maybe_set_auto_minutes(self.timeframe)
+
         if "allow_parallel_trades" in params:
             self._allow_parallel_trades = bool(params["allow_parallel_trades"])
             self.params["allow_parallel_trades"] = self._allow_parallel_trades
@@ -743,22 +748,34 @@ class BaseTradingStrategy(StrategyBase):
             for key in list(self._series_counters.keys()):
                 self._series_counters[key] = max(0, min(self._series_counters[key], max_series))
 
+    def _apply_minutes(self, requested: int, allow_correction: bool = False) -> None:
+        """Нормализует и сохраняет длительность сделки."""
+        norm = normalize_sprint(self.symbol, requested)
+        if norm is None:
+            fallback = _minutes_from_timeframe(self.timeframe)
+            norm = normalize_sprint(self.symbol, fallback) or fallback
+            if self.log and allow_correction:
+                self.log(minutes_invalid(self.symbol, requested, norm, corrected=True))
+            elif self.log:
+                self.log(minutes_invalid(self.symbol, requested, norm))
+        self._trade_minutes = int(norm)
+        self.params["minutes"] = self._trade_minutes
+
+    def _maybe_set_auto_minutes(self, timeframe: str) -> None:
+        """Выставляет время сделки по таймфрейму сигнала, если включён авто-режим."""
+        if not (self._auto_minutes and self._trade_type == "sprint"):
+            return
+
+        raw = _minutes_from_timeframe(timeframe)
+        self._apply_minutes(raw)
+
     def _update_minutes_param(self, minutes):
         """Обновление параметра минут"""
         try:
             requested = int(minutes)
         except Exception:
             return
-        norm = normalize_sprint(self.symbol, requested)
-        if norm is None:
-            if self.symbol == "BTCUSDT":
-                norm = 5 if requested < 5 else 500
-            else:
-                norm = 1 if requested < 3 else max(3, min(500, requested))
-            if self.log:
-                self.log(minutes_invalid(self.symbol, requested, norm, corrected=True))
-        self._trade_minutes = int(norm)
-        self.params["minutes"] = self._trade_minutes
+        self._apply_minutes(requested, allow_correction=True)
 
     def _update_timeframe_param(self, timeframe):
         """Обновление параметра таймфрейма"""
@@ -767,7 +784,9 @@ class BaseTradingStrategy(StrategyBase):
         self._use_any_timeframe = tf_raw in (ALL_TF_LABEL, "*")
         self.timeframe = "*" if self._use_any_timeframe else tf
         self.params["timeframe"] = self.timeframe
-        if "minutes" not in self.params:
+        if self._auto_minutes and self._trade_type == "sprint":
+            self._maybe_set_auto_minutes(self.timeframe)
+        elif "minutes" not in self.params:
             raw = _minutes_from_timeframe(self.timeframe)
             norm = normalize_sprint(self.symbol, raw) or raw
             self._trade_minutes = int(norm)

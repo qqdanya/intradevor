@@ -90,6 +90,8 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
         timeframe = signal_data['timeframe']
         direction = signal_data['direction']
 
+        self._maybe_set_auto_minutes(timeframe)
+
         log = self.log or (lambda s: None)
 
         trade_key = self.build_trade_key(symbol, timeframe)
