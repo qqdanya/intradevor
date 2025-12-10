@@ -76,6 +76,8 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         symbol = signal_data['symbol']
         timeframe = signal_data['timeframe']
         direction = signal_data['direction']
+
+        self._maybe_set_auto_minutes(timeframe)
         trade_key = self.build_trade_key(symbol, timeframe)
 
         log = self.log or (lambda s: None)

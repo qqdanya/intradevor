@@ -171,6 +171,7 @@ class StrategyControlDialog(QWidget):
         symbol = str(self.bot.strategy_kwargs.get("symbol", ""))
         tf = str(getv("timeframe", self.bot.strategy_kwargs.get("timeframe", "M1")))
         default_minutes = int(getv("minutes", _minutes_from_timeframe(tf)))
+        self.timeframe = tf
 
         self.trade_type = QComboBox()
         self.trade_type.addItems(["sprint", "classic"])
@@ -187,6 +188,19 @@ class StrategyControlDialog(QWidget):
         strategy_key = str(self.bot.strategy_kwargs.get("strategy_key", "")).lower()
         self.strategy_key = strategy_key
         self.minutes = None
+        self.auto_minutes = QCheckBox("Авто")
+        self.auto_minutes.setChecked(bool(getv("auto_minutes", False)))
+
+        def minutes_row() -> QWidget:
+            row = QWidget()
+            rh = QHBoxLayout(row)
+            rh.setContentsMargins(0, 0, 0, 0)
+            rh.setSpacing(6)
+            if self.minutes:
+                rh.addWidget(self.minutes)
+            rh.addWidget(self.auto_minutes)
+            rh.addStretch(1)
+            return row
 
         # ---- шаблоны ----
         self.templates = load_templates(self.strategy_key)
@@ -241,7 +255,7 @@ class StrategyControlDialog(QWidget):
 
             form.addRow("Тип торговли", self.trade_type)
             form.addRow("Базовая ставка", self.base_investment)
-            form.addRow("Время сделки (мин)", self.minutes)
+            form.addRow("Время сделки (мин)", minutes_row())
             form.addRow("Макс. сделок в серии", self.max_steps)
             form.addRow("Повторов серии", self.repeat_count)
             form.addRow("Мин. баланс", self.min_balance)
@@ -271,7 +285,7 @@ class StrategyControlDialog(QWidget):
 
             form.addRow("Тип торговли", self.trade_type)
             form.addRow("Базовая ставка", self.base_investment)
-            form.addRow("Время сделки (мин)", self.minutes)
+            form.addRow("Время сделки (мин)", minutes_row())
             form.addRow("Количество ставок", self.repeat_count)
             form.addRow("Мин. баланс", self.min_balance)
             form.addRow("Мин. процент", self.min_percent)
@@ -308,7 +322,7 @@ class StrategyControlDialog(QWidget):
 
             form.addRow("Тип торговли", self.trade_type)
             form.addRow("Базовая ставка", self.base_investment)
-            form.addRow("Время сделки (мин)", self.minutes)
+            form.addRow("Время сделки (мин)", minutes_row())
             form.addRow("Макс. шагов", self.max_steps)
             form.addRow("Повторов серии", self.repeat_count)
             form.addRow("Мин. баланс", self.min_balance)
@@ -326,9 +340,14 @@ class StrategyControlDialog(QWidget):
 
         def _update_minutes_enabled(text: str):
             if self.minutes is not None:
-                self.minutes.setEnabled(text != "classic")
+                self.minutes.setEnabled(text != "classic" and not self.auto_minutes.isChecked())
 
         self.trade_type.currentTextChanged.connect(_update_minutes_enabled)
+        self.auto_minutes.toggled.connect(
+            lambda checked: self.minutes.setEnabled(
+                self.trade_type.currentText() != "classic" and not checked
+            )
+        )
         _update_minutes_enabled(self.trade_type.currentText())
 
         # добавить форму после строки шаблонов
@@ -531,9 +550,14 @@ class StrategyControlDialog(QWidget):
         symbol = str(self.bot.strategy_kwargs.get("symbol", ""))
         trade_type = self.trade_type.currentText()
         m = int(self.minutes.value()) if self.minutes else 0
+        auto_minutes = bool(self.auto_minutes.isChecked()) if self.minutes else False
         norm = m
+        raw_minutes = m
+        if auto_minutes and trade_type == "sprint":
+            raw_minutes = _minutes_from_timeframe(self.timeframe)
+            norm = raw_minutes
         if trade_type != "classic" and self.minutes is not None:
-            norm = normalize_sprint(symbol, m)
+            norm = normalize_sprint(symbol, raw_minutes)
             if norm is None:
                 box = QMessageBox(self)
                 box.setIcon(QMessageBox.Icon.Warning)
@@ -555,6 +579,7 @@ class StrategyControlDialog(QWidget):
                 "min_balance": self.min_balance.value(),
                 "min_percent": self.min_percent.value(),
                 "double_entry": bool(self.double_entry.isChecked()),
+                "auto_minutes": auto_minutes,
             }
             if trade_type != "classic" and self.minutes is not None:
                 new_params["minutes"] = int(norm)
@@ -564,6 +589,7 @@ class StrategyControlDialog(QWidget):
                 "repeat_count": self.repeat_count.value(),
                 "min_balance": self.min_balance.value(),
                 "min_percent": self.min_percent.value(),
+                "auto_minutes": auto_minutes,
             }
             if trade_type != "classic" and self.minutes is not None:
                 new_params["minutes"] = int(norm)
@@ -574,6 +600,7 @@ class StrategyControlDialog(QWidget):
                 "repeat_count": self.repeat_count.value(),
                 "min_balance": self.min_balance.value(),
                 "min_percent": self.min_percent.value(),
+                "auto_minutes": auto_minutes,
             }
             if getattr(self, "coefficient", None) is not None:
                 new_params["coefficient"] = round(float(self.coefficient.value()), 2)
@@ -639,6 +666,8 @@ class StrategyControlDialog(QWidget):
         for k, v in params.items():
             if k == "trade_type":
                 self.trade_type.setCurrentText(str(v))
+            elif k == "auto_minutes" and hasattr(self, "auto_minutes"):
+                self.auto_minutes.setChecked(bool(v))
             elif k == "minutes" and self.minutes is not None:
                 self.minutes.setValue(int(v))
             elif k == "base_investment" and hasattr(self, "base_investment"):
