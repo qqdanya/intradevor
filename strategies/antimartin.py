@@ -44,11 +44,14 @@ ANTIMARTINGALE_DEFAULTS = {
 
 
 class AntiMartingaleStrategy(BaseTradingStrategy):
-    """Антимартингейл с очередями и параллельной обработкой.
-    Отличия:
+    """
+    Антимартингейл с очередями и параллельной обработкой.
+
+    Отличия от Мартина:
       - Увеличиваем ставку ПОСЛЕ WIN на размер фактического выигрыша (парлей).
-      - Серию продолжаем только после WIN; при LOSS серия завершается.
-      - Из очереди сигналов (StrategyCommon) удаляем после WIN или PUSH (refund).
+      - Серию продолжаем после WIN или PUSH.
+      - При LOSS или UNKNOWN серия завершается.
+      - Из очереди сигналов (StrategyCommon) удаляем после WIN или PUSH.
     """
 
     def __init__(
@@ -164,18 +167,21 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
         signal_data: dict,
         now_dt: datetime,
         *,
-        consecutive_non_win: int,
+        continuation_streak: int,
     ) -> tuple[bool, str]:
         """
-        Специальная проверка актуальности sprint-сигнала для серийной торговли (Антимартин).
+        Специальная проверка актуальности sprint-сигнала для серийной торговли.
 
         Базовый sprint в BaseTradingStrategy ограничен 5 секундами — этого мало
         для повторных сделок по одному сигналу внутри серии.
 
         Здесь окно растёт как:
-            window = (1 + consecutive_non_win) * trade_duration
+            window = (1 + continuation_streak) * trade_duration
 
         где trade_duration = self._trade_minutes * 60 (секунд).
+
+        continuation_streak — количество предыдущих шагов серии,
+        которые дали продолжение (WIN или PUSH).
         """
         raw_ts = signal_data.get("timestamp")
         if raw_ts is None:
@@ -187,7 +193,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
             signal_ts = raw_ts.astimezone(ZoneInfo(MOSCOW_TZ))
 
         trade_sec = float(self._trade_minutes) * 60.0
-        candles = max(1, 1 + consecutive_non_win)
+        candles = max(1, 1 + continuation_streak)
         max_age = candles * trade_sec
 
         age = (now_dt - signal_ts).total_seconds()
@@ -340,8 +346,8 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
         step = 0
         did_place_any_trade = False
 
-        # Счётчик подряд идущих не-WIN (PUSH / UNKNOWN)
-        consecutive_non_win = 0
+        # Счётчик подряд идущих шагов, которые дали продолжение (WIN или PUSH)
+        continuation_streak = 0
 
         series_direction = initial_direction
         max_steps = int(self.params.get("max_steps", 3))
@@ -413,15 +419,15 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
             if self._trade_type == "classic":
                 original_max_age = self.params.get("classic_signal_max_age_sec", 170.0)
 
-                # Окно: (consecutive_non_win + 1) * TF (в секундах)
+                # Окно: (1 + continuation_streak) * TF (в секундах)
                 tf_minutes = _minutes_from_timeframe(timeframe)
-                candles = max(1, 1 + consecutive_non_win)
+                candles = max(1, 1 + continuation_streak)
                 extended_max_age = candles * tf_minutes * 60
                 self.params["classic_signal_max_age_sec"] = extended_max_age
 
-                # Первая сделка (consecutive_non_win == 0) — учитываем next_expire.
-                # Повторные (PUSH/UNKNOWN) — только возраст.
-                for_placement_flag = consecutive_non_win == 0
+                # Первая сделка — учитываем next_expire.
+                # Повторные (после WIN/PUSH) — только возраст.
+                for_placement_flag = (continuation_streak == 0)
 
                 try:
                     is_valid, reason = self._is_signal_valid_for_classic(
@@ -437,7 +443,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
                 is_valid, reason = self._is_sprint_signal_valid_for_series(
                     signal_data,
                     current_time,
-                    consecutive_non_win=consecutive_non_win,
+                    continuation_streak=continuation_streak,
                 )
 
             if not is_valid:
@@ -512,14 +518,14 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
 
             # === Парлей-логика AntiMartingale ===
             if profit is None:
+                # UNKNOWN → считаем как LOSS: серия завершается, окно дальше не нужно
                 log(result_unknown(symbol, treat_as_loss=True) + " Серия завершается.")
-                # считаем как LOSS, очередь StrategyCommon не очищаем
                 break
 
             elif profit > 0:
                 # WIN: увеличиваем ставку на размер профита, продолжаем серию
                 log(win_with_parlay(symbol, format_amount(profit)))
-                consecutive_non_win = 0  # стрик не-WIN обнулён
+                continuation_streak += 1  # был WIN → серия продолжается
 
                 # Очистка сигналов из очереди StrategyCommon после WIN
                 if hasattr(self, "_common") and self._common is not None:
@@ -528,12 +534,12 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
                         log(trade_result_removed(symbol, removed, "WIN"))
 
                 current_stake += float(profit)
-                step += 1  # продолжаем только после WIN
+                step += 1  # шаг серии увеличиваем только после WIN
 
             elif abs(profit) < 1e-9:
                 # PUSH: повторяем с той же ставкой, step не меняем
                 log(push_repeat_same_stake(symbol))
-                consecutive_non_win += 1
+                continuation_streak += 1  # PUSH → серия тоже продолжается
 
                 # Очистка сигналов из очереди StrategyCommon после PUSH
                 if hasattr(self, "_common") and self._common is not None:
@@ -544,7 +550,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
             else:
                 # LOSS: серия Антимартина завершается, очередь не чистим
                 log(loss_series_finish(symbol, format_amount(profit)))
-                consecutive_non_win += 1
+                # continuation_streak можно не трогать — дальше серии не будет
                 break
 
             await self.sleep(0.2)
