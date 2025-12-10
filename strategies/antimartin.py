@@ -50,7 +50,10 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
     Отличия от Мартина:
       - Увеличиваем ставку ПОСЛЕ WIN на размер фактического выигрыша (парлей).
       - Серию продолжаем после WIN или PUSH.
-      - При LOSS или UNKNOWN серия завершается.
+      - При LOSS или UNKNOWN:
+          * если НЕ было ни одного WIN в этой серии — серия считается НЕ начатой,
+            repeat_count не тратим;
+          * если был хотя бы один WIN — серия считается завершённой.
       - Из очереди сигналов (StrategyCommon) удаляем после WIN или PUSH.
     """
 
@@ -172,9 +175,6 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
         """
         Специальная проверка актуальности sprint-сигнала для серийной торговли.
 
-        Базовый sprint в BaseTradingStrategy ограничен 5 секундами — этого мало
-        для повторных сделок по одному сигналу внутри серии.
-
         Здесь окно растёт как:
             window = (1 + continuation_streak) * trade_duration
 
@@ -230,13 +230,11 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
             return
 
         # 2) Если НЕТ активной серии — сначала проверяем payout.
-        #    Если payout низкий — кладём сигнал в свою очередь и выходим.
         if await self._is_payout_low_now(symbol):
             self._enqueue_low_payout_signal(trade_key, signal_data)
             return
 
-        # 3) Payout нормальный. Если есть очередь "низкого payout" —
-        #    добавляем туда текущий сигнал и берём самый свежий.
+        # 3) Если есть очередь "низкого payout" — берём оттуда самый свежий сигнал
         queued_signal = self._pop_latest_from_low_payout_queue(trade_key)
         if queued_signal is not None:
             self._enqueue_low_payout_signal(trade_key, signal_data)
@@ -247,11 +245,6 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
                 timeframe = signal_data["timeframe"]
                 direction = signal_data["direction"]
                 self._maybe_set_auto_minutes(timeframe)
-
-        # 4) К этому моменту:
-        #    - нет активной серии
-        #    - payout нормальный
-        #    - signal_data — самый свежий актуальный сигнал
 
         max_series = int(self.params.get("repeat_count", 10))
         remaining_series = self._series_remaining.get(trade_key)
@@ -346,8 +339,11 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
         step = 0
         did_place_any_trade = False
 
-        # Счётчик подряд идущих шагов, которые дали продолжение (WIN или PUSH)
+        # Счётчик шагов, по которым серия ДЕЙСТВИТЕЛЬНО продолжалась (WIN/PUSH)
         continuation_streak = 0
+
+        # Флаг: был ли хотя бы один WIN в рамках этой серии
+        had_any_win = False
 
         series_direction = initial_direction
         max_steps = int(self.params.get("max_steps", 3))
@@ -518,14 +514,16 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
 
             # === Парлей-логика AntiMartingale ===
             if profit is None:
-                # UNKNOWN → считаем как LOSS: серия завершается, окно дальше не нужно
-                log(result_unknown(symbol, treat_as_loss=True) + " Серия завершается.")
+                # UNKNOWN → считаем как LOSS по этому сигналу
+                log(result_unknown(symbol, treat_as_loss=True) + " Серия по сигналу прерывается.")
+                # ВАЖНО: если не было WIN, серия (в смысле repeat_count) ещё НЕ началась
                 break
 
             elif profit > 0:
-                # WIN: увеличиваем ставку на размер профита, продолжаем серию
+                # WIN: увеличиваем ставку на размер профита, серия СЧИТАЕТСЯ начатой
                 log(win_with_parlay(symbol, format_amount(profit)))
-                continuation_streak += 1  # был WIN → серия продолжается
+                had_any_win = True
+                continuation_streak += 1  # серия продолжается
 
                 # Очистка сигналов из очереди StrategyCommon после WIN
                 if hasattr(self, "_common") and self._common is not None:
@@ -539,7 +537,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
             elif abs(profit) < 1e-9:
                 # PUSH: повторяем с той же ставкой, step не меняем
                 log(push_repeat_same_stake(symbol))
-                continuation_streak += 1  # PUSH → серия тоже продолжается
+                continuation_streak += 1  # серия продолжается (для окон)
 
                 # Очистка сигналов из очереди StrategyCommon после PUSH
                 if hasattr(self, "_common") and self._common is not None:
@@ -548,9 +546,11 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
                         log(trade_result_removed(symbol, removed, "PUSH"))
 
             else:
-                # LOSS: серия Антимартина завершается, очередь не чистим
+                # LOSS:
                 log(loss_series_finish(symbol, format_amount(profit)))
-                # continuation_streak можно не трогать — дальше серии не будет
+                # Если не было ни одного WIN — серия (repeat_count) ещё НЕ началась
+                # и не должна считаться завершённой.
+                # Если хотя бы один WIN уже был — серия завершена.
                 break
 
             await self.sleep(0.2)
@@ -558,9 +558,16 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
             # Для classic не двигаем _next_expire_dt вручную —
             # он каждый раз пересчитывается в _calc_next_candle_from_now.
 
+        # === Завершение серии ===
         if did_place_any_trade:
+            # Если не было ни одного WIN — считаем, что серия (в смысле repeat_count)
+            # так и не стартовала: НЕ уменьшаем series_left.
+            if not had_any_win:
+                return
+
             if step >= max_steps:
                 log(steps_limit_reached(symbol, max_steps, flag="⛳"))
+
             series_left = max(0, series_left - 1)
             self._series_remaining[trade_key] = series_left
             log(series_remaining(symbol, series_left))
