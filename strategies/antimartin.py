@@ -337,6 +337,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
             series_left = max(0, series_left - 1)
             self._series_remaining[trade_key] = series_left
             log(series_remaining(symbol, series_left))
+            self._check_all_series_completed(self._series_remaining)
 
     def _calculate_trade_duration(self, symbol: str) -> tuple[float, float]:
         if self._trade_type == "classic" and self._next_expire_dt is not None:
