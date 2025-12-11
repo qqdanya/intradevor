@@ -25,7 +25,12 @@ def parse_iso(s: str):
 
 async def handle(ws):
     """Обрабатывает подключение одного клиента."""
-    ip, port = ws.remote_address
+    # remote_address может быть None в некоторых версиях
+    try:
+        ip, port = ws.remote_address
+    except Exception:
+        ip, port = "?", "?"
+
     connected.add(ws)
     log(f"[+] Клиент подключился: {ip}:{port}")
 
@@ -52,7 +57,7 @@ async def handle(ws):
                 direction = DIRECTIONS.get(dir_code, f"unk({dir_code})")
 
                 # задержка
-                bar_time = parse_iso(data.get("datetime"))
+                bar_time = parse_iso(data.get("close_datetime") or data.get("datetime"))
                 detect_time = parse_iso(data.get("detected_time"))
                 delay = None
                 if bar_time and detect_time:
@@ -69,7 +74,8 @@ async def handle(ws):
                         continue
                     try:
                         await asyncio.wait_for(c.send(raw), timeout=1.0)
-                    except Exception:
+                    except Exception as e:
+                        log(f"[!] Ошибка отправки клиенту: {e}")
                         connected.discard(c)
 
             else:
@@ -84,34 +90,30 @@ async def handle(ws):
         log(f"[i] Клиент отключен ({ip}:{port})")
 
 
-async def main():
-    log(f"WebSocket-сервер запущен на ws://{HOST}:{PORT}")
+async def run_server(port: int):
+    log(f"WebSocket-сервер запущен на ws://{HOST}:{port}")
 
     async with websockets.serve(
         handle,
         HOST,
-        PORT,
+        port,
         compression=None,
-        ping_interval=None,  # отключаем авто-ping
-        ping_timeout=None,
+        ping_interval=None,
+        ping_timeout=10,
         max_size=2**20,
     ):
-        while True:
-            # безопасная проверка соединений (для websockets 13+)
-            for c in list(connected):
-                state = getattr(c, "state", None)
-                if state is None or getattr(state, "name", "") != "OPEN":
-                    connected.discard(c)
-            await asyncio.sleep(5)
+        # просто "спим" бесконечно, пока процесс жив
+        await asyncio.Future()
 
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        asyncio.run(run_server(PORT))
     except OSError as e:
-        if e.errno == 10048:
+        # Windows: 10048, Linux: обычно 98 (EADDRINUSE)
+        if e.errno in (98, 10048):
             alt = PORT + 1
             log(f"[!] Порт {PORT} занят, пробуем ws://{HOST}:{alt}")
-            asyncio.run(websockets.serve(handle, HOST, alt))
+            asyncio.run(run_server(alt))
         else:
             raise
