@@ -5,7 +5,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from strategies.base_trading_strategy import BaseTradingStrategy, _minutes_from_timeframe
-from strategies.constants import MOSCOW_TZ, ALL_SYMBOLS_LABEL, ALL_TF_LABEL, CLASSIC_ALLOWED_TFS
+from strategies.constants import MOSCOW_TZ
 from core.money import format_amount
 from core.intrade_api_async import is_demo_account, get_balance_info
 from core.time_utils import format_local_time
@@ -42,6 +42,7 @@ FIBONACCI_DEFAULTS = {
     "allow_parallel_trades": True,
 }
 
+
 def _fib(n: int) -> int:
     """Возвращает n-е число Фибоначчи (1-indexed)."""
     if n <= 0:
@@ -50,6 +51,7 @@ def _fib(n: int) -> int:
     while len(seq) < n:
         seq.append(seq[-1] + seq[-2])
     return seq[n - 1]
+
 
 class FibonacciStrategy(BaseTradingStrategy):
     """Стратегия Фибоначчи (управление ставками по последовательности Фибоначчи)"""
@@ -86,6 +88,30 @@ class FibonacciStrategy(BaseTradingStrategy):
         # Отслеживание активных серий по паре+таймфрейму
         self._active_series: dict[str, bool] = {}
 
+    # ================= ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ =================
+
+    def _calc_next_candle_from_now(self, timeframe: str) -> datetime:
+        """
+        Для classic: вернуть время начала СЛЕДУЮЩЕЙ свечи относительно текущего момента.
+        Привязка к размеру таймфрейма (M1, M5, M15 и т.д.).
+        """
+        now = datetime.now(ZoneInfo(MOSCOW_TZ))
+        tf_minutes = _minutes_from_timeframe(timeframe)
+
+        base = now.replace(second=0, microsecond=0)
+        total_min = base.hour * 60 + base.minute
+        next_total = (total_min // tf_minutes + 1) * tf_minutes  # ближайший следующий слот
+
+        days_add = next_total // (24 * 60)
+        minutes_in_day = next_total % (24 * 60)
+        hour = minutes_in_day // 60
+        minute = minutes_in_day % 60
+
+        next_dt = (base + timedelta(days=days_add)).replace(hour=hour, minute=minute)
+        return next_dt
+
+    # ================= ПУБЛИЧНЫЕ МЕТОДЫ =================
+
     def is_series_active(self, trade_key: str) -> bool:
         """Показывает, выполняется ли серия для указанного ключа."""
         return self._active_series.get(trade_key, False)
@@ -96,9 +122,9 @@ class FibonacciStrategy(BaseTradingStrategy):
 
     async def _process_single_signal(self, signal_data: dict):
         """Обработка одного сигнала для стратегии Фибоначчи"""
-        symbol = signal_data['symbol']
-        timeframe = signal_data['timeframe']
-        direction = signal_data['direction']
+        symbol = signal_data["symbol"]
+        timeframe = signal_data["timeframe"]
+        direction = signal_data["direction"]
 
         self._maybe_set_auto_minutes(timeframe)
         trade_key = self.build_trade_key(symbol, timeframe)
@@ -107,16 +133,16 @@ class FibonacciStrategy(BaseTradingStrategy):
 
         if self._active_series.get(trade_key):
             log(series_already_active(symbol, timeframe))
-            if hasattr(self, '_common'):
+            if hasattr(self, "_common"):
                 await self._common._handle_pending_signal(trade_key, signal_data)
             return
 
         # Обновляем информацию о сигнале
-        self._last_signal_ver = signal_data['version']
-        self._last_indicator = signal_data['indicator']
-        self._last_signal_at_str = format_local_time(signal_data['timestamp'])
+        self._last_signal_ver = signal_data["version"]
+        self._last_indicator = signal_data["indicator"]
+        self._last_signal_at_str = format_local_time(signal_data["timestamp"])
 
-        ts = signal_data['meta'].get('next_timestamp') if signal_data['meta'] else None
+        ts = signal_data.get("meta", {}).get("next_timestamp") if signal_data.get("meta") else None
         self._next_expire_dt = ts.astimezone(ZoneInfo(MOSCOW_TZ)) if ts else None
 
         # Обновляем символ и таймфрейм если используются "все"
@@ -135,12 +161,19 @@ class FibonacciStrategy(BaseTradingStrategy):
         current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
 
         if self._trade_type == "classic":
-            is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
+            is_valid, reason = self._is_signal_valid_for_classic(
+                signal_data,
+                current_time,
+                for_placement=True,
+            )
             if not is_valid:
                 log(signal_not_actual(symbol, "classic", reason))
                 return
         else:
-            is_valid, reason = self._is_signal_valid_for_sprint(signal_data, current_time)
+            is_valid, reason = self._is_signal_valid_for_sprint(
+                signal_data,
+                current_time,
+            )
             if not is_valid:
                 log(signal_not_actual(symbol, "sprint", reason))
                 return
@@ -164,7 +197,7 @@ class FibonacciStrategy(BaseTradingStrategy):
                 direction,
                 log,
                 series_left,
-                signal_data['timestamp'],
+                signal_data["timestamp"],
                 signal_data,
             )
             self._set_series_left(trade_key, updated)
@@ -201,7 +234,9 @@ class FibonacciStrategy(BaseTradingStrategy):
         requires_fresh_signal = self.should_request_fresh_signal_after_loss()
         need_new_signal = False
         series_direction = initial_direction
-        signal_at_str = signal_data.get('signal_time_str') or format_local_time(signal_received_time)
+        signal_at_str = signal_data.get("signal_time_str") or format_local_time(
+            signal_received_time
+        )
         series_label = self.format_series_label(trade_key, series_left=series_left)
 
         def update_signal_context(new_signal: Optional[dict]) -> None:
@@ -210,16 +245,18 @@ class FibonacciStrategy(BaseTradingStrategy):
                 return
 
             signal_data = new_signal
-            signal_received_time = new_signal['timestamp']
-            series_direction = new_signal['direction']
+            signal_received_time = new_signal["timestamp"]
+            series_direction = new_signal["direction"]
             needs_signal_validation = True
 
-            self._last_signal_ver = new_signal.get('version', self._last_signal_ver)
-            self._last_indicator = new_signal.get('indicator', self._last_indicator)
-            signal_at_str = new_signal.get('signal_time_str') or format_local_time(signal_received_time)
+            self._last_signal_ver = new_signal.get("version", self._last_signal_ver)
+            self._last_indicator = new_signal.get("indicator", self._last_indicator)
+            signal_at_str = new_signal.get("signal_time_str") or format_local_time(
+                signal_received_time
+            )
             self._last_signal_at_str = signal_at_str
 
-            ts = new_signal.get('meta', {}).get('next_timestamp') if new_signal.get('meta') else None
+            ts = new_signal.get("meta", {}).get("next_timestamp") if new_signal.get("meta") else None
             self._next_expire_dt = ts.astimezone(ZoneInfo(MOSCOW_TZ)) if ts else None
 
         while self._running and step_idx < max_steps:
@@ -242,8 +279,8 @@ class FibonacciStrategy(BaseTradingStrategy):
                         return series_left
                 else:
                     sprint_payload = signal_data
-                    if not sprint_payload.get('timestamp'):
-                        sprint_payload = {'timestamp': signal_received_time}
+                    if not sprint_payload.get("timestamp"):
+                        sprint_payload = {"timestamp": signal_received_time}
                     is_valid, reason = self._is_signal_valid_for_sprint(
                         sprint_payload,
                         current_time,
@@ -256,7 +293,12 @@ class FibonacciStrategy(BaseTradingStrategy):
             multiplier = _fib(fib_index)
             stake = base_stake * multiplier
 
-            pct, balance = await self.check_payout_and_balance(symbol, stake, min_pct, wait_low)
+            pct, balance = await self.check_payout_and_balance(
+                symbol,
+                stake,
+                min_pct,
+                wait_low,
+            )
             if pct is None:
                 continue
 
@@ -267,13 +309,11 @@ class FibonacciStrategy(BaseTradingStrategy):
                     self._trade_minutes,
                     series_direction,
                     pct,
-                ) + f" (Fibo #{fib_index})"
+                )
+                + f" (Fibo #{fib_index})"
             )
 
             # Финальная проверка актуальности перед размещением сделки
-            # Нужна на каждом шаге: при ожидании высокого payout можно
-            # перепрыгнуть одну-две свечи и вернуться к ставке по
-            # устаревшему сигналу или времени экспирации.
             current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
             if self._trade_type == "classic":
                 is_valid, reason = self._is_signal_valid_for_classic(
@@ -283,8 +323,8 @@ class FibonacciStrategy(BaseTradingStrategy):
                 )
             else:
                 sprint_payload = signal_data
-                if not sprint_payload.get('timestamp'):
-                    sprint_payload = {'timestamp': signal_received_time}
+                if not sprint_payload.get("timestamp"):
+                    sprint_payload = {"timestamp": signal_received_time}
                 is_valid, reason = self._is_signal_valid_for_sprint(
                     sprint_payload,
                     current_time,
@@ -296,6 +336,10 @@ class FibonacciStrategy(BaseTradingStrategy):
 
             needs_signal_validation = False
 
+            # Для classic: перед каждой сделкой берём следующую свечу от текущего времени
+            if self._trade_type == "classic":
+                self._next_expire_dt = self._calc_next_candle_from_now(timeframe)
+
             try:
                 demo_now = await is_demo_account(self.http_client)
             except Exception:
@@ -303,7 +347,12 @@ class FibonacciStrategy(BaseTradingStrategy):
             account_mode = "ДЕМО" if demo_now else "РЕАЛ"
 
             self._status("делает ставку")
-            trade_id = await self.place_trade_with_retry(symbol, series_direction, stake, self._anchor_ccy)
+            trade_id = await self.place_trade_with_retry(
+                symbol,
+                series_direction,
+                stake,
+                self._anchor_ccy,
+            )
 
             if not trade_id:
                 log(trade_placement_failed(symbol, "Пропускаем сигнал."))
@@ -349,7 +398,6 @@ class FibonacciStrategy(BaseTradingStrategy):
             )
 
             step_idx += 1
-
             continue_series = True
 
             if profit is None:
@@ -372,8 +420,10 @@ class FibonacciStrategy(BaseTradingStrategy):
 
             await self.sleep(0.2)
 
-            if self._trade_type == "classic" and self._next_expire_dt is not None:
-                self._next_expire_dt += timedelta(minutes=_minutes_from_timeframe(timeframe))
+            # Раньше здесь было сдвижение _next_expire_dt на таймфрейм.
+            # Теперь этого не делаем: в classic всегда пересчитываем
+            # время экспирации как следующую свечу от текущего момента
+            # перед самой сделкой (_calc_next_candle_from_now).
 
             if not continue_series:
                 break
@@ -429,7 +479,6 @@ class FibonacciStrategy(BaseTradingStrategy):
                 if new_signal:
                     return new_signal
 
-            # Ждем немного перед следующей проверкой
             await asyncio.sleep(0.5)
 
         log(trade_timeout(symbol, timeout))
