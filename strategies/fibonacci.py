@@ -265,6 +265,7 @@ class FibonacciStrategy(BaseTradingStrategy):
             if not await self.ensure_account_conditions():
                 continue
 
+            # --- 1. Предварительная валидация сигнала ---
             if needs_signal_validation:
                 current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
 
@@ -274,9 +275,6 @@ class FibonacciStrategy(BaseTradingStrategy):
                         current_time,
                         for_placement=True,
                     )
-                    if not is_valid:
-                        log(signal_not_actual_for_placement(symbol, reason))
-                        return series_left
                 else:
                     sprint_payload = signal_data
                     if not sprint_payload.get("timestamp"):
@@ -285,11 +283,29 @@ class FibonacciStrategy(BaseTradingStrategy):
                         sprint_payload,
                         current_time,
                     )
-                    if not is_valid:
-                        log(signal_not_actual_for_placement(symbol, reason))
+
+                if not is_valid:
+                    log(signal_not_actual_for_placement(symbol, reason))
+                    # ⬇ Вместо завершения серии — ждём новый сигнал и продолжаем с тем же fib_index
+                    if hasattr(self, "_common") and self._common is not None:
+                        timeout = float(self.params.get("signal_timeout_sec", 30.0))
+                        new_signal = await self._wait_for_new_signal(
+                            trade_key,
+                            log,
+                            symbol,
+                            timeframe,
+                            timeout=timeout,
+                        )
+                        if not new_signal:
+                            # Новый сигнал так и не пришёл — выходим из серии
+                            return series_left
+                        update_signal_context(new_signal)
+                        # Перезапускаем цикл с новым сигналом
+                        continue
+                    else:
                         return series_left
 
-            # Рассчитываем ставку по числу Фибоначчи
+            # --- 2. Расчет ставки по Фибоначчи ---
             multiplier = _fib(fib_index)
             stake = base_stake * multiplier
 
@@ -313,7 +329,7 @@ class FibonacciStrategy(BaseTradingStrategy):
                 + f" (Fibo #{fib_index})"
             )
 
-            # Финальная проверка актуальности перед размещением сделки
+            # --- 3. Финальная проверка актуальности перед размещением ---
             current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
             if self._trade_type == "classic":
                 is_valid, reason = self._is_signal_valid_for_classic(
@@ -332,7 +348,24 @@ class FibonacciStrategy(BaseTradingStrategy):
 
             if not is_valid:
                 log(signal_not_actual_for_placement(symbol, reason))
-                return series_left
+                # ⬇ Здесь тоже: не завершаем серию, а ждём новый сигнал
+                if hasattr(self, "_common") and self._common is not None:
+                    timeout = float(self.params.get("signal_timeout_sec", 30.0))
+                    new_signal = await self._wait_for_new_signal(
+                        trade_key,
+                        log,
+                        symbol,
+                        timeframe,
+                        timeout=timeout,
+                    )
+                    if not new_signal:
+                        return series_left
+                    update_signal_context(new_signal)
+                    # Нужно заново валидировать новый сигнал
+                    needs_signal_validation = True
+                    continue
+                else:
+                    return series_left
 
             needs_signal_validation = False
 
@@ -346,6 +379,7 @@ class FibonacciStrategy(BaseTradingStrategy):
                 demo_now = False
             account_mode = "ДЕМО" if demo_now else "РЕАЛ"
 
+            # --- 4. Размещение сделки ---
             self._status("делает ставку")
             trade_id = await self.place_trade_with_retry(
                 symbol,
@@ -382,6 +416,7 @@ class FibonacciStrategy(BaseTradingStrategy):
             )
             self._register_pending_trade(trade_id, symbol, timeframe)
 
+            # --- 5. Ожидание результата ---
             profit = await self.wait_for_trade_result(
                 trade_id=trade_id,
                 wait_seconds=float(wait_seconds),
@@ -400,6 +435,7 @@ class FibonacciStrategy(BaseTradingStrategy):
             step_idx += 1
             continue_series = True
 
+            # --- 6. Обработка результата и сдвиг индекса Фибо ---
             if profit is None:
                 log(result_unknown(symbol, treat_as_loss=True))
                 fib_index += 1
@@ -420,17 +456,13 @@ class FibonacciStrategy(BaseTradingStrategy):
 
             await self.sleep(0.2)
 
-            # Раньше здесь было сдвижение _next_expire_dt на таймфрейм.
-            # Теперь этого не делаем: в classic всегда пересчитываем
-            # время экспирации как следующую свечу от текущего момента
-            # перед самой сделкой (_calc_next_candle_from_now).
-
             if not continue_series:
                 break
 
             if step_idx >= max_steps:
                 break
 
+            # --- 7. Логика обновления сигнала после LOSS/UNKNOWN ---
             if requires_fresh_signal and need_new_signal:
                 if hasattr(self, "_common") and self._common is not None:
                     timeout = float(self.params.get("signal_timeout_sec", 30.0))
