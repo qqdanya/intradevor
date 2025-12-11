@@ -334,6 +334,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             trade_seconds, expected_end_ts = self._calculate_trade_duration(symbol)
             wait_seconds = self.params.get("result_wait_s", trade_seconds)
 
+            step_label = self.format_step_label(step_idx, max_steps)
             self._notify_pending_trade(
                 trade_id,
                 symbol,
@@ -346,6 +347,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                 expected_end_ts,
                 signal_at=signal_at_str,
                 series_label=series_label,
+                step_label=step_label,
             )
             self._register_pending_trade(trade_id, symbol, timeframe)
 
@@ -362,6 +364,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                 account_mode=account_mode,
                 indicator=self._last_indicator,
                 series_label=series_label,
+                step_label=step_label,
             )
 
             if profit is None:
@@ -493,6 +496,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         *,
         signal_at: Optional[str] = None,
         series_label: Optional[str] = None,
+        step_label: Optional[str] = None,
     ):
         """Уведомляет о pending сделке"""
         placed_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
@@ -516,6 +520,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                     indicator=self._last_indicator,
                     expected_end_ts=expected_end_ts,
                     series=series_label,
+                    step=step_label,
                 )
             except Exception:
                 pass

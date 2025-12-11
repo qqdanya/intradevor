@@ -100,7 +100,7 @@ class StrategyControlDialog(QWidget):
 
         # ---------- ТАБЛИЦА СДЕЛОК (справа) ----------
         self.trades_table = QTableWidget(self)
-        self.trades_table.setColumnCount(12)
+        self.trades_table.setColumnCount(13)
         self.trades_table.setHorizontalHeaderLabels(
             [
                 "Время сигнала",  # 0
@@ -108,13 +108,14 @@ class StrategyControlDialog(QWidget):
                 "Пара",  # 2
                 "ТФ",  # 3
                 "Серия",  # 4
-                "Индикатор",  # 5  (если не прилетит — ставим "—")
-                "Направление",  # 6
-                "Ставка",  # 7
-                "Время",  # 8
-                "Процент",  # 9
-                "P/L",  # 10
-                "Счёт",  # 11
+                "Шаг",  # 5
+                "Индикатор",  # 6  (если не прилетит — ставим "—")
+                "Направление",  # 7
+                "Ставка",  # 8
+                "Время",  # 9
+                "Процент",  # 10
+                "P/L",  # 11
+                "Счёт",  # 12
             ]
         )
         hdr = self.trades_table.horizontalHeader()
@@ -728,6 +729,7 @@ class StrategyControlDialog(QWidget):
         indicator: str | None = None,
         series: str | None = None,
         expected_end_ts: float | None = None,  # ⬅️ НОВОЕ: абсолютный дедлайн
+        step: str | None = None,
     ):
         """
         Добавляем жёлтую строку с обратным отсчётом в ПРАВОЙ таблице диалога.
@@ -770,17 +772,18 @@ class StrategyControlDialog(QWidget):
             symbol,  # 2 Пара
             timeframe,  # 3 ТФ
             series or "—",  # 4 Серия
-            ind_txt,  # 5 Индикатор
-            dir_text,  # 6 Направление
-            self._fmt_money(stake, ccy),  # 7 Ставка
-            duration_txt,  # 8 Время
-            f"{percent}%",  # 9 %
-            f"Ожидание ({_fmt_left(left_now)})",  # 10 P/L
-            account_txt,  # 11 Счёт
+            step or "—",  # 5 Шаг
+            ind_txt,  # 6 Индикатор
+            dir_text,  # 7 Направление
+            self._fmt_money(stake, ccy),  # 8 Ставка
+            duration_txt,  # 9 Время
+            f"{percent}%",  # 10 %
+            f"Ожидание ({_fmt_left(left_now)})",  # 11 P/L
+            account_txt,  # 12 Счёт
         ]
         for col, v in enumerate(vals):
             it = QTableWidgetItem(str(v))
-            if col in (6, 10):
+            if col in (7, 11):
                 it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.trades_table.setItem(row, col, it)
 
@@ -803,7 +806,7 @@ class StrategyControlDialog(QWidget):
             if not isinstance(cur_row, int) or cur_row >= self.trades_table.rowCount():
                 timer.stop()
                 return
-            item = self.trades_table.item(cur_row, 10)
+            item = self.trades_table.item(cur_row, 11)
             if item:
                 item.setText(f"Ожидание ({_fmt_left(left)})")
             if left <= 0:
@@ -835,6 +838,7 @@ class StrategyControlDialog(QWidget):
             "placed_at": placed_at,
             "wait_seconds": float(wait_seconds),
             "series": series,
+            "step": step,
         }
 
         if was_sort:
@@ -855,6 +859,7 @@ class StrategyControlDialog(QWidget):
         account_mode: str | None = None,
         indicator: str | None = None,
         series: str | None = None,
+        step: str | None = None,
     ):
         """
         Обновляем/добавляем зелёную/красную/серую строку по результату.
@@ -873,6 +878,7 @@ class StrategyControlDialog(QWidget):
         place_time = placed_at
         duration_txt = ""
         series_txt = series or "—"
+        step_txt = step or "—"
         if trade_id and trade_id in self._pending_rows:
             info = self._pending_rows.pop(trade_id, {})
             timer = info.get("timer")
@@ -889,6 +895,7 @@ class StrategyControlDialog(QWidget):
                 place_time = info.get("placed_at", place_time)
                 duration_txt = f"{int(round(info.get('wait_seconds', 0.0) / 60))} мин"
                 series_txt = info.get("series", series_txt) or "—"
+                step_txt = info.get("step", step_txt) or "—"
 
         was_sort = self.trades_table.isSortingEnabled()
         if was_sort:
@@ -915,17 +922,18 @@ class StrategyControlDialog(QWidget):
             symbol,  # 2
             timeframe,  # 3
             series_txt,  # 4
-            ind_txt,  # 5
-            dir_text,  # 6
-            self._fmt_money(stake, ccy),  # 7
-            duration_txt,  # 8
-            f"{percent}%",  # 9
-            fmt_pl(profit, ccy),  # 10
-            account_txt,  # 11
+            step_txt,  # 5
+            ind_txt,  # 6
+            dir_text,  # 7
+            self._fmt_money(stake, ccy),  # 8
+            duration_txt,  # 9
+            f"{percent}%",  # 10
+            fmt_pl(profit, ccy),  # 11
+            account_txt,  # 12
         ]
         for col, v in enumerate(vals):
             item = QTableWidgetItem(str(v))
-            if col in (6, 10):
+            if col in (7, 11):
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.trades_table.setItem(row_to_update, col, item)
 
