@@ -742,6 +742,7 @@ class MainWindow(QWidget):
         indicator: str | None = None,
         series: str | None = None,
         expected_end_ts: float | None = None,
+        step: str | None = None,
     ):
         """Добавляет строку ожидания сделки."""
         duration = float(wait_seconds)
@@ -762,6 +763,7 @@ class MainWindow(QWidget):
             series=series,
             expected_end_ts=expected_end_ts,
             currency=self.account_currency,
+            step=step,
         )
 
     def add_trade_result(
@@ -780,6 +782,7 @@ class MainWindow(QWidget):
         account_mode: str | None = None,
         indicator: str | None = None,  # <= НОВОЕ
         series: str | None = None,
+        step: str | None = None,
         ):
         """Добавляет результат сделки в таблицу."""
         acc = account_mode or ("ДЕМО" if self.is_demo else "РЕАЛ")
@@ -801,6 +804,7 @@ class MainWindow(QWidget):
                 percent=int(percent),
                 account_mode=acc,
                 series=series,
+                step=step,
                 currency=self.account_currency,
             )
 
@@ -1063,6 +1067,7 @@ class MainWindow(QWidget):
         account_mode,
         indicator: str = "-",
         series: str | None = None,
+        step: str | None = None,
         bot=None,
     ):
         strat_label = "-"
@@ -1083,6 +1088,7 @@ class MainWindow(QWidget):
             account_mode=account_mode,
             indicator=indicator,
             series=series,
+            step=step,
         )
         # (при желании: дублируем в локальные таблицы окон стратегий)
 
@@ -1101,6 +1107,7 @@ class MainWindow(QWidget):
         account_mode,
         indicator: str = "-",
         series: str | None = None,
+        step: str | None = None,
         bot=None,
     ):
         strat_label = "-"
@@ -1121,4 +1128,5 @@ class MainWindow(QWidget):
             account_mode=account_mode,
             indicator=indicator,
             series=series,
+            step=step,
         )

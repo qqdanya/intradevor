@@ -180,6 +180,22 @@ class BaseTradingStrategy(StrategyBase):
         current = max(1, min(total, total - remaining_int + 1))
         return f"{current}/{total}"
 
+    def format_step_label(
+        self, step_idx: int | None, max_steps: int | None
+    ) -> str | None:
+        """Возвращает строку "Текущий/Максимум" для шага серии."""
+
+        try:
+            cur = int(step_idx) if step_idx is not None else None
+            total = int(max_steps) if max_steps is not None else None
+        except Exception:
+            return None
+
+        if cur is None or total is None or total <= 0 or cur < 0:
+            return None
+
+        return f"{min(cur + 1, total)}/{total}"
+
     def get_planned_stake(self, trade_key: str) -> float | None:
         """Возвращает последнюю рассчитанную ставку для ключа сделки."""
 
@@ -423,6 +439,7 @@ class BaseTradingStrategy(StrategyBase):
         account_mode: Optional[str],
         indicator: str,
         series_label: str | None = None,
+        step_label: str | None = None,
     ) -> Optional[float]:
         """Ожидание результата сделки"""
         self._status("ожидание результата")
@@ -453,6 +470,7 @@ class BaseTradingStrategy(StrategyBase):
                     account_mode=account_mode,
                     indicator=indicator,
                     series=series_label,
+                    step=step_label,
                 )
             except Exception:
                 pass

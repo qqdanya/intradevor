@@ -14,15 +14,16 @@ class TradesTableWidget(QTableWidget):
       [1] Время ставки
       [2] Стратегия
       [3] Серия
-      [4] Индикатор        <-- ОТ КОГО ПРИШЁЛ СИГНАЛ
-      [5] Валютная пара
-      [6] ТФ
-      [7] Направление
-      [8] Ставка
-      [9] Время
-      [10] Процент
-      [11] P/L
-      [12] Счёт
+      [4] Шаг
+      [5] Индикатор        <-- ОТ КОГО ПРИШЁЛ СИГНАЛ
+      [6] Валютная пара
+      [7] ТФ
+      [8] Направление
+      [9] Ставка
+      [10] Время
+      [11] Процент
+      [12] P/L
+      [13] Счёт
     """
 
     COLS = [
@@ -30,6 +31,7 @@ class TradesTableWidget(QTableWidget):
         "Время ставки",
         "Стратегия",
         "Серия",
+        "Шаг",
         "Индикатор",
         "Валютная пара",
         "ТФ",
@@ -77,6 +79,7 @@ class TradesTableWidget(QTableWidget):
         series: str | None = None,
         expected_end_ts: float | None = None,
         currency: str | None = None,
+        step: str | None = None,
     ):
         """Добавляет строку ожидания с таймером."""
         from time import time as _now
@@ -109,6 +112,7 @@ class TradesTableWidget(QTableWidget):
             placed_at,
             strategy or "-",
             series or "—",
+            step or "—",
             indicator or "-",
             symbol,
             timeframe,
@@ -121,7 +125,7 @@ class TradesTableWidget(QTableWidget):
         ]
         for col, val in enumerate(values):
             it = QTableWidgetItem(str(val))
-            if col in (7, 11):  # выравнивание Направление, P/L по центру
+            if col in (8, 12):  # выравнивание Направление, P/L по центру
                 it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.setItem(row, col, it)
 
@@ -144,7 +148,7 @@ class TradesTableWidget(QTableWidget):
             if not isinstance(cur_row, int) or cur_row >= self.rowCount():
                 timer.stop()
                 return
-            item = self.item(cur_row, 11)
+            item = self.item(cur_row, 12)
             if item:
                 item.setText(f"Ожидание ({_fmt_left(left)})")
             if left <= 0:
@@ -167,6 +171,7 @@ class TradesTableWidget(QTableWidget):
             "timer": timer,
             "expected_end_ts": float(expected_end_ts),
             "series": series,
+            "step": step,
         }
 
     def set_result(
@@ -185,11 +190,11 @@ class TradesTableWidget(QTableWidget):
             return
         row = self._row_by_trade[trade_id]
 
-        pl_item = self.item(row, 11)
+        pl_item = self.item(row, 12)
         if pl_item is None:
             pl_item = QTableWidgetItem()
             pl_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.setItem(row, 11, pl_item)
+            self.setItem(row, 12, pl_item)
 
         if profit is None:
             pl_item.setText("неизв.")

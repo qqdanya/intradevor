@@ -481,6 +481,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
                 wait_seconds = float(wait_seconds)
 
             # Уведомляем о pending сделке
+            step_label = self.format_step_label(step, max_steps)
             self._notify_pending_trade(
                 trade_id,
                 symbol,
@@ -493,6 +494,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
                 expected_end_ts,
                 signal_at=signal_at_str,
                 series_label=series_label,
+                step_label=step_label,
             )
             self._register_pending_trade(trade_id, symbol, timeframe)
 
@@ -510,6 +512,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
                 account_mode=account_mode,
                 indicator=self._last_indicator,
                 series_label=series_label,
+                step_label=step_label,
             )
 
             # === Парлей-логика AntiMartingale ===
@@ -605,6 +608,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
         *,
         signal_at: Optional[str] = None,
         series_label: Optional[str] = None,
+        step_label: Optional[str] = None,
     ):
         """Уведомляет о pending сделке"""
         placed_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
@@ -628,6 +632,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
                     indicator=self._last_indicator,
                     expected_end_ts=expected_end_ts,
                     series=series_label,
+                    step=step_label,
                 )
             except Exception:
                 pass
