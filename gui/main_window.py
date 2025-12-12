@@ -16,6 +16,8 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QTextCursor, QColor
 from PyQt6.QtCore import Qt, QTimer
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from collections import defaultdict
 from functools import partial
 import asyncio
@@ -152,6 +154,9 @@ class MainWindow(QWidget):
         self.user_id_label = QLabel("user_id: loading...")
         self.user_hash_label = QLabel("user_hash: loading...")
         self.balance_label = QLabel("Баланс: loading...")
+        self.moscow_time_label = QLabel("Московское время: --:--:--")
+        self.moscow_time_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self.moscow_time_label.setStyleSheet("font-size: 14px;")
 
         # Сделаем лейблы фиксированными по вертикали, чтобы их не растягивало
         from PyQt6.QtWidgets import QSizePolicy
@@ -176,6 +181,11 @@ class MainWindow(QWidget):
         self.app_version.setStyleSheet("color: #666; font-size: 12px;")
         self.app_version.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
+        time_box = QWidget()
+        time_layout = QVBoxLayout(time_box)
+        time_layout.setContentsMargins(0, 0, 0, 0)
+        time_layout.addWidget(self.moscow_time_label, alignment=Qt.AlignmentFlag.AlignHCenter)
+
         right_box = QWidget()
         right_v = QVBoxLayout(right_box)
         right_v.setContentsMargins(0, 0, 0, 0)
@@ -186,6 +196,8 @@ class MainWindow(QWidget):
 
         top_layout = QHBoxLayout()
         top_layout.addWidget(info_box, 0, Qt.AlignmentFlag.AlignTop)
+        top_layout.addStretch(1)
+        top_layout.addWidget(time_box, 0, Qt.AlignmentFlag.AlignVCenter)
         top_layout.addStretch(1)
         top_layout.addWidget(right_box, 0, Qt.AlignmentFlag.AlignTop)
 
@@ -271,6 +283,12 @@ class MainWindow(QWidget):
 
         QTimer.singleShot(0, self.start_async_tasks)
 
+        self._time_timer = QTimer(self)
+        self._time_timer.setInterval(1000)
+        self._time_timer.timeout.connect(self._update_moscow_time)
+        self._update_moscow_time()
+        self._time_timer.start()
+
     def strategy_label(self, key: str) -> str:
         return self.strategy_labels.get(key, key)
 
@@ -338,6 +356,17 @@ class MainWindow(QWidget):
         cur.movePosition(QTextCursor.MoveOperation.Start)  # курсор в начало
         self.signal_log.setTextCursor(cur)
         self.signal_log.insertPlainText(s)  # вставляем новую строку сверху
+
+    def _update_moscow_time(self):
+        try:
+            moscow_tz = ZoneInfo("Europe/Moscow")
+            now_local = datetime.now().astimezone()
+            now_moscow = now_local.astimezone(moscow_tz)
+            time_text = now_moscow.strftime("Московское время: %H:%M:%S")
+        except Exception:
+            time_text = "Московское время: n/a"
+
+        self.moscow_time_label.setText(time_text)
 
     def _choose_font(self):
         current_font = QApplication.instance().font()
