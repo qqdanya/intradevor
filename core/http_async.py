@@ -132,9 +132,8 @@ class HttpClient:
                     return {}  # пустой JSON
                 return await parse(resp)
             except (
-                aiohttp.ClientConnectionError,
-                aiohttp.ServerTimeoutError,
-                aiohttp.ClientResponseError,
+                asyncio.TimeoutError,
+                aiohttp.ClientError,
             ) as e:
                 last_exc = e
                 attempt += 1
