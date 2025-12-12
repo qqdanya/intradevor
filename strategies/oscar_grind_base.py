@@ -34,7 +34,7 @@ OSCAR_GRIND_DEFAULTS = {
     "grace_delay_sec": 30.0,
     "double_entry": True,
     "trade_type": "classic",
-    "allow_parallel_trades": True,  # Чекбокс "Обрабатывать множество сигналов"
+    "allow_parallel_trades": True,
 }
 
 
@@ -74,28 +74,82 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         self._series_state: Dict[str, dict] = {}
 
     # =====================================================================
-    # ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
+    # ВСПОМОГАТЕЛЬНОЕ: ожидание нового сигнала / обновление контекста
+    # =====================================================================
+
+    async def _wait_for_new_signal(
+        self,
+        trade_key: str,
+        log,
+        symbol: str,
+        timeframe: str,
+        timeout: float,
+    ) -> Optional[dict]:
+        """Ждём новый сигнал по trade_key из StrategyCommon."""
+        start = asyncio.get_event_loop().time()
+        while self._running and (asyncio.get_event_loop().time() - start) < timeout:
+            await self._pause_point()
+            common = getattr(self, "_common", None)
+            if common is not None:
+                new_signal = common.pop_latest_signal(trade_key)
+                if new_signal:
+                    return new_signal
+            await asyncio.sleep(0.5)
+        return None
+
+    def _extract_next_expire_dt(self, signal: dict) -> Optional[datetime]:
+        """Поддержка разных форматов: next_expire или meta.next_timestamp."""
+        next_expire = signal.get("next_expire")
+        if next_expire and isinstance(next_expire, datetime):
+            if next_expire.tzinfo is None:
+                return next_expire.replace(tzinfo=ZoneInfo(MOSCOW_TZ))
+            return next_expire.astimezone(ZoneInfo(MOSCOW_TZ))
+
+        ts = signal.get("meta", {}).get("next_timestamp") if signal.get("meta") else None
+        if ts and isinstance(ts, datetime):
+            return ts.astimezone(ZoneInfo(MOSCOW_TZ)) if ts.tzinfo else ts.replace(tzinfo=ZoneInfo(MOSCOW_TZ))
+
+        return None
+
+    def _update_signal_context_in_series(
+        self,
+        *,
+        new_signal: dict,
+    ) -> tuple[dict, datetime, int, str]:
+        """
+        Обновляет локальный контекст серии по новому сигналу.
+        Возвращает: (signal_data, signal_received_time, series_direction, signal_at_str)
+        """
+        signal_data = new_signal
+        signal_received_time = new_signal["timestamp"]
+        series_direction = int(new_signal["direction"])
+        signal_at_str = new_signal.get("signal_time_str") or format_local_time(signal_received_time)
+
+        self._last_signal_ver = new_signal.get("version", self._last_signal_ver)
+        self._last_indicator = new_signal.get("indicator", self._last_indicator)
+        self._last_signal_at_str = signal_at_str
+
+        self._next_expire_dt = self._extract_next_expire_dt(new_signal)
+        return signal_data, signal_received_time, series_direction, signal_at_str
+
+    # =====================================================================
+    # Classic helper
     # =====================================================================
 
     def _calc_next_candle_from_now(self, timeframe: str) -> datetime:
-        """
-        Для classic: вернуть время начала СЛЕДУЮЩЕЙ свечи относительно текущего момента.
-        Привязка к размеру таймфрейма (M1, M5, M15 и т.д.).
-        """
         now = datetime.now(ZoneInfo(MOSCOW_TZ))
         tf_minutes = _minutes_from_timeframe(timeframe)
 
         base = now.replace(second=0, microsecond=0)
         total_min = base.hour * 60 + base.minute
-        next_total = (total_min // tf_minutes + 1) * tf_minutes  # ближайший следующий слот
+        next_total = (total_min // tf_minutes + 1) * tf_minutes
 
         days_add = next_total // (24 * 60)
         minutes_in_day = next_total % (24 * 60)
         hour = minutes_in_day // 60
         minute = minutes_in_day % 60
 
-        next_dt = (base + timedelta(days=days_add)).replace(hour=hour, minute=minute)
-        return next_dt
+        return (base + timedelta(days=days_add)).replace(hour=hour, minute=minute)
 
     # =====================================================================
     # ОСНОВНАЯ ЛОГИКА
@@ -123,15 +177,9 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         self._last_signal_ver = signal_data["version"]
         self._last_indicator = signal_data["indicator"]
         signal_received_time = signal_data["timestamp"]
-        self._last_signal_at_str = (
-            signal_data.get("signal_time_str")
-            or format_local_time(signal_received_time)
-        )
+        self._last_signal_at_str = signal_data.get("signal_time_str") or format_local_time(signal_received_time)
 
-        next_expire = signal_data.get("next_expire")
-        if next_expire and next_expire.tzinfo is None:
-            next_expire = next_expire.replace(tzinfo=ZoneInfo(MOSCOW_TZ))
-        self._next_expire_dt = next_expire
+        self._next_expire_dt = self._extract_next_expire_dt(signal_data)
 
         if self._use_any_symbol:
             self.symbol = symbol
@@ -145,25 +193,32 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             self._last_signal_monotonic = None
 
         # ПРОВЕРКА АКТУАЛЬНОСТИ СИГНАЛА ПЕРЕД СТАРТОМ СЕРИИ
-        current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
+        # Важно: если неактуален — НЕ выходим, а ждём новый сигнал.
+        while self._running:
+            current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
 
-        if self._trade_type == "classic":
-            is_valid, reason = self._is_signal_valid_for_classic(
-                signal_data,
-                current_time,
-                for_placement=True,
-            )
-            if not is_valid:
-                log(signal_not_actual_for_placement(symbol, reason))
+            if self._trade_type == "classic":
+                is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
+            else:
+                is_valid, reason = self._is_signal_valid_for_sprint(signal_data, current_time)
+
+            if is_valid:
+                break
+
+            log(signal_not_actual_for_placement(symbol, reason))
+            common = getattr(self, "_common", None)
+            if common is None:
                 return
-        else:
-            is_valid, reason = self._is_signal_valid_for_sprint(
-                signal_data,
-                current_time,
-            )
-            if not is_valid:
-                log(signal_not_actual_for_placement(symbol, reason))
+
+            timeout = float(self.params.get("signal_timeout_sec", 30.0))
+            new_signal = await self._wait_for_new_signal(trade_key, log, symbol, timeframe, timeout=timeout)
+            if not new_signal:
                 return
+
+            signal_data, signal_received_time, direction, _ = self._update_signal_context_in_series(new_signal=new_signal)
+            symbol = signal_data["symbol"]
+            timeframe = signal_data["timeframe"]
+            self._maybe_set_auto_minutes(timeframe)
 
         series_left = self._get_series_left(trade_key)
         if series_left <= 0:
@@ -229,9 +284,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         needs_signal_validation = True
         series_direction = initial_direction
         has_repeated = False
-        signal_at_str = signal_data.get("signal_time_str") or format_local_time(
-            signal_received_time
-        )
+        signal_at_str = signal_data.get("signal_time_str") or format_local_time(signal_received_time)
         series_finished = False
         series_label = self.format_series_label(trade_key, series_left=series_left)
 
@@ -240,72 +293,78 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             if not await self.ensure_account_conditions():
                 continue
 
-            # предварительная проверка актуальности перед шагом серии
+            # === 1) предварительная проверка актуальности перед шагом серии
+            # Если неактуально — НЕ завершаем серию. Ждём новый сигнал и продолжаем.
             if needs_signal_validation:
                 current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
-
                 if self._trade_type == "classic":
-                    is_valid, reason = self._is_signal_valid_for_classic(
-                        signal_data,
-                        current_time,
-                        for_placement=True,
-                    )
-                    if not is_valid:
-                        log(signal_not_actual_for_placement(symbol, reason))
-                        return series_left
+                    is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
                 else:
-                    is_valid, reason = self._is_signal_valid_for_sprint(
-                        {"timestamp": signal_received_time},
-                        current_time,
-                    )
-                    if not is_valid:
-                        log(signal_not_actual_for_placement(symbol, reason))
+                    is_valid, reason = self._is_signal_valid_for_sprint({"timestamp": signal_received_time}, current_time)
+
+                if not is_valid:
+                    log(signal_not_actual_for_placement(symbol, reason))
+                    common = getattr(self, "_common", None)
+                    if common is None:
                         return series_left
 
-            pct, balance = await self.check_payout_and_balance(
-                symbol,
-                stake,
-                min_pct,
-                wait_low,
-            )
+                    timeout = float(self.params.get("signal_timeout_sec", 30.0))
+                    new_signal = await self._wait_for_new_signal(trade_key, log, symbol, timeframe, timeout=timeout)
+                    if not new_signal:
+                        return series_left
+
+                    signal_data, signal_received_time, series_direction, signal_at_str = self._update_signal_context_in_series(
+                        new_signal=new_signal
+                    )
+                    symbol = signal_data["symbol"]
+                    timeframe = signal_data["timeframe"]
+                    self._maybe_set_auto_minutes(timeframe)
+                    needs_signal_validation = True
+                    continue
+
+            pct, _ = await self.check_payout_and_balance(symbol, stake, min_pct, wait_low)
             if pct is None:
                 continue
 
             log(
-                trade_summary(
-                    symbol,
-                    format_amount(stake),
-                    self._trade_minutes,
-                    series_direction,
-                    pct,
-                )
+                trade_summary(symbol, format_amount(stake), self._trade_minutes, series_direction, pct)
                 + f" (step {step_idx + 1})"
             )
 
-            # Финальная проверка актуальности перед размещением сделки
+            # === 2) финальная проверка актуальности перед размещением сделки
+            # Если неактуально — НЕ завершаем серию. Ждём новый сигнал и продолжаем.
             current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
             if self._trade_type == "classic":
-                is_valid, reason = self._is_signal_valid_for_classic(
-                    signal_data,
-                    current_time,
-                    for_placement=True,
-                )
+                is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
             else:
                 sprint_payload = signal_data
                 if not sprint_payload.get("timestamp"):
                     sprint_payload = {"timestamp": signal_received_time}
-                is_valid, reason = self._is_signal_valid_for_sprint(
-                    sprint_payload,
-                    current_time,
-                )
+                is_valid, reason = self._is_signal_valid_for_sprint(sprint_payload, current_time)
 
             if not is_valid:
                 log(signal_not_actual_for_placement(symbol, reason))
-                return series_left
+                common = getattr(self, "_common", None)
+                if common is None:
+                    return series_left
+
+                timeout = float(self.params.get("signal_timeout_sec", 30.0))
+                new_signal = await self._wait_for_new_signal(trade_key, log, symbol, timeframe, timeout=timeout)
+                if not new_signal:
+                    return series_left
+
+                signal_data, signal_received_time, series_direction, signal_at_str = self._update_signal_context_in_series(
+                    new_signal=new_signal
+                )
+                symbol = signal_data["symbol"]
+                timeframe = signal_data["timeframe"]
+                self._maybe_set_auto_minutes(timeframe)
+                needs_signal_validation = True
+                continue
 
             needs_signal_validation = False
 
-            # Для classic: ПЕРЕД КАЖДОЙ сделкой используем следующую свечу от текущего времени
+            # Classic: экспирация = следующая свеча от текущего времени
             if self._trade_type == "classic":
                 self._next_expire_dt = self._calc_next_candle_from_now(timeframe)
 
@@ -316,16 +375,11 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             account_mode = "ДЕМО" if demo_now else "РЕАЛ"
 
             self._status("ставка")
-            trade_id = await self.place_trade_with_retry(
-                symbol,
-                series_direction,
-                stake,
-                self._anchor_ccy,
-            )
+            trade_id = await self.place_trade_with_retry(symbol, series_direction, stake, self._anchor_ccy)
 
             if not trade_id:
+                # Тут вы уже делали "ждём новый сигнал" — оставляю как было.
                 log(trade_placement_failed(symbol, "Ждем новый сигнал."))
-                # ШАГ НЕ УВЕЛИЧИВАЕМ - выходим из серии, ждём новый сигнал
                 await self.sleep(2.0)
                 return series_left
 
@@ -374,16 +428,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                 profit_val = float(profit)
                 outcome = "win" if profit_val > 0 else "refund" if profit_val == 0 else "loss"
 
-            if not series_started:
-                if outcome == "loss":
-                    series_started = True
-                    cum_profit += profit_val
-                else:
-                    # Серия ещё не началась, сбрасываем ставку и ждём следующую итерацию
-                    stake = base_unit
-                    continue
-            else:
-                cum_profit += profit_val
+            cum_profit += profit_val
 
             if cum_profit >= target_profit:
                 log(target_profit_reached(symbol, format_amount(cum_profit)))
@@ -392,17 +437,18 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                 break
 
             need = max(0.0, target_profit - cum_profit)
-            next_stake = self._next_stake(
-                outcome=outcome,
-                stake=stake,
-                base_unit=base_unit,
-                pct=pct,
-                need=need,
-                profit=profit_val,
-                cum_profit=cum_profit,
-                log=log,
+            stake = float(
+                self._next_stake(
+                    outcome=outcome,
+                    stake=stake,
+                    base_unit=base_unit,
+                    pct=pct,
+                    need=need,
+                    profit=profit_val,
+                    cum_profit=cum_profit,
+                    log=log,
+                )
             )
-            stake = float(next_stake)
             step_idx += 1
 
             if step_idx >= max_steps or not self._running:
@@ -416,10 +462,6 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                     "series_started": series_started,
                 }
 
-            # Раньше здесь мы сдвигали _next_expire_dt на таймфрейм.
-            # Теперь этого НЕ делаем: в classic всегда пересчитываем
-            # экспирацию через _calc_next_candle_from_now перед сделкой.
-
             should_repeat = double_entry and outcome == "loss" and not has_repeated
             if should_repeat:
                 has_repeated = True
@@ -427,7 +469,6 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                 continue
 
             await self.sleep(0.2)
-            continue
 
         if series_finished:
             series_left = max(0, series_left - 1)
@@ -444,13 +485,11 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         return series_left
 
     def stop(self):
-        """Останавливает стратегию и очищает состояние серий."""
         super().stop()
         self._series_state.clear()
         self._active_series.clear()
 
     def is_series_active(self, trade_key: str) -> bool:
-        """Возвращает статус активности серии для указанного ключа"""
         return self._active_series.get(trade_key, False)
 
     def _next_stake(
@@ -465,11 +504,9 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         cum_profit: float,
         log,
     ) -> float:
-        """Определяет следующую ставку - должен быть реализован в дочерних классах"""
         raise NotImplementedError("Метод должен быть реализован в дочернем классе")
 
     def _calculate_trade_duration(self, symbol: str) -> tuple[float, float]:
-        """Рассчитывает длительность сделки"""
         if self._trade_type == "classic" and self._next_expire_dt is not None:
             trade_seconds = max(
                 0.0,
@@ -479,7 +516,6 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         else:
             trade_seconds = float(self._trade_minutes) * 60.0
             expected_end_ts = datetime.now().timestamp() + trade_seconds
-
         return trade_seconds, expected_end_ts
 
     def _notify_pending_trade(
@@ -498,7 +534,6 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         series_label: Optional[str] = None,
         step_label: Optional[str] = None,
     ):
-        """Уведомляет о pending сделке"""
         placed_at_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
         trade_key = self.build_trade_key(symbol, timeframe)
         if series_label is None:
