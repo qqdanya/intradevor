@@ -190,7 +190,7 @@ class StrategyControlDialog(QWidget):
         self.strategy_key = strategy_key
         self.minutes = None
         self.auto_minutes = QCheckBox("Авто")
-        self.auto_minutes.setChecked(bool(getv("auto_minutes", False)))
+        self.auto_minutes.setChecked(bool(getv("auto_minutes", True)))
 
         def minutes_row() -> QWidget:
             row = QWidget()
