@@ -52,6 +52,8 @@ class FixedStakeStrategy(BaseTradingStrategy):
     - repeat_count ведём через BaseTradingStrategy._get_series_left/_set_series_left (по trade_key)
     - при LOW payout — коротко ждём и подхватываем самый свежий сигнал из StrategyCommon
     - при устаревании перед размещением — ждём новый сигнал, серию/лимит НЕ "съедаем"
+    - ВАЖНО: при allow_parallel_trades=True списание repeat_count делается атомарно под Lock,
+      сразу после успешного размещения сделки (иначе гонки и "шаг не инкриментится").
     """
 
     def __init__(
@@ -91,9 +93,19 @@ class FixedStakeStrategy(BaseTradingStrategy):
         # Флаг уведомления о низком payout (для логов payout_* ниже)
         self._low_payout_notified: bool = False
 
+        # Locks для атомарного списания repeat_count по trade_key (важно при allow_parallel_trades=True)
+        self._series_locks: dict[str, asyncio.Lock] = {}
+
     # =====================================================================
     # ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
     # =====================================================================
+
+    def _get_series_lock(self, trade_key: str) -> asyncio.Lock:
+        lock = self._series_locks.get(trade_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._series_locks[trade_key] = lock
+        return lock
 
     def allow_concurrent_trades_per_key(self) -> bool:
         """Совместимость со старым поведением: можно параллелить (если allow_parallel_trades=True)."""
@@ -377,12 +389,38 @@ class FixedStakeStrategy(BaseTradingStrategy):
                 demo_now = False
             account_mode = "ДЕМО" if demo_now else "РЕАЛ"
 
-            # Размещаем сделку
+            # Размещаем сделку + атомарно списываем шаг/лимит (важно при параллели)
             self._status("делает ставку")
-            trade_id = await self.place_trade_with_retry(symbol, direction, stake, self._anchor_ccy)
-            if not trade_id:
-                log(trade_placement_failed(symbol, "Пропускаем сигнал."))
-                return  # лимит НЕ уменьшаем
+
+            total = int(self.params.get("repeat_count", 0)) or 0
+            series_label = self.format_series_label(trade_key)
+            step_label = None
+            series_left_after_place: int | None = None
+
+            async with self._get_series_lock(trade_key):
+                current_left = self._get_series_left(trade_key)
+                if current_left <= 0:
+                    if not self._stop_when_idle_requested:
+                        done = int(self.params.get("repeat_count", 0))
+                        log(trade_limit_reached(symbol, done, done))
+                        self._status("достигнут лимит сделок")
+                    self._request_stop_when_idle("достигнут лимит сделок")
+                    return
+
+                trade_id = await self.place_trade_with_retry(symbol, direction, stake, self._anchor_ccy)
+                if not trade_id:
+                    log(trade_placement_failed(symbol, "Пропускаем сигнал."))
+                    return  # лимит НЕ уменьшаем
+
+                # ✅ уменьшаем лимит СРАЗУ после успешного размещения (иначе гонки при параллели)
+                new_left = max(0, int(current_left) - 1)
+                self._set_series_left(trade_key, new_left)
+                series_left_after_place = new_left
+
+                # ✅ шаг фиксируем по current_left (до списания)
+                if total > 0:
+                    current_step = max(1, min(total, total - int(current_left) + 1))
+                    step_label = f"{current_step}/{total}"
 
             self._placed_trades_total += 1
 
@@ -395,8 +433,6 @@ class FixedStakeStrategy(BaseTradingStrategy):
             )
 
             signal_at_str = signal_data.get("signal_time_str") or format_local_time(signal_data["timestamp"])
-            series_label = self.format_series_label(trade_key, series_left=series_left)
-            step_label = self.format_step_label(trade_key, series_left=series_left)
 
             # pending notify
             self._set_planned_stake(trade_key, stake)
@@ -447,12 +483,8 @@ class FixedStakeStrategy(BaseTradingStrategy):
             else:
                 log(result_loss(symbol, f"Результат: {format_amount(profit)}"))
 
-            # Лимит сделок уменьшаем ТОЛЬКО если сделка была размещена
-            series_left = max(0, int(series_left) - 1)
-            self._set_series_left(trade_key, series_left)
-
-            if series_left > 0:
-                self._status(f"сделок осталось: {series_left}")
+            if (series_left_after_place or 0) > 0:
+                self._status(f"сделок осталось: {series_left_after_place}")
             else:
                 self._status("достигнут лимит сделок")
                 self._request_stop_when_idle("достигнут лимит сделок")
