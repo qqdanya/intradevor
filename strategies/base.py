@@ -40,7 +40,6 @@ class StrategyBase:
         self._signal_listener_func_key: Optional[Any] = None
         self._signal_listener_config: Optional[Any] = None
         self._signal_queue_since_version: Optional[int] = None
-        self._session_warmup_task: Optional[asyncio.Task] = None
 
     async def run(self):
         """Основной метод запуска стратегии - должен быть реализован в дочерних классах"""
@@ -54,14 +53,6 @@ class StrategyBase:
         self._stop_event = asyncio.Event()
         self._pause_event = asyncio.Event()
         self._pause_event.set()
-
-        # Прогреваем HTTP-сессию заранее, чтобы не ждать на первом запросе
-        try:
-            loop = asyncio.get_running_loop()
-            self._session_warmup_task = loop.create_task(self._warmup_http_session())
-        except RuntimeError:
-            # Если цикла нет (например, при синхронных тестах), пропускаем прогрев
-            self._session_warmup_task = None
 
     def has_started(self) -> bool:
         """Проверяет, была ли стратегия запущена"""
@@ -86,23 +77,12 @@ class StrategyBase:
         self._stop_event.set()
         self._pause_event.set()
         self._emit_status("завершен")
-
+       
         # Отменяем все задачи
-        if self._session_warmup_task and not self._session_warmup_task.done():
-            self._session_warmup_task.cancel()
-        self._session_warmup_task = None
         if self._signal_listener_task and not self._signal_listener_task.done():
             self._signal_listener_task.cancel()
         if self._task and not self._task.done():
             self._task.cancel()
-
-    async def _warmup_http_session(self) -> None:
-        """Предсоздание aiohttp-сессии, чтобы ускорить первый запрос."""
-        try:
-            await self.session.ensure_session()
-        except Exception:
-            # прогрев не критичен, игнорируем ошибки
-            pass
 
     def pause(self):
         """Постановка стратегии на паузу"""
