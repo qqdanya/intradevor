@@ -27,6 +27,7 @@ from strategies.log_messages import (
     series_remaining,
 )
 
+
 ANTIMARTINGALE_DEFAULTS = {
     "base_investment": 100,
     "max_steps": 3,
@@ -57,6 +58,9 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
           * если был хотя бы один WIN — серия считается завершённой.
       - Если сигнал "неактуален для размещения" — СЕРИЮ НЕ ЗАВЕРШАЕМ:
         ждём новый сигнал и продолжаем с прежними параметрами.
+      - При низком payout ДО старта серии:
+        НЕ кладём в локальную очередь (её нет),
+        а коротко ждём восстановления payout и параллельно берём самый свежий сигнал из StrategyCommon.
     """
 
     def __init__(
@@ -89,7 +93,6 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
 
         self._active_series: dict[str, bool] = {}
         self._series_remaining: dict[str, int] = {}
-        self._low_payout_queues: dict[str, list[dict]] = {}
 
     # =====================================================================
     # СИГНАЛЫ: ожидание / обновление контекста
@@ -114,7 +117,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
         """
         После WIN/PUSH: НЕ повторяем сделку.
         Сначала пробуем взять самый свежий сигнал из StrategyCommon, иначе ждём новый.
-        НИЧЕГО НЕ УДАЛЯЕМ ИЗ ОЧЕРЕДИ ДО ТОГО, КАК ВЗЯЛИ СИГНАЛ.
+        Ничего не "чистим" в очереди.
         """
         common = getattr(self, "_common", None)
         if common is None:
@@ -122,12 +125,6 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
 
         sig = common.pop_latest_signal(trade_key)
         if sig:
-            # Если хочешь вообще не чистить хвост — оставь как есть (ничего не делаем).
-            # Если хочешь очищать хвост после взятия одного сигнала — раскомментируй:
-            try:
-                common.discard_signals_for(trade_key)
-            except Exception:
-                pass
             return sig
 
         return await self._wait_for_new_signal(trade_key, timeout=timeout)
@@ -213,17 +210,6 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
 
         return False
 
-    def _enqueue_low_payout_signal(self, trade_key: str, signal_data: dict) -> None:
-        self._low_payout_queues.setdefault(trade_key, []).append(signal_data)
-
-    def _pop_latest_from_low_payout_queue(self, trade_key: str) -> Optional[dict]:
-        queue = self._low_payout_queues.get(trade_key)
-        if not queue:
-            return None
-        latest = queue[-1]
-        self._low_payout_queues[trade_key] = []
-        return latest
-
     def is_series_active(self, trade_key: str) -> bool:
         return self._active_series.get(trade_key, False)
 
@@ -249,22 +235,23 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
                 await common._handle_pending_signal(trade_key, signal_data)
             return
 
-        # payout low -> в локальную очередь
-        if await self._is_payout_low_now(symbol):
-            self._enqueue_low_payout_signal(trade_key, signal_data)
-            return
+        # === НИЗКИЙ PAYOUT: НЕ кладём в локальную очередь (её нет),
+        # а ждём восстановления payout короткими интервалами.
+        # Пока ждём — можем заменить сигнал на более свежий из StrategyCommon.
+        while self._running and await self._is_payout_low_now(symbol):
+            await self._pause_point()
 
-        # payout норм -> если была очередь low payout, берём самый свежий
-        queued_signal = self._pop_latest_from_low_payout_queue(trade_key)
-        if queued_signal is not None:
-            self._enqueue_low_payout_signal(trade_key, signal_data)
-            queued_signal = self._pop_latest_from_low_payout_queue(trade_key)
-            if queued_signal is not None:
-                signal_data = queued_signal
-                symbol = signal_data["symbol"]
-                timeframe = signal_data["timeframe"]
-                direction = signal_data["direction"]
-                self._maybe_set_auto_minutes(timeframe)
+            common = getattr(self, "_common", None)
+            if common is not None:
+                newer = common.pop_latest_signal(trade_key)
+                if newer:
+                    signal_data = newer
+                    symbol = signal_data["symbol"]
+                    timeframe = signal_data["timeframe"]
+                    direction = signal_data["direction"]
+                    self._maybe_set_auto_minutes(timeframe)
+
+            await asyncio.sleep(float(self.params.get("wait_on_low_percent", 1)))
 
         # repeat_count
         max_series = int(self.params.get("repeat_count", 10))
@@ -396,7 +383,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
                     self._maybe_set_auto_minutes(timeframe)
                     continue
 
-            # payout/balance
+            # payout/balance (внутри серии уже умеет ждать)
             min_pct = int(self.params.get("min_percent", 70))
             wait_low = float(self.params.get("wait_on_low_percent", 1))
 
@@ -505,7 +492,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
                 current_stake += float(profit)
                 step += 1
 
-                # ✅ после WIN ждём/берём новый сигнал (очередь НЕ чистим!)
+                # ✅ после WIN ждём/берём новый сигнал (очередь не чистим)
                 timeout = float(self.params.get("signal_timeout_sec", 30.0))
                 next_signal = await self._get_next_signal_after_result(trade_key, timeout=timeout)
                 if not next_signal:
@@ -520,7 +507,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
             if abs(profit) < 1e-9:
                 log(push_repeat_same_stake(symbol))
 
-                # ✅ после PUSH ждём/берём новый сигнал (очередь НЕ чистим!)
+                # ✅ после PUSH ждём/берём новый сигнал (очередь не чистим)
                 timeout = float(self.params.get("signal_timeout_sec", 30.0))
                 next_signal = await self._get_next_signal_after_result(trade_key, timeout=timeout)
                 if not next_signal:
@@ -615,7 +602,6 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
         super().stop()
         self._active_series.clear()
         self._series_remaining.clear()
-        self._low_payout_queues.clear()
 
     def update_params(self, **params):
         super().update_params(**params)
