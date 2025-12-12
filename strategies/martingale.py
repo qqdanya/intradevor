@@ -470,6 +470,7 @@ class MartingaleStrategy(BaseTradingStrategy):
                 expected_end_ts,
                 signal_at=signal_at_str,
                 series_label=series_label,
+                step_label=step_label,
             )
             self._register_pending_trade(trade_id, symbol, timeframe)
 
