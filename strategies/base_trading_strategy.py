@@ -6,11 +6,11 @@ from zoneinfo import ZoneInfo
 from core.http_async import HttpClient
 from core.intrade_api_async import (
     get_balance_info,
-    get_current_percent,
     place_trade,
     check_trade_result,
     is_demo_account,
 )
+from core.payout_provider import get_cached_payout
 from core.signal_waiter import wait_for_signal_versioned
 from core.money import format_amount
 from core.policy import normalize_sprint
@@ -493,7 +493,7 @@ class BaseTradingStrategy(StrategyBase):
         account_ccy = self._anchor_ccy
        
         # Проверка выплаты
-        pct = await get_current_percent(
+        pct = await get_cached_payout(
             self.http_client,
             investment=stake,
             option=symbol,

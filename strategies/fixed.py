@@ -11,8 +11,8 @@ from core.money import format_amount
 from core.intrade_api_async import (
     is_demo_account,
     get_balance_info,
-    get_current_percent,
 )
+from core.payout_provider import get_cached_payout
 from core.time_utils import format_local_time
 from strategies.log_messages import (
     start_processing,
@@ -108,7 +108,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
     async def _is_payout_low_now(self, symbol: str, stake: float) -> Optional[int]:
         min_pct = int(self.params.get("min_percent", 70))
         try:
-            pct = await get_current_percent(
+            pct = await get_cached_payout(
                 self.http_client,
                 investment=stake,
                 option=symbol,
