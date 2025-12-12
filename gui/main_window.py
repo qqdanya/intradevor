@@ -14,8 +14,9 @@ from PyQt6.QtWidgets import (
     QApplication,
     QFontDialog,
 )
-from PyQt6.QtGui import QTextCursor, QColor
+from PyQt6.QtGui import QTextCursor, QColor, QFont, QMovie
 from PyQt6.QtCore import Qt, QTimer
+from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from collections import defaultdict
@@ -154,9 +155,20 @@ class MainWindow(QWidget):
         self.user_id_label = QLabel("user_id: loading...")
         self.user_hash_label = QLabel("user_hash: loading...")
         self.balance_label = QLabel("Баланс: loading...")
-        self.moscow_time_label = QLabel("Московское время: --:--:--")
+        self.moscow_time_label = QLabel("--:--:--")
         self.moscow_time_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        self.moscow_time_label.setStyleSheet("font-size: 14px;")
+        time_font = QFont("Monospace")
+        time_font.setStyleHint(QFont.StyleHint.TypeWriter)
+        time_font.setPixelSize(48)
+        self.moscow_time_label.setFont(time_font)
+        self.moscow_time_label.setStyleSheet(
+            "font-weight: 700; letter-spacing: 1px;"
+        )
+
+        self.time_gif_label = QLabel()
+        self.time_gif_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self.time_gif_label.setStyleSheet("padding-top: 8px;")
+        self.time_gif_movie: QMovie | None = None
 
         # Сделаем лейблы фиксированными по вертикали, чтобы их не растягивало
         from PyQt6.QtWidgets import QSizePolicy
@@ -185,6 +197,7 @@ class MainWindow(QWidget):
         time_layout = QVBoxLayout(time_box)
         time_layout.setContentsMargins(0, 0, 0, 0)
         time_layout.addWidget(self.moscow_time_label, alignment=Qt.AlignmentFlag.AlignHCenter)
+        time_layout.addWidget(self.time_gif_label, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         right_box = QWidget()
         right_v = QVBoxLayout(right_box)
@@ -288,6 +301,7 @@ class MainWindow(QWidget):
         self._time_timer.timeout.connect(self._update_moscow_time)
         self._update_moscow_time()
         self._time_timer.start()
+        self._load_time_gif()
 
     def strategy_label(self, key: str) -> str:
         return self.strategy_labels.get(key, key)
@@ -362,11 +376,32 @@ class MainWindow(QWidget):
             moscow_tz = ZoneInfo("Europe/Moscow")
             now_local = datetime.now().astimezone()
             now_moscow = now_local.astimezone(moscow_tz)
-            time_text = now_moscow.strftime("Московское время: %H:%M:%S")
+            time_text = now_moscow.strftime("%H:%M:%S")
         except Exception:
-            time_text = "Московское время: n/a"
+            time_text = "--:--:--"
 
         self.moscow_time_label.setText(time_text)
+
+    def _load_time_gif(self):
+        gif_path = config.get_time_gif_path()
+
+        if not gif_path:
+            self.time_gif_label.setText("Гифка не указана")
+            return
+
+        path = Path(gif_path).expanduser()
+        if not path.exists():
+            self.time_gif_label.setText("Гифка не найдена")
+            return
+
+        movie = QMovie(str(path))
+        if not movie.isValid():
+            self.time_gif_label.setText("Не удалось загрузить гифку")
+            return
+
+        self.time_gif_movie = movie
+        self.time_gif_label.setMovie(movie)
+        movie.start()
 
     def _choose_font(self):
         current_font = QApplication.instance().font()
