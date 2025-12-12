@@ -220,7 +220,7 @@ class StrategyControlDialog(QWidget):
         self.parallel_trades = QCheckBox()
         self.parallel_trades.setChecked(bool(getv("allow_parallel_trades", True)))
         self.common_series = QCheckBox()
-        self.common_series.setChecked(bool(getv("use_common_series", False)))
+        self.common_series.setChecked(bool(getv("use_common_series", True)))
 
         if strategy_key in ("oscar_grind_1", "oscar_grind_2"):
             self.minutes = QSpinBox()

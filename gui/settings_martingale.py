@@ -70,7 +70,7 @@ class MartingaleSettingsDialog(QDialog):
 
         self.common_series = QCheckBox()
         self.common_series.setChecked(
-            bool(self.params.get("use_common_series", False))
+            bool(self.params.get("use_common_series", True))
         )
         common_series_label = QLabel("Общая серия для всех сигналов")
         common_series_label.mousePressEvent = (
