@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import asyncio
 from datetime import datetime, timedelta
 from typing import Optional
@@ -19,7 +20,6 @@ from strategies.log_messages import (
     result_unknown,
     series_completed,
     trade_step,
-    trade_result_removed,
     win_with_series_finish,
     push_repeat,
     loss_with_increase,
@@ -50,6 +50,8 @@ class MartingaleStrategy(BaseTradingStrategy):
       - Classic: экспирация = следующая свеча от "сейчас"
       - Sprint: окно актуальности расширяется внутри серии по consecutive_non_win
       - Если сигнал устарел для размещения — НЕ завершаем серию, ждём новый сигнал
+      - При низком payout ДО старта серии: НЕ кладём в локальную очередь (её нет),
+        а ждём восстановления payout короткими интервалами и подхватываем свежий сигнал.
     """
 
     def __init__(
@@ -83,11 +85,8 @@ class MartingaleStrategy(BaseTradingStrategy):
         self._active_series: dict[str, bool] = {}
         self._series_remaining: dict[str, int] = {}
 
-        # trade_key -> list[signal_data]
-        self._low_payout_queues: dict[str, list[dict]] = {}
-
     # =====================================================================
-    # ВСПОМОГАТЕЛЬНОЕ: ожидание нового сигнала / обновление контекста
+    # ожидание нового сигнала / обновление контекста
     # =====================================================================
 
     async def _wait_for_new_signal(
@@ -153,7 +152,7 @@ class MartingaleStrategy(BaseTradingStrategy):
         return (base + timedelta(days=days_add)).replace(hour=hour, minute=minute)
 
     # =====================================================================
-    # low payout queue
+    # low payout helper (без локальной очереди)
     # =====================================================================
 
     async def _is_payout_low_now(self, symbol: str) -> bool:
@@ -182,17 +181,6 @@ class MartingaleStrategy(BaseTradingStrategy):
             return True
 
         return False
-
-    def _enqueue_low_payout_signal(self, trade_key: str, signal_data: dict) -> None:
-        self._low_payout_queues.setdefault(trade_key, []).append(signal_data)
-
-    def _pop_latest_from_low_payout_queue(self, trade_key: str) -> Optional[dict]:
-        queue = self._low_payout_queues.get(trade_key)
-        if not queue:
-            return None
-        latest = queue[-1]
-        self._low_payout_queues[trade_key] = []
-        return latest
 
     # =====================================================================
     # Sprint расширенная валидация для мартингейла
@@ -241,28 +229,34 @@ class MartingaleStrategy(BaseTradingStrategy):
         log = self.log or (lambda s: None)
         trade_key = self.build_trade_key(symbol, timeframe)
 
-        if trade_key in self._active_series and self._active_series[trade_key]:
+        # активная серия -> в StrategyCommon
+        if self._active_series.get(trade_key):
             log(series_already_active(symbol, timeframe))
             common = getattr(self, "_common", None)
             if common is not None:
                 await common._handle_pending_signal(trade_key, signal_data)
             return
 
-        if await self._is_payout_low_now(symbol):
-            self._enqueue_low_payout_signal(trade_key, signal_data)
-            return
+        # === LOW PAYOUT ДО СТАРТА СЕРИИ ===
+        # Не уходим в "ждать новый сигнал 15м/1ч". Ждём восстановления payout коротко,
+        # и по пути подхватываем самый свежий сигнал из StrategyCommon.
+        while self._running and await self._is_payout_low_now(symbol):
+            await self._pause_point()
 
-        queued_signal = self._pop_latest_from_low_payout_queue(trade_key)
-        if queued_signal is not None:
-            self._enqueue_low_payout_signal(trade_key, signal_data)
-            queued_signal = self._pop_latest_from_low_payout_queue(trade_key)
-            if queued_signal is not None:
-                signal_data = queued_signal
-                symbol = signal_data["symbol"]
-                timeframe = signal_data["timeframe"]
-                direction = signal_data["direction"]
-                self._maybe_set_auto_minutes(timeframe)
+            common = getattr(self, "_common", None)
+            if common is not None:
+                newer = common.pop_latest_signal(trade_key)
+                if newer:
+                    signal_data = newer
+                    symbol = signal_data["symbol"]
+                    timeframe = signal_data["timeframe"]
+                    direction = signal_data["direction"]
+                    self._maybe_set_auto_minutes(timeframe)
+                    trade_key = self.build_trade_key(symbol, timeframe)
 
+            await asyncio.sleep(float(self.params.get("wait_on_low_percent", 1)))
+
+        # repeat_count
         max_series = int(self.params.get("repeat_count", 10))
         remaining_series = self._series_remaining.get(trade_key)
         if remaining_series is None:
@@ -299,9 +293,6 @@ class MartingaleStrategy(BaseTradingStrategy):
                     is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
                     if not is_valid:
                         log(signal_not_actual(symbol, "classic", reason))
-                        common = getattr(self, "_common", None)
-                        if common is None:
-                            return
                         timeout = float(self.params.get("signal_timeout_sec", 30.0))
                         new_signal = await self._wait_for_new_signal(trade_key, log, symbol, timeframe, timeout=timeout)
                         if not new_signal:
@@ -315,9 +306,6 @@ class MartingaleStrategy(BaseTradingStrategy):
                     is_valid, reason = self._is_signal_valid_for_sprint(signal_data, current_time)
                     if not is_valid:
                         log(signal_not_actual(symbol, "sprint", reason))
-                        common = getattr(self, "_common", None)
-                        if common is None:
-                            return
                         timeout = float(self.params.get("signal_timeout_sec", 30.0))
                         new_signal = await self._wait_for_new_signal(trade_key, log, symbol, timeframe, timeout=timeout)
                         if not new_signal:
@@ -366,7 +354,7 @@ class MartingaleStrategy(BaseTradingStrategy):
         did_place_any_trade = False
         consecutive_non_win = 0
 
-        series_direction = initial_direction
+        series_direction = int(initial_direction)
         signal_at_str = signal_data.get("signal_time_str") or format_local_time(signal_received_time)
         max_steps = int(self.params.get("max_steps", 5))
         series_label = self.format_series_label(trade_key, series_left=series_left)
@@ -376,7 +364,7 @@ class MartingaleStrategy(BaseTradingStrategy):
             if not await self.ensure_account_conditions():
                 continue
 
-            # 1) для первой ставки — проверка (если невалидно: ждём новый сигнал, но серию НЕ завершаем)
+            # 1) для первой ставки — проверка (если невалидно: ждём новый сигнал, серию НЕ завершаем)
             if not did_place_any_trade:
                 current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
                 if self._trade_type == "classic":
@@ -386,16 +374,12 @@ class MartingaleStrategy(BaseTradingStrategy):
 
                 if not is_valid:
                     log(signal_not_actual_for_placement(symbol, reason))
-                    common = getattr(self, "_common", None)
-                    if common is None:
-                        return
                     timeout = float(self.params.get("signal_timeout_sec", 30.0))
                     new_signal = await self._wait_for_new_signal(trade_key, log, symbol, timeframe, timeout=timeout)
                     if not new_signal:
                         return
-                    signal_data, signal_received_time, series_direction, signal_at_str = self._update_signal_context_in_series(
-                        new_signal=new_signal
-                    )
+                    signal_data, signal_received_time, series_direction, signal_at_str = \
+                        self._update_signal_context_in_series(new_signal=new_signal)
                     symbol = signal_data["symbol"]
                     timeframe = signal_data["timeframe"]
                     self._maybe_set_auto_minutes(timeframe)
@@ -439,16 +423,12 @@ class MartingaleStrategy(BaseTradingStrategy):
 
             if not is_valid:
                 log(signal_not_actual_for_placement(symbol, reason))
-                common = getattr(self, "_common", None)
-                if common is None:
-                    return
                 timeout = float(self.params.get("signal_timeout_sec", 30.0))
                 new_signal = await self._wait_for_new_signal(trade_key, log, symbol, timeframe, timeout=timeout)
                 if not new_signal:
                     return
-                signal_data, signal_received_time, series_direction, signal_at_str = self._update_signal_context_in_series(
-                    new_signal=new_signal
-                )
+                signal_data, signal_received_time, series_direction, signal_at_str = \
+                    self._update_signal_context_in_series(new_signal=new_signal)
                 symbol = signal_data["symbol"]
                 timeframe = signal_data["timeframe"]
                 self._maybe_set_auto_minutes(timeframe)
@@ -510,31 +490,16 @@ class MartingaleStrategy(BaseTradingStrategy):
                 log(result_unknown(symbol, treat_as_loss=True))
                 step += 1
                 consecutive_non_win += 1
-                common = getattr(self, "_common", None)
-                if common is not None:
-                    removed = common.discard_signals_for(trade_key)
-                    if removed:
-                        log(trade_result_removed(symbol, removed, "LOSS"))
             elif profit > 0:
                 log(win_with_series_finish(symbol, format_amount(profit)))
                 break
             elif abs(profit) < 1e-9:
                 log(push_repeat(symbol))
                 consecutive_non_win += 1
-                common = getattr(self, "_common", None)
-                if common is not None:
-                    removed = common.discard_signals_for(trade_key)
-                    if removed:
-                        log(trade_result_removed(symbol, removed, "PUSH"))
             else:
                 log(loss_with_increase(symbol, format_amount(profit)))
                 step += 1
                 consecutive_non_win += 1
-                common = getattr(self, "_common", None)
-                if common is not None:
-                    removed = common.discard_signals_for(trade_key)
-                    if removed:
-                        log(trade_result_removed(symbol, removed, "LOSS"))
 
             await self.sleep(0.2)
 
@@ -571,7 +536,6 @@ class MartingaleStrategy(BaseTradingStrategy):
         super().stop()
         self._active_series.clear()
         self._series_remaining.clear()
-        self._low_payout_queues.clear()
 
     def update_params(self, **params):
         super().update_params(**params)
