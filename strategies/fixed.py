@@ -32,7 +32,7 @@ from strategies.log_messages import (
 
 FIXED_DEFAULTS = {
     "base_investment": 100,
-    "repeat_count": 10,  # лимит сделок (по trade_key) в новой архитектуре
+    "repeat_count": 10,  # лимит сделок
     "min_balance": 100,
     "min_percent": 70,
     "wait_on_low_percent": 1,
@@ -49,11 +49,13 @@ FIXED_DEFAULTS = {
 class FixedStakeStrategy(BaseTradingStrategy):
     """
     Fixed Stake (1 сделка на сигнал), адаптировано под новую архитектуру:
-    - repeat_count ведём через BaseTradingStrategy._get_series_left/_set_series_left (по trade_key)
+    - при allow_parallel_trades=True:
+        repeat_count/step считаем по trade_key (как было), списание атомарно под Lock (из-за гонок)
+    - при allow_parallel_trades=False:
+        ОДНА глобальная серия шагов на всю стратегию (не зависит от symbol/timeframe),
+        step инкрементится при каждой успешно размещённой сделке.
     - при LOW payout — коротко ждём и подхватываем самый свежий сигнал из StrategyCommon
-    - при устаревании перед размещением — ждём новый сигнал, серию/лимит НЕ "съедаем"
-    - ВАЖНО: при allow_parallel_trades=True списание repeat_count делается атомарно под Lock,
-      сразу после успешного размещения сделки (иначе гонки и "шаг не инкриментится").
+    - при устаревании перед размещением — ждём новый сигнал, лимит НЕ "съедаем"
     """
 
     def __init__(
@@ -96,6 +98,10 @@ class FixedStakeStrategy(BaseTradingStrategy):
         # Locks для атомарного списания repeat_count по trade_key (важно при allow_parallel_trades=True)
         self._series_locks: dict[str, asyncio.Lock] = {}
 
+        # Глобальная серия для allow_parallel_trades=False
+        self._global_left: Optional[int] = None  # инициализируем лениво из repeat_count
+        self._global_lock: asyncio.Lock = asyncio.Lock()
+
     # =====================================================================
     # ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
     # =====================================================================
@@ -108,7 +114,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
         return lock
 
     def allow_concurrent_trades_per_key(self) -> bool:
-        """Совместимость со старым поведением: можно параллелить (если allow_parallel_trades=True)."""
+        """Можно ли параллелить (если allow_parallel_trades=True)."""
         return bool(self.params.get("allow_parallel_trades", True))
 
     def is_series_active(self, trade_key: str) -> bool:
@@ -213,15 +219,14 @@ class FixedStakeStrategy(BaseTradingStrategy):
         return trade_seconds, expected_end_ts
 
     def format_series_label(self, trade_key: str, *, series_left: int | None = None) -> str | None:
-        """
-        Для FixedStake показываем счётчик сделок: текущая/максимум (по trade_key).
-        series_left — остаток ДО списания текущей сделки.
-        """
         return "1/1"
 
     def format_step_label(self, trade_key: str, *, series_left: int | None = None) -> str | None:
-        """Возвращает номер текущей ставки в формате "Текущая/Максимум"."""
-
+        """
+        step для UI:
+        - allow_parallel_trades=False -> глобальный шаг
+        - allow_parallel_trades=True  -> шаг по trade_key (как раньше)
+        """
         try:
             total = int(self.params.get("repeat_count", 0))
         except Exception:
@@ -229,6 +234,16 @@ class FixedStakeStrategy(BaseTradingStrategy):
         if total <= 0:
             return None
 
+        # Глобально показывать можно только если уже инициализировано (иначе будет "1/10" до первой сделки)
+        if not self.allow_concurrent_trades_per_key():
+            if self._global_left is None:
+                # ещё ничего не размещали
+                current = 1
+            else:
+                current = max(1, min(total, total - int(self._global_left) + 1))
+            return f"{current}/{total}"
+
+        # По trade_key
         if series_left is None:
             series_left = self._get_series_left(trade_key)
 
@@ -239,6 +254,15 @@ class FixedStakeStrategy(BaseTradingStrategy):
 
         current = max(1, min(total, total - remaining + 1))
         return f"{current}/{total}"
+
+    def _ensure_global_left(self) -> int:
+        if self._global_left is None:
+            try:
+                total = int(self.params.get("repeat_count", 0))
+            except Exception:
+                total = 0
+            self._global_left = max(0, total)
+        return int(self._global_left)
 
     # =====================================================================
     # ОСНОВНАЯ ЛОГИКА
@@ -261,15 +285,28 @@ class FixedStakeStrategy(BaseTradingStrategy):
                 await self._common._handle_pending_signal(trade_key, signal_data)
             return
 
-        # Сколько сделок ещё можно сделать по этому trade_key
-        series_left = self._get_series_left(trade_key)
-        if series_left <= 0:
-            if not self._stop_when_idle_requested:
-                done = int(self.params.get("repeat_count", 0))
-                log(trade_limit_reached(symbol, done, done))
-                self._status("достигнут лимит сделок")
-            self._request_stop_when_idle("достигнут лимит сделок")
-            return
+        # Лимит сделок:
+        # - allow_parallel=True  -> по trade_key (series_left)
+        # - allow_parallel=False -> глобально (self._global_left)
+        if self.allow_concurrent_trades_per_key():
+            series_left = self._get_series_left(trade_key)
+            if series_left <= 0:
+                if not self._stop_when_idle_requested:
+                    done = int(self.params.get("repeat_count", 0))
+                    log(trade_limit_reached(symbol, done, done))
+                    self._status("достигнут лимит сделок")
+                self._request_stop_when_idle("достигнут лимит сделок")
+                return
+        else:
+            async with self._global_lock:
+                left = self._ensure_global_left()
+                if left <= 0:
+                    if not self._stop_when_idle_requested:
+                        done = int(self.params.get("repeat_count", 0))
+                        log(trade_limit_reached(symbol, done, done))
+                        self._status("достигнут лимит сделок")
+                    self._request_stop_when_idle("достигнут лимит сделок")
+                    return
 
         # Обновляем "*"
         if self._use_any_symbol:
@@ -327,7 +364,6 @@ class FixedStakeStrategy(BaseTradingStrategy):
                     self._maybe_set_auto_minutes(timeframe)
                     trade_key = self.build_trade_key(symbol, timeframe)
 
-                    # обновляем контекст сигнала
                     self._last_signal_ver = signal_data.get("version", self._last_signal_ver)
                     self._last_indicator = signal_data.get("indicator", self._last_indicator)
                     self._last_signal_at_str = format_local_time(signal_data["timestamp"])
@@ -353,7 +389,6 @@ class FixedStakeStrategy(BaseTradingStrategy):
                 new_signal = await self._wait_for_new_signal(trade_key, log, symbol, timeframe, timeout=timeout)
                 if not new_signal:
                     return
-                # Переподхватили новый сигнал — перезапускаем обработку “как будто это текущий”
                 await self._process_single_signal(new_signal)
             return
 
@@ -362,7 +397,6 @@ class FixedStakeStrategy(BaseTradingStrategy):
             self._next_expire_dt = self._calc_next_candle_from_now(timeframe)
 
         # summary
-        # payout мы уже проверили выше через cached payout, берём ещё раз (дешево) чтобы в логах было актуально
         _, pct_now = await self._is_payout_low_now(symbol, stake)
         pct_now = int(pct_now) if pct_now is not None else 0
 
@@ -389,38 +423,72 @@ class FixedStakeStrategy(BaseTradingStrategy):
                 demo_now = False
             account_mode = "ДЕМО" if demo_now else "РЕАЛ"
 
-            # Размещаем сделку + атомарно списываем шаг/лимит (важно при параллели)
             self._status("делает ставку")
 
             total = int(self.params.get("repeat_count", 0)) or 0
             series_label = self.format_series_label(trade_key)
-            step_label = None
-            series_left_after_place: int | None = None
 
-            async with self._get_series_lock(trade_key):
-                current_left = self._get_series_left(trade_key)
-                if current_left <= 0:
-                    if not self._stop_when_idle_requested:
-                        done = int(self.params.get("repeat_count", 0))
-                        log(trade_limit_reached(symbol, done, done))
-                        self._status("достигнут лимит сделок")
-                    self._request_stop_when_idle("достигнут лимит сделок")
-                    return
+            step_label: Optional[str] = None
+            series_left_after_place: Optional[int] = None  # для статуса
 
-                trade_id = await self.place_trade_with_retry(symbol, direction, stake, self._anchor_ccy)
-                if not trade_id:
-                    log(trade_placement_failed(symbol, "Пропускаем сигнал."))
-                    return  # лимит НЕ уменьшаем
+            # -----------------------------------------------------------------
+            # Размещение + списание лимита (атомарно)
+            # -----------------------------------------------------------------
+            if self.allow_concurrent_trades_per_key():
+                # allow_parallel=True -> по trade_key
+                async with self._get_series_lock(trade_key):
+                    current_left = self._get_series_left(trade_key)
+                    if current_left <= 0:
+                        if not self._stop_when_idle_requested:
+                            done = int(self.params.get("repeat_count", 0))
+                            log(trade_limit_reached(symbol, done, done))
+                            self._status("достигнут лимит сделок")
+                        self._request_stop_when_idle("достигнут лимит сделок")
+                        return
 
-                # ✅ уменьшаем лимит СРАЗУ после успешного размещения (иначе гонки при параллели)
-                new_left = max(0, int(current_left) - 1)
-                self._set_series_left(trade_key, new_left)
-                series_left_after_place = new_left
+                    trade_id = await self.place_trade_with_retry(symbol, direction, stake, self._anchor_ccy)
+                    if not trade_id:
+                        log(trade_placement_failed(symbol, "Пропускаем сигнал."))
+                        return  # лимит НЕ уменьшаем
 
-                # ✅ шаг фиксируем по current_left (до списания)
-                if total > 0:
-                    current_step = max(1, min(total, total - int(current_left) + 1))
-                    step_label = f"{current_step}/{total}"
+                    new_left = max(0, int(current_left) - 1)
+                    self._set_series_left(trade_key, new_left)
+                    series_left_after_place = new_left
+
+                    # шаг по trade_key
+                    if total > 0:
+                        current_step = max(1, min(total, total - int(current_left) + 1))
+                        step_label = f"{current_step}/{total}"
+
+            else:
+                # allow_parallel=False -> глобально (не зависит от пары/ТФ)
+                async with self._global_lock:
+                    current_left = self._ensure_global_left()
+                    if current_left <= 0:
+                        if not self._stop_when_idle_requested:
+                            done = int(self.params.get("repeat_count", 0))
+                            log(trade_limit_reached(symbol, done, done))
+                            self._status("достигнут лимит сделок")
+                        self._request_stop_when_idle("достигнут лимит сделок")
+                        return
+
+                    trade_id = await self.place_trade_with_retry(symbol, direction, stake, self._anchor_ccy)
+                    if not trade_id:
+                        log(trade_placement_failed(symbol, "Пропускаем сигнал."))
+                        return  # лимит НЕ уменьшаем
+
+                    new_left = max(0, int(current_left) - 1)
+                    self._global_left = new_left
+                    series_left_after_place = new_left
+
+                    # шаг глобальный
+                    if total > 0:
+                        current_step = max(1, min(total, total - int(current_left) + 1))
+                        step_label = f"{current_step}/{total}"
+
+            # если trade_id не объявлен — значит не разместили
+            if "trade_id" not in locals() or not trade_id:
+                return
 
             self._placed_trades_total += 1
 
@@ -500,5 +568,13 @@ class FixedStakeStrategy(BaseTradingStrategy):
 
     def update_params(self, **params):
         super().update_params(**params)
-        # В новой архитектуре “остаток” считается по trade_key через series_left,
-        # поэтому здесь ничего не пересчитываем глобально.
+
+        # Если меняем repeat_count на лету — глобальный остаток логично переинициализировать,
+        # но чтобы не ломать текущую серию, делаем это только если пользователь явно передал repeat_count.
+        if "repeat_count" in params and not self.allow_concurrent_trades_per_key():
+            try:
+                total = int(self.params.get("repeat_count", 0))
+            except Exception:
+                total = 0
+            # начинаем новую "глобальную" серию
+            self._global_left = max(0, total)
