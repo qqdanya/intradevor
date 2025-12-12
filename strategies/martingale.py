@@ -457,6 +457,7 @@ class MartingaleStrategy(BaseTradingStrategy):
             wait_seconds = self.params.get("result_wait_s")
             wait_seconds = trade_seconds if wait_seconds is None else float(wait_seconds)
 
+            step_label = self.format_step_label(step, max_steps)
             self._notify_pending_trade(
                 trade_id,
                 symbol,
@@ -485,6 +486,7 @@ class MartingaleStrategy(BaseTradingStrategy):
                 account_mode=account_mode,
                 indicator=self._last_indicator,
                 series_label=series_label,
+                step_label=step_label,
             )
 
             if profit is None:
