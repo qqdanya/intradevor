@@ -5,7 +5,7 @@ CLASSIC_ALLOWED_TFS = {"M5", "M15", "M30", "H1", "H4"}
 CLASSIC_SIGNAL_MAX_AGE_SEC = 170.0  # 2 минуты 50 секунд (next_timestamp - 3m + 10s запас)
 CLASSIC_TRADE_BUFFER_SEC = 10.0     # 10 секунд на размещение ставки
 CLASSIC_MIN_TIME_BEFORE_NEXT_SEC = 180.0  # 3 минуты до следующей свечи
-SPRINT_SIGNAL_MAX_AGE_SEC = 5.0
+SPRINT_SIGNAL_MAX_AGE_SEC = 10.0
 MOSCOW_TZ = "Europe/Moscow"
 
 # Параметры по умолчанию для всех стратегий
