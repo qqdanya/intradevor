@@ -205,6 +205,11 @@ class FixedStakeStrategy(BaseTradingStrategy):
         Для FixedStake показываем счётчик сделок: текущая/максимум (по trade_key).
         series_left — остаток ДО списания текущей сделки.
         """
+        return "1/1"
+
+    def format_step_label(self, trade_key: str, *, series_left: int | None = None) -> str | None:
+        """Возвращает номер текущей ставки в формате "Текущая/Максимум"."""
+
         try:
             total = int(self.params.get("repeat_count", 0))
         except Exception:
@@ -215,7 +220,12 @@ class FixedStakeStrategy(BaseTradingStrategy):
         if series_left is None:
             series_left = self._get_series_left(trade_key)
 
-        current = max(1, min(total, (total - int(series_left) + 1)))
+        try:
+            remaining = int(series_left)
+        except Exception:
+            remaining = total
+
+        current = max(1, min(total, total - remaining + 1))
         return f"{current}/{total}"
 
     # =====================================================================
@@ -386,6 +396,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
 
             signal_at_str = signal_data.get("signal_time_str") or format_local_time(signal_data["timestamp"])
             series_label = self.format_series_label(trade_key, series_left=series_left)
+            step_label = self.format_step_label(trade_key, series_left=series_left)
 
             # pending notify
             self._set_planned_stake(trade_key, stake)
@@ -405,7 +416,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
                         indicator=self._last_indicator,
                         expected_end_ts=expected_end_ts,
                         series=series_label,
-                        step=None,
+                        step=step_label,
                     )
                 except Exception:
                     pass
@@ -426,7 +437,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
                 account_mode=account_mode,
                 indicator=self._last_indicator,
                 series_label=series_label,
-                step_label=None,
+                step_label=step_label,
             )
 
             if profit is None:
