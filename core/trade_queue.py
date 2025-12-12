@@ -1,10 +1,9 @@
 # trade_queue.py
 """Очередь для последовательного размещения ставок.
 
-Идея:
-- Сервер (или API) часто не любит параллельные place_trade: появляются лишние ретраи/таймауты.
-- Очередь гарантирует: размещение ставок выполняется строго по одному.
-- Важное: НЕ кладите в очередь долгие операции (ожидание результата, polling и т.п.).
+Важно:
+- В очередь кладём только "быстрые" операции (обычно place_trade).
+- Ожидание результата сделки (polling/check_trade_result) НЕ кладём в очередь.
 """
 
 from __future__ import annotations
@@ -20,7 +19,7 @@ T = TypeVar("T")
 
 
 class TradeQueue:
-    """Асинхронная очередь выполнения задач (обычно: place_trade)."""
+    """Асинхронная очередь выполнения задач строго по одной."""
 
     def __init__(self) -> None:
         self._queue: asyncio.Queue[
@@ -45,7 +44,6 @@ class TradeQueue:
         self._started = False
 
     def size(self) -> int:
-        """Текущий размер очереди (сколько задач ждут выполнения)."""
         return self._queue.qsize()
 
     async def enqueue(
@@ -57,44 +55,45 @@ class TradeQueue:
     ) -> T:
         """Добавить задачу в очередь и дождаться результата.
 
-        timeout — ограничение ожидания РЕЗУЛЬТАТА (включая ожидание своей очереди).
-        name — имя задачи для логов.
+        timeout — ограничение ожидания результата (включая ожидание очереди).
         """
         self._ensure_started()
         loop = asyncio.get_running_loop()
         future: asyncio.Future[T] = loop.create_future()
         await self._queue.put((future, factory, timeout, name))
+
         if timeout is None:
             return await future
-        return await asyncio.wait_for(future, timeout=timeout)
+
+        # shield: если wait_for истёк, мы НЕ отменяем future внутри очереди
+        return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
 
     async def _worker(self) -> None:
         while True:
             future, factory, timeout, name = await self._queue.get()
-
-            if future.cancelled():
-                self._queue.task_done()
-                continue
-
             try:
-                # timeout здесь ограничивает именно ВЫПОЛНЕНИЕ factory()
+                if future.cancelled():
+                    continue
+
+                # timeout здесь ограничивает именно выполнение factory()
                 if timeout is None:
                     result = await factory()
                 else:
                     result = await asyncio.wait_for(factory(), timeout=timeout)
 
+                if not future.done():
+                    future.set_result(result)
+
             except asyncio.TimeoutError as exc:
-                # Таймаут выполнения — пусть вызывающий увидит это как исключение
                 if not future.done():
                     future.set_exception(exc)
                 if name:
                     log.warning("TradeQueue task timed out: %s (timeout=%.2fs)", name, timeout)
 
             except asyncio.CancelledError:
-                # Если воркер отменили — прокидываем отмену в future
+                # Воркер отменили — пробрасываем дальше, future отменяем
                 if not future.done():
                     future.cancel()
-                self._queue.task_done()
                 raise
 
             except Exception as exc:  # noqa: BLE001
@@ -102,10 +101,6 @@ class TradeQueue:
                     future.set_exception(exc)
                 if name:
                     log.exception("TradeQueue task failed: %s", name)
-
-            else:
-                if not future.done():
-                    future.set_result(result)
 
             finally:
                 self._queue.task_done()
