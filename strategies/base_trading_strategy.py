@@ -663,7 +663,10 @@ class BaseTradingStrategy(StrategyBase):
         """Запуск стратегии"""
         self._running = True
         log = self.log or (lambda s: None)
-        
+
+        # Сразу помечаем ожидание, чтобы UI обновился до появления первого статуса
+        self._status("ожидание сигнала")
+
         # Инициализация аккаунта
         await self._initialize_account()
         

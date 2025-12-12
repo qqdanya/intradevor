@@ -518,6 +518,10 @@ class StrategyControlDialog(QWidget):
                 self.main.bot_logs[self.bot].clear()
                 self.main.bot_trade_history[self.bot].clear()
                 self.main.reset_bot(self.bot)
+                try:
+                    self.main._set_bot_status(self.bot, "ожидание сигнала")
+                except Exception:
+                    pass
                 self.bot.start()
                 self._add_log(ts("🚀 Старт стратегии."))
             elif paused:
