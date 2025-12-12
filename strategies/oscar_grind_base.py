@@ -9,7 +9,8 @@ from strategies.base_trading_strategy import BaseTradingStrategy, _minutes_from_
 from strategies.constants import MOSCOW_TZ
 from core.time_utils import format_local_time
 from core.money import format_amount
-from core.intrade_api_async import is_demo_account, get_current_percent
+from core.intrade_api_async import is_demo_account
+from core.payout_provider import get_cached_payout
 from strategies.log_messages import (
     repeat_count_empty,
     signal_not_actual_for_placement,
@@ -162,7 +163,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         account_ccy = self._anchor_ccy
 
         try:
-            pct = await get_current_percent(
+            pct = await get_cached_payout(
                 self.http_client,
                 investment=stake,
                 option=symbol,

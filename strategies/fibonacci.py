@@ -11,8 +11,8 @@ from core.money import format_amount
 from core.intrade_api_async import (
     is_demo_account,
     get_balance_info,
-    get_current_percent,
 )
+from core.payout_provider import get_cached_payout
 from core.time_utils import format_local_time
 from strategies.log_messages import (
     repeat_count_empty,
@@ -119,7 +119,7 @@ class FibonacciStrategy(BaseTradingStrategy):
         account_ccy = self._anchor_ccy
 
         try:
-            pct = await get_current_percent(
+            pct = await get_cached_payout(
                 self.http_client,
                 investment=stake,
                 option=symbol,
