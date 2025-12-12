@@ -14,6 +14,7 @@ from core.payout_provider import get_cached_payout
 from core.signal_waiter import wait_for_signal_versioned
 from core.money import format_amount
 from core.policy import normalize_sprint
+from core.trade_queue import trade_queue
 from strategies.base import StrategyBase
 from strategies.strategy_common import StrategyCommon
 from strategies.constants import *  # Импортируем все константы
@@ -401,20 +402,22 @@ class BaseTradingStrategy(StrategyBase):
                 return None
             time_arg = self._next_expire_dt.strftime("%H:%M")
             trade_kwargs["date"] = self._next_expire_dt.strftime("%d-%m-%Y")
-           
+
         for attempt in range(max_attempts):
-            trade_id = await place_trade(
-                self.http_client,
-                user_id=self.user_id,
-                user_hash=self.user_hash,
-                investment=stake,
-                option=symbol,
-                status=direction,
-                minutes=time_arg,
-                account_ccy=account_ccy,
-                strict=True,
-                on_log=log,
-                **trade_kwargs,
+            trade_id = await trade_queue.enqueue(
+                lambda: place_trade(
+                    self.http_client,
+                    user_id=self.user_id,
+                    user_hash=self.user_hash,
+                    investment=stake,
+                    option=symbol,
+                    status=direction,
+                    minutes=time_arg,
+                    account_ccy=account_ccy,
+                    strict=True,
+                    on_log=log,
+                    **trade_kwargs,
+                )
             )
             if trade_id:
                 return trade_id
