@@ -219,8 +219,10 @@ class StrategyControlDialog(QWidget):
 
         self.parallel_trades = QCheckBox()
         self.parallel_trades.setChecked(bool(getv("allow_parallel_trades", True)))
-        self.common_series = QCheckBox()
-        self.common_series.setChecked(bool(getv("use_common_series", False)))
+        self.common_series = None
+        if strategy_key != "fixed":
+            self.common_series = QCheckBox()
+            self.common_series.setChecked(bool(getv("use_common_series", False)))
 
         if strategy_key in ("oscar_grind_1", "oscar_grind_2"):
             self.minutes = QSpinBox()
@@ -333,11 +335,11 @@ class StrategyControlDialog(QWidget):
 
         parallel_label = QLabel("Обрабатывать множество сигналов")
         parallel_label.mousePressEvent = lambda event: self.parallel_trades.toggle()
-        common_series_label = QLabel("Общая серия для всех сигналов")
-        common_series_label.mousePressEvent = lambda event: self.common_series.toggle()
-
         form.addRow(parallel_label, self.parallel_trades)
-        form.addRow(common_series_label, self.common_series)
+        if self.common_series is not None:
+            common_series_label = QLabel("Общая серия для всех сигналов")
+            common_series_label.mousePressEvent = lambda event: self.common_series.toggle()
+            form.addRow(common_series_label, self.common_series)
 
         def _update_minutes_enabled(text: str):
             if self.minutes is not None:
@@ -613,7 +615,9 @@ class StrategyControlDialog(QWidget):
                 new_params["minutes"] = int(norm)
         new_params["trade_type"] = trade_type
         new_params["allow_parallel_trades"] = self.parallel_trades.isChecked()
-        new_params["use_common_series"] = self.common_series.isChecked()
+        new_params["use_common_series"] = (
+            self.common_series.isChecked() if self.common_series is not None else False
+        )
         return new_params
 
     def apply_settings(self):

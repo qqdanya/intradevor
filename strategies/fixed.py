@@ -70,6 +70,9 @@ class FixedStakeStrategy(BaseTradingStrategy):
         if params:
             fixed_params.update(params)
 
+        # Фиксированная ставка всегда ведёт отдельные серии на сигнал
+        fixed_params["use_common_series"] = False
+
         super().__init__(
             http_client=http_client,
             user_id=user_id,
@@ -98,6 +101,14 @@ class FixedStakeStrategy(BaseTradingStrategy):
     def allow_concurrent_trades_per_key(self) -> bool:
         """Совместимость со старым поведением: можно параллелить (если allow_parallel_trades=True)."""
         return bool(self.params.get("allow_parallel_trades", True))
+
+    def build_trade_key(self, symbol: str, timeframe: str) -> str:
+        """Игнорируем настройку общей серии: каждый сигнал ведётся отдельно."""
+
+        base_symbol = (symbol or "*").strip()
+        base_timeframe = (timeframe or "*").strip()
+
+        return f"{base_symbol}_{base_timeframe}"
 
     def is_series_active(self, trade_key: str) -> bool:
         """Для FixedStake серия как таковая отсутствует, но при запрете параллели блокируем trade_key."""
@@ -386,6 +397,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
 
             signal_at_str = signal_data.get("signal_time_str") or format_local_time(signal_data["timestamp"])
             series_label = self.format_series_label(trade_key, series_left=series_left)
+            step_label = self.format_step_label(0, 1)
 
             # pending notify
             self._set_planned_stake(trade_key, stake)
@@ -405,7 +417,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
                         indicator=self._last_indicator,
                         expected_end_ts=expected_end_ts,
                         series=series_label,
-                        step=None,
+                        step=step_label,
                     )
                 except Exception:
                     pass
@@ -426,7 +438,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
                 account_mode=account_mode,
                 indicator=self._last_indicator,
                 series_label=series_label,
-                step_label=None,
+                step_label=step_label,
             )
 
             if profit is None:
