@@ -230,6 +230,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
         log = self.log or (lambda s: None)
 
         while self._running:
+            await self._pause_point()
             symbol = signal_data["symbol"]
             timeframe = signal_data["timeframe"]
             direction = int(signal_data["direction"])
@@ -259,6 +260,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
 
             # --- LOW PAYOUT ДО СДЕЛКИ: коротко ждём + подхватываем свежий сигнал ---
             while self._running:
+                await self._pause_point()
                 pct = await self._get_payout_pct(symbol, stake)
                 if pct is None:
                     self._status("ожидание процента")
@@ -342,6 +344,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
         trade_key = self.build_trade_key(symbol, timeframe)
 
         while self._running:
+            await self._pause_point()
             signal_at_str = signal_data.get("signal_time_str") or format_local_time(signal_received_time)
 
             # баланс (с защитой)
@@ -392,6 +395,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
                 timeframe = signal_data["timeframe"]
                 direction = int(signal_data["direction"])
                 signal_received_time = signal_data["timestamp"]
+                signal_at_str = signal_data.get("signal_time_str") or format_local_time(signal_received_time)
                 self._maybe_set_auto_minutes(timeframe)
                 trade_key = self.build_trade_key(symbol, timeframe)
                 self._apply_signal_context(signal_data)
