@@ -188,11 +188,11 @@ class MainWindow(QWidget):
 
         self.app_title = QLabel(_APP_NAME)
         self.app_title.setStyleSheet("font-weight: 600; font-size: 18px;")
-        self.app_title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self.app_title.setAlignment(Qt.AlignmentFlag.AlignRight)
 
         self.app_version = QLabel(f"v{_APP_VERSION}")
         self.app_version.setStyleSheet("color: #666; font-size: 12px;")
-        self.app_version.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self.app_version.setAlignment(Qt.AlignmentFlag.AlignRight)
 
         time_box = QWidget()
         time_layout = QVBoxLayout(time_box)
@@ -205,8 +205,8 @@ class MainWindow(QWidget):
         right_v.setContentsMargins(0, 0, 0, 0)
         right_v.setSpacing(0)
         # ⬇️ теперь без stretch — название и версия будут сверху
-        right_v.addWidget(self.app_title, alignment=Qt.AlignmentFlag.AlignHCenter)
-        right_v.addWidget(self.app_version, alignment=Qt.AlignmentFlag.AlignHCenter)
+        right_v.addWidget(self.app_title, alignment=Qt.AlignmentFlag.AlignRight)
+        right_v.addWidget(self.app_version, alignment=Qt.AlignmentFlag.AlignRight)
 
         top_layout = QGridLayout()
         top_layout.addWidget(info_box, 0, 0, alignment=Qt.AlignmentFlag.AlignTop)
