@@ -311,9 +311,8 @@ class BaseTradingStrategy(StrategyBase):
         """Проверяет актуальность сигнала для sprint-торгов"""
         signal_timestamp = signal_data['timestamp']
         signal_age = (current_time - signal_timestamp).total_seconds()
-        
-        # 🔴 МЕНЯЕМ: максимальный возраст 5 секунд вместо 55
-        max_signal_age = 5.0  # Всего 5 секунд!
+
+        max_signal_age = SPRINT_SIGNAL_MAX_AGE_SEC
         
         if signal_age > max_signal_age:
             return False, f"сигналу {signal_age:.1f}с > {max_signal_age}с"
@@ -638,15 +637,15 @@ class BaseTradingStrategy(StrategyBase):
             return int(direction), int(ver), meta
 
     def _max_signal_age_seconds(self) -> float:
-        """Максимальный возраст сигнала. Для sprint — жёсткий лимит 5.0s."""
+        """Максимальный возраст сигнала. Для sprint — жёсткий лимит 10.0s."""
         # базовые значения (взятые из констант)
         base = 0.0
         if self._trade_type == "classic":
             base = CLASSIC_SIGNAL_MAX_AGE_SEC
         elif self._trade_type == "sprint":
-            # Жёстко ограничиваем sprint до 5 секунд — чтобы сигналы старше 5с
+            # Жёстко ограничиваем sprint, чтобы сигналы старше лимита
             # не попадали в слушатель и не создавали спам-логи.
-            return 5.0
+            return SPRINT_SIGNAL_MAX_AGE_SEC
 
         # если разрешены параллельные сделки — расширяем окно ожидания
         if not self._allow_parallel_trades:
