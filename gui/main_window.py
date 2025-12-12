@@ -2,6 +2,7 @@
 from PyQt6.QtWidgets import (
     QWidget,
     QLabel,
+    QGridLayout,
     QVBoxLayout,
     QHBoxLayout,
     QTextEdit,
@@ -207,12 +208,19 @@ class MainWindow(QWidget):
         right_v.addWidget(self.app_title, alignment=Qt.AlignmentFlag.AlignHCenter)
         right_v.addWidget(self.app_version, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        top_layout = QHBoxLayout()
-        top_layout.addWidget(info_box, 0, Qt.AlignmentFlag.AlignTop)
-        top_layout.addStretch(1)
-        top_layout.addWidget(time_box, 0, Qt.AlignmentFlag.AlignVCenter)
-        top_layout.addStretch(1)
-        top_layout.addWidget(right_box, 0, Qt.AlignmentFlag.AlignTop)
+        top_layout = QGridLayout()
+        top_layout.addWidget(info_box, 0, 0, alignment=Qt.AlignmentFlag.AlignTop)
+        top_layout.addWidget(
+            time_box,
+            0,
+            1,
+            alignment=Qt.AlignmentFlag.AlignHCenter
+            | Qt.AlignmentFlag.AlignVCenter,
+        )
+        top_layout.addWidget(right_box, 0, 2, alignment=Qt.AlignmentFlag.AlignTop)
+        top_layout.setColumnStretch(0, 1)
+        top_layout.setColumnStretch(1, 1)
+        top_layout.setColumnStretch(2, 1)
 
         self.bot_manager = BotManager()
 
