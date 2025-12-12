@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Callable, Awaitable, Union
 
@@ -43,8 +44,6 @@ class HttpClient:
         self._init_cookies = cookies or {}
         self._session: Optional[aiohttp.ClientSession] = None
 
-    # ---------- session lifecycle ----------
-
     async def __aenter__(self) -> "HttpClient":
         await self.ensure_session()
         return self
@@ -60,7 +59,12 @@ class HttpClient:
                 **self._ext_headers,
             }
             connector = aiohttp.TCPConnector(
-                ssl=self._cfg.verify_ssl, limit=self._cfg.limit
+                ssl=self._cfg.verify_ssl,
+                limit=self._cfg.limit,
+                limit_per_host=self._cfg.limit,      # важно
+                ttl_dns_cache=300,                   # ускоряет, меньше DNS задержек
+                keepalive_timeout=30,                # держим соединения живыми
+                enable_cleanup_closed=True,
             )
             self._session = aiohttp.ClientSession(
                 base_url=self._cfg.base_url,
@@ -77,10 +81,7 @@ class HttpClient:
         if self._session and not self._session.closed:
             await self._session.close()
 
-    # ---------- cookies ----------
-
     async def update_cookies(self, cookies: Dict[str, str]) -> None:
-        """Горячо обновить куки в текущей сессии."""
         session = await self.ensure_session()
         session.cookie_jar.update_cookies(cookies)
 
@@ -89,57 +90,58 @@ class HttpClient:
         session.cookie_jar.clear()
 
     async def cookies_snapshot(self) -> Dict[str, str]:
-        """
-        Плоская копия кук (name->value) для base_url.
-        """
         session = await self.ensure_session()
         simple = session.cookie_jar.filter_cookies(self._cfg.base_url)
         return {k: morsel.value for k, morsel in simple.items()}
 
     async def fork(self) -> "HttpClient":
-        """
-        Изолированный клиент со СВОЕЙ aiohttp-сессией и копией текущих кук.
-        Используй для «заморозки» сессии под бота.
-        """
         snap = await self.cookies_snapshot()
         return HttpClient(self._cfg, cookies=snap, headers=dict(self._ext_headers))
 
-    # ---------- core retry ----------
-
     async def _retry(
         self,
-        func: Callable[[], Awaitable[aiohttp.ClientResponse]],
-        parse: Callable[
-            [aiohttp.ClientResponse], Awaitable[Union[Dict[str, Any], str]]
-        ],
+        request_cm: Callable[[], aiohttp.client._RequestContextManager],
+        parse: Callable[[aiohttp.ClientResponse], Awaitable[Union[Dict[str, Any], str]]],
     ) -> Union[Dict[str, Any], str]:
         attempt = 0
-        delay = self._cfg.retry_backoff
+        base_delay = self._cfg.retry_backoff
         last_exc: Optional[BaseException] = None
+
         while attempt < self._cfg.max_retries:
             try:
-                resp = await func()
-                if resp.status >= 500:
-                    text = await resp.text()
-                    raise aiohttp.ClientResponseError(
-                        request_info=resp.request_info,
-                        history=resp.history,
-                        status=resp.status,
-                        message=f"Server error body: {text[:500]}",
-                        headers=resp.headers,
-                    )
-                if resp.status == 204:
-                    return {}  # пустой JSON
-                return await parse(resp)
+                # ВАЖНО: async with гарантирует освобождение соединения
+                async with request_cm() as resp:
+                    # полезно ретраить и 408/429 тоже (часто бывает под нагрузкой)
+                    if resp.status in (408, 429) or resp.status >= 500:
+                        text = await resp.text()
+                        raise aiohttp.ClientResponseError(
+                            request_info=resp.request_info,
+                            history=resp.history,
+                            status=resp.status,
+                            message=f"HTTP {resp.status} body: {text[:300]}",
+                            headers=resp.headers,
+                        )
+
+                    if resp.status == 204:
+                        return {}
+
+                    return await parse(resp)
+
             except (
                 aiohttp.ClientConnectionError,
                 aiohttp.ServerTimeoutError,
                 aiohttp.ClientResponseError,
+                asyncio.TimeoutError,
             ) as e:
                 last_exc = e
                 attempt += 1
                 if attempt >= self._cfg.max_retries:
                     break
+
+                # backoff + jitter (чтобы не долбить сервер синхронно)
+                delay = base_delay * (2 ** (attempt - 1))
+                delay = delay * (0.85 + random.random() * 0.30)
+
                 log.warning(
                     "HTTP attempt %s failed: %s; retry in %.2fs",
                     attempt,
@@ -147,11 +149,9 @@ class HttpClient:
                     delay,
                 )
                 await asyncio.sleep(delay)
-                delay *= 2
+
         assert last_exc is not None
         raise last_exc
-
-    # ---------- requests ----------
 
     async def get(
         self,
@@ -159,18 +159,19 @@ class HttpClient:
         *,
         params: Optional[Dict[str, Any]] = None,
         expect_json: bool = True,
+        timeout: Optional[aiohttp.ClientTimeout] = None,
         **kwargs,
     ) -> Union[Dict[str, Any], str]:
         session = await self.ensure_session()
         if expect_json:
             return await self._retry(
-                lambda: session.get(url, params=params, **kwargs),
+                lambda: session.get(url, params=params, timeout=timeout, **kwargs),
                 lambda r: r.json(content_type=None),
             )
-        else:
-            return await self._retry(
-                lambda: session.get(url, params=params, **kwargs), lambda r: r.text()
-            )
+        return await self._retry(
+            lambda: session.get(url, params=params, timeout=timeout, **kwargs),
+            lambda r: r.text(),
+        )
 
     async def post(
         self,
@@ -179,16 +180,16 @@ class HttpClient:
         data: Optional[Dict[str, Any]] = None,
         json: Optional[Dict[str, Any]] = None,
         expect_json: bool = True,
+        timeout: Optional[aiohttp.ClientTimeout] = None,
         **kwargs,
     ) -> Union[Dict[str, Any], str]:
         session = await self.ensure_session()
         if expect_json:
             return await self._retry(
-                lambda: session.post(url, data=data, json=json, **kwargs),
+                lambda: session.post(url, data=data, json=json, timeout=timeout, **kwargs),
                 lambda r: r.json(content_type=None),
             )
-        else:
-            return await self._retry(
-                lambda: session.post(url, data=data, json=json, **kwargs),
-                lambda r: r.text(),
-            )
+        return await self._retry(
+            lambda: session.post(url, data=data, json=json, timeout=timeout, **kwargs),
+            lambda r: r.text(),
+        )
