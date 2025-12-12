@@ -429,3 +429,19 @@ class FixedStakeStrategy(BaseTradingStrategy):
         log = self.log or (lambda s: None)
         log(fixed_stake_stopped(self.symbol, self._trades_counter))
         super().stop()
+
+    # =====================================================================
+    # служебные
+    # =====================================================================
+
+    def _calculate_trade_duration(self, symbol: str) -> tuple[float, float]:
+        if self._trade_type == "classic" and self._next_expire_dt is not None:
+            trade_seconds = max(
+                0.0,
+                (self._next_expire_dt - datetime.now(ZoneInfo(MOSCOW_TZ))).total_seconds(),
+            )
+            expected_end_ts = self._next_expire_dt.timestamp()
+        else:
+            trade_seconds = float(self._trade_minutes) * 60.0
+            expected_end_ts = datetime.now().timestamp() + trade_seconds
+        return trade_seconds, expected_end_ts
