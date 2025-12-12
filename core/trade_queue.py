@@ -15,15 +15,19 @@ class TradeQueue:
     Сервер обрабатывает запросы на сделку последовательно, поэтому одновременные
     запросы от нескольких стратегий приводят к лишним повторным попыткам.
     Очередь гарантирует, что запросы на размещение ставки выполняются по одному,
-    сохраняя порядок поступления.
+    сохраняя порядок поступления. Между отправкой запросов можно вставлять
+    небольшую задержку, чтобы снизить риск таймаутов на стороне API.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, trade_delay_seconds: float = 0.25) -> None:
+        """Создает очередь с опциональной задержкой между вызовами фабрики."""
+
         self._queue: asyncio.Queue[tuple[asyncio.Future[T], Callable[[], Awaitable[T]]]] = (
             asyncio.Queue()
         )
         self._worker_task: Optional[asyncio.Task] = None
         self._started = False
+        self._trade_delay_seconds = trade_delay_seconds
 
     def _ensure_started(self) -> None:
         if not self._started:
@@ -59,6 +63,8 @@ class TradeQueue:
                 continue
 
             try:
+                if self._trade_delay_seconds > 0:
+                    await asyncio.sleep(self._trade_delay_seconds)
                 result = await factory()
             except asyncio.CancelledError:
                 future.cancel()

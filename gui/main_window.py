@@ -355,7 +355,7 @@ class MainWindow(QWidget):
             except Exception as e:
                 self.append_to_log(f"[!] Ошибка при получении баланса: {e}")
                 self.balance_label.setText("Баланс: ошибка")
-            await asyncio.sleep(5)
+            await asyncio.sleep(10)
 
     # -------------------- logging --------------------
 
