@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import asyncio
 from datetime import datetime, timedelta
 from typing import Optional
@@ -24,7 +25,6 @@ from strategies.log_messages import (
     loss_series_finish,
     steps_limit_reached,
     series_remaining,
-    trade_result_removed,
 )
 
 ANTIMARTINGALE_DEFAULTS = {
@@ -47,14 +47,14 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
     """
     Антимартингейл (парлей) под нашу архитектуру.
 
-    Важные правила:
+    Правила:
       - Увеличиваем ставку ПОСЛЕ WIN на размер фактического выигрыша (парлей).
-      - Продолжаем после WIN или PUSH.
+      - После WIN или PUSH НЕ повторяем ставку без нового сигнала:
+        берём из очереди StrategyCommon или ждём новый.
       - При LOSS или UNKNOWN:
           * если НЕ было ни одного WIN в этой серии — серия считается НЕ начатой,
             repeat_count не тратим;
           * если был хотя бы один WIN — серия считается завершённой.
-      - Из очереди сигналов (StrategyCommon) удаляем после WIN или PUSH.
       - Если сигнал "неактуален для размещения" — СЕРИЮ НЕ ЗАВЕРШАЕМ:
         ждём новый сигнал и продолжаем с прежними параметрами.
     """
@@ -89,20 +89,13 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
 
         self._active_series: dict[str, bool] = {}
         self._series_remaining: dict[str, int] = {}
-
-        # trade_key -> list[signal_data]
         self._low_payout_queues: dict[str, list[dict]] = {}
 
     # =====================================================================
-    # ВСПОМОГАТЕЛЬНОЕ: ожидание нового сигнала / обновление контекста
+    # СИГНАЛЫ: ожидание / обновление контекста
     # =====================================================================
 
-    async def _wait_for_new_signal(
-        self,
-        trade_key: str,
-        *,
-        timeout: float,
-    ) -> Optional[dict]:
+    async def _wait_for_new_signal(self, trade_key: str, *, timeout: float) -> Optional[dict]:
         """Ждём новый сигнал по trade_key из StrategyCommon."""
         common = getattr(self, "_common", None)
         if common is None:
@@ -117,11 +110,29 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
             await asyncio.sleep(0.5)
         return None
 
+    async def _get_next_signal_after_result(self, trade_key: str, *, timeout: float) -> Optional[dict]:
+        """
+        После WIN/PUSH: НЕ повторяем сделку.
+        Сначала пробуем взять самый свежий сигнал из StrategyCommon, иначе ждём новый.
+        НИЧЕГО НЕ УДАЛЯЕМ ИЗ ОЧЕРЕДИ ДО ТОГО, КАК ВЗЯЛИ СИГНАЛ.
+        """
+        common = getattr(self, "_common", None)
+        if common is None:
+            return None
+
+        sig = common.pop_latest_signal(trade_key)
+        if sig:
+            # Если хочешь вообще не чистить хвост — оставь как есть (ничего не делаем).
+            # Если хочешь очищать хвост после взятия одного сигнала — раскомментируй:
+            try:
+                common.discard_signals_for(trade_key)
+            except Exception:
+                pass
+            return sig
+
+        return await self._wait_for_new_signal(trade_key, timeout=timeout)
+
     def _extract_next_expire_dt(self, signal: dict) -> Optional[datetime]:
-        """
-        Поддержка: meta.next_timestamp (основной формат у вас),
-        + на всякий случай next_expire если где-то встречается.
-        """
         next_expire = signal.get("next_expire")
         if isinstance(next_expire, datetime):
             if next_expire.tzinfo is None:
@@ -131,14 +142,9 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
         ts = signal.get("meta", {}).get("next_timestamp") if signal.get("meta") else None
         if isinstance(ts, datetime):
             return ts.astimezone(ZoneInfo(MOSCOW_TZ)) if ts.tzinfo else ts.replace(tzinfo=ZoneInfo(MOSCOW_TZ))
-
         return None
 
     def _update_signal_context(self, new_signal: dict) -> tuple[dict, datetime, str, int, str]:
-        """
-        Обновляет контекст по новому сигналу.
-        Возвращает: (signal_data, signal_received_time, symbol, timeframe_direction, signal_at_str)
-        """
         signal_data = new_signal
         signal_received_time = new_signal["timestamp"]
 
@@ -151,10 +157,8 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
         self._last_signal_ver = new_signal.get("version", self._last_signal_ver)
         self._last_indicator = new_signal.get("indicator", self._last_indicator)
         self._last_signal_at_str = signal_at_str
-
         self._next_expire_dt = self._extract_next_expire_dt(new_signal)
 
-        # если стоят режимы "*"
         if self._use_any_symbol:
             self.symbol = symbol
         if self._use_any_timeframe:
@@ -164,7 +168,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
         return signal_data, signal_received_time, timeframe, direction, signal_at_str
 
     # =====================================================================
-    # ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
+    # УТИЛИТЫ
     # =====================================================================
 
     def _calc_next_candle_from_now(self, timeframe: str) -> datetime:
@@ -220,38 +224,12 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
         self._low_payout_queues[trade_key] = []
         return latest
 
-    def _is_sprint_signal_valid_for_series(
-        self,
-        signal_data: dict,
-        now_dt: datetime,
-        *,
-        continuation_streak: int,
-    ) -> tuple[bool, str]:
-        raw_ts = signal_data.get("timestamp")
-        if raw_ts is None:
-            return False, "нет timestamp у сигнала"
-
-        if raw_ts.tzinfo is None:
-            signal_ts = raw_ts.replace(tzinfo=ZoneInfo(MOSCOW_TZ))
-        else:
-            signal_ts = raw_ts.astimezone(ZoneInfo(MOSCOW_TZ))
-
-        trade_sec = float(self._trade_minutes) * 60.0
-        candles = max(1, 1 + continuation_streak)
-        max_age = candles * trade_sec
-
-        age = (now_dt - signal_ts).total_seconds()
-        if age > max_age:
-            return False, f"сигналу {age:.1f}с > {max_age:.0f}с"
-
-        return True, "актуален"
-
-    # =====================================================================
-    # ПУБЛИЧНЫЕ МЕТОДЫ
-    # =====================================================================
-
     def is_series_active(self, trade_key: str) -> bool:
         return self._active_series.get(trade_key, False)
+
+    # =====================================================================
+    # ОСНОВНОЙ ВХОД
+    # =====================================================================
 
     async def _process_single_signal(self, signal_data: dict):
         symbol = signal_data["symbol"]
@@ -317,7 +295,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
             except RuntimeError:
                 self._last_signal_monotonic = None
 
-            # === ВАЖНО: если сигнал устарел ДО старта серии — ждём новый, серию не запускаем
+            # если сигнал устарел ДО старта серии — ждём новый, серию не запускаем
             while self._running:
                 current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
                 if self._trade_type == "classic":
@@ -361,6 +339,10 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
                 self._active_series.pop(trade_key, None)
                 log(series_completed(symbol, timeframe, "Антимартингейл"))
 
+    # =====================================================================
+    # СЕРИЯ
+    # =====================================================================
+
     async def _run_antimartingale_series(
         self,
         trade_key: str,
@@ -378,14 +360,9 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
 
         step = 0
         did_place_any_trade = False
-
-        # окно для продолжений (WIN/PUSH)
-        continuation_streak = 0
-
-        # был ли хотя бы один WIN (только тогда уменьшаем repeat_count)
         had_any_win = False
 
-        series_direction = initial_direction
+        series_direction = int(initial_direction)
         max_steps = int(self.params.get("max_steps", 3))
 
         signal_at_str = signal_data.get("signal_time_str") or format_local_time(signal_received_time)
@@ -408,13 +385,13 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
                     is_valid, reason = self._is_signal_valid_for_sprint({"timestamp": signal_received_time}, current_time)
 
                 if not is_valid:
-                    # ВАЖНО: НЕ завершаем серию — ждём новый сигнал
                     log(signal_not_actual_for_placement(symbol, reason))
                     timeout = float(self.params.get("signal_timeout_sec", 30.0))
                     new_signal = await self._wait_for_new_signal(trade_key, timeout=timeout)
                     if not new_signal:
                         return
-                    signal_data, signal_received_time, timeframe, series_direction, signal_at_str = self._update_signal_context(new_signal)
+                    signal_data, signal_received_time, timeframe, series_direction, signal_at_str = \
+                        self._update_signal_context(new_signal)
                     symbol = signal_data["symbol"]
                     self._maybe_set_auto_minutes(timeframe)
                     continue
@@ -442,38 +419,22 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
             current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
 
             if self._trade_type == "classic":
-                original_max_age = self.params.get("classic_signal_max_age_sec", 170.0)
-
-                tf_minutes = _minutes_from_timeframe(timeframe)
-                candles = max(1, 1 + continuation_streak)
-                extended_max_age = candles * tf_minutes * 60
-                self.params["classic_signal_max_age_sec"] = extended_max_age
-
-                for_placement_flag = (continuation_streak == 0)
-
-                try:
-                    is_valid, reason = self._is_signal_valid_for_classic(
-                        signal_data,
-                        current_time,
-                        for_placement=for_placement_flag,
-                    )
-                finally:
-                    self.params["classic_signal_max_age_sec"] = original_max_age
-            else:
-                is_valid, reason = self._is_sprint_signal_valid_for_series(
+                is_valid, reason = self._is_signal_valid_for_classic(
                     signal_data,
                     current_time,
-                    continuation_streak=continuation_streak,
+                    for_placement=True,
                 )
+            else:
+                is_valid, reason = self._is_signal_valid_for_sprint(signal_data, current_time)
 
             if not is_valid:
-                # ВАЖНО: НЕ завершаем серию — ждём новый сигнал и продолжаем
                 log(signal_not_actual_for_placement(symbol, reason))
                 timeout = float(self.params.get("signal_timeout_sec", 30.0))
                 new_signal = await self._wait_for_new_signal(trade_key, timeout=timeout)
                 if not new_signal:
                     return
-                signal_data, signal_received_time, timeframe, series_direction, signal_at_str = self._update_signal_context(new_signal)
+                signal_data, signal_received_time, timeframe, series_direction, signal_at_str = \
+                    self._update_signal_context(new_signal)
                 symbol = signal_data["symbol"]
                 self._maybe_set_auto_minutes(timeframe)
                 continue
@@ -534,7 +495,6 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
                 step_label=step_label,
             )
 
-            # === AntiMartingale логика ===
             if profit is None:
                 log(result_unknown(symbol, treat_as_loss=True) + " Серия по сигналу прерывается.")
                 break
@@ -542,35 +502,38 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
             if profit > 0:
                 log(win_with_parlay(symbol, format_amount(profit)))
                 had_any_win = True
-                continuation_streak += 1
-
-                # чистим очередь сигналов после WIN
-                common = getattr(self, "_common", None)
-                if common is not None:
-                    removed = common.discard_signals_for(trade_key)
-                    if removed:
-                        log(trade_result_removed(symbol, removed, "WIN"))
-
                 current_stake += float(profit)
                 step += 1
 
-            elif abs(profit) < 1e-9:
+                # ✅ после WIN ждём/берём новый сигнал (очередь НЕ чистим!)
+                timeout = float(self.params.get("signal_timeout_sec", 30.0))
+                next_signal = await self._get_next_signal_after_result(trade_key, timeout=timeout)
+                if not next_signal:
+                    return
+
+                signal_data, signal_received_time, timeframe, series_direction, signal_at_str = \
+                    self._update_signal_context(next_signal)
+                symbol = signal_data["symbol"]
+                self._maybe_set_auto_minutes(timeframe)
+                continue
+
+            if abs(profit) < 1e-9:
                 log(push_repeat_same_stake(symbol))
-                continuation_streak += 1
 
-                # чистим очередь сигналов после PUSH
-                common = getattr(self, "_common", None)
-                if common is not None:
-                    removed = common.discard_signals_for(trade_key)
-                    if removed:
-                        log(trade_result_removed(symbol, removed, "PUSH"))
-                # step не меняем, current_stake не меняем
+                # ✅ после PUSH ждём/берём новый сигнал (очередь НЕ чистим!)
+                timeout = float(self.params.get("signal_timeout_sec", 30.0))
+                next_signal = await self._get_next_signal_after_result(trade_key, timeout=timeout)
+                if not next_signal:
+                    return
 
-            else:
-                log(loss_series_finish(symbol, format_amount(profit)))
-                break
+                signal_data, signal_received_time, timeframe, series_direction, signal_at_str = \
+                    self._update_signal_context(next_signal)
+                symbol = signal_data["symbol"]
+                self._maybe_set_auto_minutes(timeframe)
+                continue
 
-            await self.sleep(0.2)
+            log(loss_series_finish(symbol, format_amount(profit)))
+            break
 
         # === Завершение серии (repeat_count тратим только если был WIN) ===
         if did_place_any_trade:
@@ -643,12 +606,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
             except Exception:
                 pass
 
-    def format_series_label(
-        self,
-        trade_key: str,
-        *,
-        series_left: int | None = None,
-    ) -> str | None:
+    def format_series_label(self, trade_key: str, *, series_left: int | None = None) -> str | None:
         if series_left is None:
             series_left = self._series_remaining.get(trade_key)
         return super().format_series_label(trade_key, series_left=series_left)
