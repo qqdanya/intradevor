@@ -477,6 +477,12 @@ class MainWindow(QWidget):
                 f"🤖 Создан бот: {strategy_label} [{symbol} {timeframe}]. Откройте настройки, чтобы запустить."
             )
 
+            # Автоматически открываем окно управления, чтобы задать параметры и запустить
+            try:
+                self.open_strategy_control_dialog(bot)
+            except Exception:
+                pass
+
         asyncio.create_task(_spawn_bot())
 
     def open_strategy_control_dialog(self, bot):

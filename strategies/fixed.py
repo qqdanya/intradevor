@@ -38,7 +38,8 @@ FIXED_DEFAULTS = {
     "wait_on_low_percent": 1,
     "signal_timeout_sec": 3600,
     "account_currency": "RUB",
-    "result_wait_s": 60.0,
+    # Для фиксированной ставки ждём результат всю длительность сделки (classic/sprint)
+    "result_wait_s": None,
     "grace_delay_sec": 30.0,
     "trade_type": "classic",
     "allow_parallel_trades": True,
@@ -376,8 +377,12 @@ class FixedStakeStrategy(BaseTradingStrategy):
             self._placed_trades_total += 1
 
             trade_seconds, expected_end_ts = self._calculate_trade_duration(symbol)
-            wait_seconds = self.params.get("result_wait_s")
-            wait_seconds = trade_seconds if wait_seconds is None else float(wait_seconds)
+            wait_seconds_cfg = self.params.get("result_wait_s")
+            wait_seconds = (
+                trade_seconds
+                if wait_seconds_cfg is None or float(wait_seconds_cfg) <= 0
+                else float(wait_seconds_cfg)
+            )
 
             signal_at_str = signal_data.get("signal_time_str") or format_local_time(signal_data["timestamp"])
             series_label = self.format_series_label(trade_key, series_left=series_left)
