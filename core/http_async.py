@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Callable, Awaitable, Union
 
@@ -10,17 +11,40 @@ import aiohttp
 
 log = logging.getLogger(__name__)
 
+
+def _float_env(name: str, default: float) -> float:
+    try:
+        raw = os.getenv(name)
+        return float(raw) if raw is not None else default
+    except ValueError:
+        return default
+
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        raw = os.getenv(name)
+        return int(raw) if raw is not None else default
+    except ValueError:
+        return default
+
+
 DEFAULT_TIMEOUT = aiohttp.ClientTimeout(
-    total=15, connect=5, sock_connect=5, sock_read=10
+    total=_float_env("HTTP_TIMEOUT_TOTAL", 30),
+    connect=_float_env("HTTP_TIMEOUT_CONNECT", 10),
+    sock_connect=_float_env("HTTP_TIMEOUT_SOCK_CONNECT", 10),
+    sock_read=_float_env("HTTP_TIMEOUT_SOCK_READ", 20),
 )
+
+DEFAULT_MAX_RETRIES = _int_env("HTTP_MAX_RETRIES", 5)
+DEFAULT_RETRY_BACKOFF = _float_env("HTTP_RETRY_BACKOFF", 1.0)
 
 
 @dataclass
 class HttpConfig:
     base_url: str
     user_agent: str = "Intradevor/1.0"
-    max_retries: int = 3
-    retry_backoff: float = 0.5  # 0.5, 1.0, 2.0...
+    max_retries: int = DEFAULT_MAX_RETRIES
+    retry_backoff: float = DEFAULT_RETRY_BACKOFF  # 1.0, 2.0, 4.0...
     timeout: aiohttp.ClientTimeout = DEFAULT_TIMEOUT
     verify_ssl: bool = True
     limit: int = 100  # max concurrent connections
