@@ -337,6 +337,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         series_direction = int(initial_direction)
         has_repeated = False
         skip_signal_checks_once = False
+        require_new_signal = False
         signal_at_str = signal_data.get("signal_time_str") or format_local_time(signal_received_time)
         series_finished = False
         series_label = self.format_series_label(trade_key, series_left=series_left)
@@ -348,6 +349,27 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                 skip_signal_checks_once = False
             if not await self.ensure_account_conditions():
                 continue
+
+            if require_new_signal and not skip_signal_checks:
+                timeout = float(self.params.get("signal_timeout_sec", 30.0))
+                new_signal = await self._wait_for_new_signal(
+                    trade_key, log, symbol, timeframe, timeout=timeout
+                )
+                if not new_signal:
+                    return series_left
+
+                (
+                    signal_data,
+                    signal_received_time,
+                    series_direction,
+                    signal_at_str,
+                ) = self._update_signal_context_in_series(new_signal=new_signal)
+                symbol = signal_data["symbol"]
+                timeframe = signal_data["timeframe"]
+                self._maybe_set_auto_minutes(timeframe)
+                needs_signal_validation = True
+                has_repeated = False
+                require_new_signal = False
 
             # 1) предварительная проверка актуальности (если неактуально — ждём новый, серию НЕ завершаем)
             if needs_signal_validation and not skip_signal_checks:
@@ -370,6 +392,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                     timeframe = signal_data["timeframe"]
                     self._maybe_set_auto_minutes(timeframe)
                     needs_signal_validation = True
+                    has_repeated = False
                     continue
 
             pct, _ = await self.check_payout_and_balance(symbol, stake, min_pct, wait_low)
@@ -503,13 +526,17 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                     "series_started": series_started,
                 }
 
-            should_repeat = double_entry and outcome in ("loss", "refund") and not has_repeated
+            should_repeat = double_entry and outcome == "loss" and not has_repeated
             if should_repeat:
                 has_repeated = True
                 skip_signal_checks_once = True
+                needs_signal_validation = False
+                require_new_signal = False
                 await self.sleep(0.2)
                 continue
 
+            needs_signal_validation = True
+            require_new_signal = True
             await self.sleep(0.2)
 
         if series_finished:
