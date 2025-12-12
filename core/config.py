@@ -32,6 +32,8 @@ try:
 except ValueError:
     FONT_SIZE = None
 
+TIME_GIF_PATH: str | None = os.getenv("TIME_GIF_PATH")
+
 # Тема оформления приложения: "light", "dark" или "system"
 THEME: str = os.getenv("THEME", "system")
 
@@ -64,7 +66,7 @@ def load_config() -> None:
       3) Значения по умолчанию
     Если файла нет — он будет создан с текущими значениями (дефолты/окружение).
     """
-    global APP_NAME, APP_VERSION, domain, base_url, ws_url, FONT_FAMILY, FONT_SIZE, THEME, MODE
+    global APP_NAME, APP_VERSION, domain, base_url, ws_url, FONT_FAMILY, FONT_SIZE, THEME, MODE, TIME_GIF_PATH
 
     if not os.path.exists(_CONFIG_FILE):
         # создаём файл с текущими (дефолт/окружение) значениями
@@ -97,6 +99,9 @@ def load_config() -> None:
     if "THEME" not in os.environ:
         THEME = data.get("theme", THEME)
 
+    if "TIME_GIF_PATH" not in os.environ:
+        TIME_GIF_PATH = data.get("time_gif_path", TIME_GIF_PATH)
+
     if "APP_MODE" not in os.environ and "MODE" not in os.environ:
         value = str(data.get("mode", MODE) or MODE).lower()
         MODE = value if value in {"normal", "test"} else MODE
@@ -120,6 +125,7 @@ def save_config() -> None:
             "font_size": FONT_SIZE,
             "theme": THEME,
             "mode": MODE,
+            "time_gif_path": TIME_GIF_PATH,
         }
     )
     _write_json(_CONFIG_FILE, data)
@@ -173,6 +179,10 @@ def is_test_mode() -> bool:
     return get_mode().lower() == "test"
 
 
+def get_time_gif_path() -> str | None:
+    return TIME_GIF_PATH
+
+
 # ===== Опционально: апдейтеры из кода =====
 def set_app_name(name: str) -> None:
     global APP_NAME
@@ -197,6 +207,11 @@ def set_font_size(size: int | None) -> None:
 def set_theme(theme: str) -> None:
     global THEME
     THEME = theme
+
+
+def set_time_gif_path(path: str | None) -> None:
+    global TIME_GIF_PATH
+    TIME_GIF_PATH = path
 
 
 def set_mode(mode: str) -> None:
