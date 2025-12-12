@@ -580,7 +580,9 @@ class StrategyControlDialog(QWidget):
                 box.open()
                 return None
 
-        if getattr(self, "strategy_key", "") in ("oscar_grind_1", "oscar_grind_2"):
+        strategy_key = getattr(self, "strategy_key", "")
+
+        if strategy_key in ("oscar_grind_1", "oscar_grind_2"):
             new_params = {
                 "base_investment": self.base_investment.value(),
                 "max_steps": self.max_steps.value(),
@@ -592,7 +594,7 @@ class StrategyControlDialog(QWidget):
             }
             if trade_type != "classic" and self.minutes is not None:
                 new_params["minutes"] = int(norm)
-        elif getattr(self, "strategy_key", "") == "fixed":
+        elif strategy_key == "fixed":
             new_params = {
                 "base_investment": self.base_investment.value(),
                 "repeat_count": self.repeat_count.value(),
@@ -617,7 +619,9 @@ class StrategyControlDialog(QWidget):
                 new_params["minutes"] = int(norm)
         new_params["trade_type"] = trade_type
         new_params["allow_parallel_trades"] = self.parallel_trades.isChecked()
-        new_params["use_common_series"] = False if strategy_key == "fixed" else self.common_series.isChecked()
+        new_params["use_common_series"] = (
+            False if strategy_key == "fixed" else self.common_series.isChecked()
+        )
         return new_params
 
     def apply_settings(self):
