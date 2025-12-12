@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, Dict
@@ -8,7 +9,7 @@ from strategies.base_trading_strategy import BaseTradingStrategy, _minutes_from_
 from strategies.constants import MOSCOW_TZ
 from core.time_utils import format_local_time
 from core.money import format_amount
-from core.intrade_api_async import is_demo_account
+from core.intrade_api_async import is_demo_account, get_current_percent
 from strategies.log_messages import (
     repeat_count_empty,
     signal_not_actual_for_placement,
@@ -152,6 +153,37 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
         return (base + timedelta(days=days_add)).replace(hour=hour, minute=minute)
 
     # =====================================================================
+    # low payout helper (без локальной очереди)
+    # =====================================================================
+
+    async def _is_payout_low_now(self, symbol: str) -> bool:
+        min_pct = int(self.params.get("min_percent", 70))
+        stake = float(self.params.get("base_investment", 100))
+        account_ccy = self._anchor_ccy
+
+        try:
+            pct = await get_current_percent(
+                self.http_client,
+                investment=stake,
+                option=symbol,
+                minutes=self._trade_minutes,
+                account_ccy=account_ccy,
+                trade_type=self._trade_type,
+            )
+        except Exception:
+            pct = None
+
+        if pct is None:
+            self._status("ожидание процента")
+            return True
+
+        if pct < min_pct:
+            self._status("ожидание высокого процента")
+            return True
+
+        return False
+
+    # =====================================================================
     # ОСНОВНАЯ ЛОГИКА
     # =====================================================================
 
@@ -171,6 +203,25 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             if common is not None:
                 await common._handle_pending_signal(trade_key, signal_data)
             return
+
+        # === LOW PAYOUT ДО СТАРТА СЕРИИ ===
+        # Не уходим в "ждать новый сигнал M15/H1". Коротко ждём восстановления payout,
+        # по пути подхватываем самый свежий сигнал из StrategyCommon.
+        while self._running and await self._is_payout_low_now(symbol):
+            await self._pause_point()
+
+            common = getattr(self, "_common", None)
+            if common is not None:
+                newer = common.pop_latest_signal(trade_key)
+                if newer:
+                    signal_data = newer
+                    symbol = signal_data["symbol"]
+                    timeframe = signal_data["timeframe"]
+                    direction = signal_data["direction"]
+                    self._maybe_set_auto_minutes(timeframe)
+                    trade_key = self.build_trade_key(symbol, timeframe)
+
+            await asyncio.sleep(float(self.params.get("wait_on_low_percent", 1)))
 
         log(start_processing(symbol, "Oscar Grind"))
 
@@ -282,7 +333,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             series_started = False
 
         needs_signal_validation = True
-        series_direction = initial_direction
+        series_direction = int(initial_direction)
         has_repeated = False
         signal_at_str = signal_data.get("signal_time_str") or format_local_time(signal_received_time)
         series_finished = False
@@ -293,8 +344,7 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             if not await self.ensure_account_conditions():
                 continue
 
-            # === 1) предварительная проверка актуальности перед шагом серии
-            # Если неактуально — НЕ завершаем серию. Ждём новый сигнал и продолжаем.
+            # 1) предварительная проверка актуальности (если неактуально — ждём новый, серию НЕ завершаем)
             if needs_signal_validation:
                 current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
                 if self._trade_type == "classic":
@@ -304,18 +354,13 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
 
                 if not is_valid:
                     log(signal_not_actual_for_placement(symbol, reason))
-                    common = getattr(self, "_common", None)
-                    if common is None:
-                        return series_left
-
                     timeout = float(self.params.get("signal_timeout_sec", 30.0))
                     new_signal = await self._wait_for_new_signal(trade_key, log, symbol, timeframe, timeout=timeout)
                     if not new_signal:
                         return series_left
 
-                    signal_data, signal_received_time, series_direction, signal_at_str = self._update_signal_context_in_series(
-                        new_signal=new_signal
-                    )
+                    signal_data, signal_received_time, series_direction, signal_at_str = \
+                        self._update_signal_context_in_series(new_signal=new_signal)
                     symbol = signal_data["symbol"]
                     timeframe = signal_data["timeframe"]
                     self._maybe_set_auto_minutes(timeframe)
@@ -331,31 +376,23 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
                 + f" (step {step_idx + 1})"
             )
 
-            # === 2) финальная проверка актуальности перед размещением сделки
-            # Если неактуально — НЕ завершаем серию. Ждём новый сигнал и продолжаем.
+            # 2) финальная проверка актуальности перед размещением (если неактуально — ждём новый)
             current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
             if self._trade_type == "classic":
                 is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
             else:
-                sprint_payload = signal_data
-                if not sprint_payload.get("timestamp"):
-                    sprint_payload = {"timestamp": signal_received_time}
+                sprint_payload = signal_data if signal_data.get("timestamp") else {"timestamp": signal_received_time}
                 is_valid, reason = self._is_signal_valid_for_sprint(sprint_payload, current_time)
 
             if not is_valid:
                 log(signal_not_actual_for_placement(symbol, reason))
-                common = getattr(self, "_common", None)
-                if common is None:
-                    return series_left
-
                 timeout = float(self.params.get("signal_timeout_sec", 30.0))
                 new_signal = await self._wait_for_new_signal(trade_key, log, symbol, timeframe, timeout=timeout)
                 if not new_signal:
                     return series_left
 
-                signal_data, signal_received_time, series_direction, signal_at_str = self._update_signal_context_in_series(
-                    new_signal=new_signal
-                )
+                signal_data, signal_received_time, series_direction, signal_at_str = \
+                    self._update_signal_context_in_series(new_signal=new_signal)
                 symbol = signal_data["symbol"]
                 timeframe = signal_data["timeframe"]
                 self._maybe_set_auto_minutes(timeframe)
@@ -364,7 +401,6 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
 
             needs_signal_validation = False
 
-            # Classic: экспирация = следующая свеча от текущего времени
             if self._trade_type == "classic":
                 self._next_expire_dt = self._calc_next_candle_from_now(timeframe)
 
@@ -378,7 +414,6 @@ class OscarGrindBaseStrategy(BaseTradingStrategy):
             trade_id = await self.place_trade_with_retry(symbol, series_direction, stake, self._anchor_ccy)
 
             if not trade_id:
-                # Тут вы уже делали "ждём новый сигнал" — оставляю как было.
                 log(trade_placement_failed(symbol, "Ждем новый сигнал."))
                 await self.sleep(2.0)
                 return series_left
