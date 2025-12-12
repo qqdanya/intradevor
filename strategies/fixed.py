@@ -47,7 +47,9 @@ FIXED_DEFAULTS = {
 
 
 class FixedStakeStrategy(BaseTradingStrategy):
-    """Стратегия с фиксированной ставкой (одна сделка на сигнал)."""
+    """Стратегия с фиксированной ставкой (одна сделка на сигнал).
+    Если сигнал устарел для размещения — не "роняем" попытку, а ждём новый сигнал.
+    """
 
     def __init__(
         self,
@@ -61,7 +63,6 @@ class FixedStakeStrategy(BaseTradingStrategy):
         params: Optional[dict] = None,
         **kwargs,
     ):
-        # Объединяем параметры по умолчанию
         fixed_params = dict(FIXED_DEFAULTS)
         if params:
             fixed_params.update(params)
@@ -78,8 +79,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
             **kwargs,
         )
 
-        # Счётчик успешно размещённых сделок
-        self._trades_counter: int = 0
+        self._trades_counter: int = 0  # успешно размещённые сделки
 
     # =====================================================================
     # ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
@@ -90,25 +90,52 @@ class FixedStakeStrategy(BaseTradingStrategy):
         return True
 
     def _calc_next_candle_from_now(self, timeframe: str) -> datetime:
-        """
-        Для classic: вернуть время начала СЛЕДУЮЩЕЙ свечи относительно текущего момента.
-        Привязка к размеру таймфрейма (M1, M5, M15 и т.д.).
-        """
+        """Для classic: время начала СЛЕДУЮЩЕЙ свечи относительно текущего момента."""
         now = datetime.now(ZoneInfo(MOSCOW_TZ))
         tf_minutes = _minutes_from_timeframe(timeframe)
-
         base = now.replace(second=0, microsecond=0)
 
         total_min = base.hour * 60 + base.minute
-        next_total = (total_min // tf_minutes + 1) * tf_minutes  # ближайший следующий слот
+        next_total = (total_min // tf_minutes + 1) * tf_minutes
 
         days_add = next_total // (24 * 60)
         minutes_in_day = next_total % (24 * 60)
         hour = minutes_in_day // 60
         minute = minutes_in_day % 60
 
-        next_dt = (base + timedelta(days=days_add)).replace(hour=hour, minute=minute)
-        return next_dt
+        return (base + timedelta(days=days_add)).replace(hour=hour, minute=minute)
+
+    async def _wait_for_new_signal(
+        self,
+        trade_key: str,
+        log,
+        symbol: str,
+        timeframe: str,
+        timeout: float,
+    ) -> Optional[dict]:
+        """Ждём новый сигнал по trade_key в течение timeout секунд."""
+        start = asyncio.get_event_loop().time()
+        while self._running and (asyncio.get_event_loop().time() - start) < timeout:
+            await self._pause_point()
+            common = getattr(self, "_common", None)
+            if common is not None:
+                new_signal = common.pop_latest_signal(trade_key)
+                if new_signal:
+                    return new_signal
+            await asyncio.sleep(0.5)
+        # используем существующий лог trade_timeout в других стратегиях,
+        # но тут его нет в импортах — поэтому просто возвращаем None.
+        return None
+
+    def _apply_signal_context(self, signal_data: dict) -> None:
+        """Применяет метаданные сигнала к состоянию стратегии (как в других стратегиях)."""
+        self._last_signal_ver = signal_data.get("version", self._last_signal_ver)
+        self._last_indicator = signal_data.get("indicator", self._last_indicator)
+        ts0 = signal_data.get("timestamp")
+        if ts0:
+            self._last_signal_at_str = signal_data.get("signal_time_str") or format_local_time(ts0)
+        ts = signal_data.get("meta", {}).get("next_timestamp") if signal_data.get("meta") else None
+        self._next_expire_dt = ts.astimezone(ZoneInfo(MOSCOW_TZ)) if ts else None
 
     # =====================================================================
     # ОСНОВНАЯ ЛОГИКА
@@ -116,74 +143,90 @@ class FixedStakeStrategy(BaseTradingStrategy):
 
     async def _process_single_signal(self, signal_data: dict):
         """Обработка одного сигнала для фиксированной ставки"""
-        symbol = signal_data["symbol"]
-        timeframe = signal_data["timeframe"]
-        direction = signal_data["direction"]
-
-        self._maybe_set_auto_minutes(timeframe)
-
         log = self.log or (lambda s: None)
-        log(start_processing(symbol, "Fixed Stake"))
 
-        # Обновляем информацию о сигнале
-        self._last_signal_ver = signal_data["version"]
-        self._last_indicator = signal_data["indicator"]
-        self._last_signal_at_str = format_local_time(signal_data["timestamp"])
+        # будем уметь "пережидать" устаревание и брать новый сигнал
+        while self._running:
+            symbol = signal_data["symbol"]
+            timeframe = signal_data["timeframe"]
+            direction = signal_data["direction"]
 
-        ts = signal_data.get("meta", {}).get("next_timestamp")
-        self._next_expire_dt = ts.astimezone(ZoneInfo(MOSCOW_TZ)) if ts else None
+            self._maybe_set_auto_minutes(timeframe)
 
-        # Обновляем символ и таймфрейм, если используются "*"
-        if self._use_any_symbol:
-            self.symbol = symbol
-        if self._use_any_timeframe:
-            self.timeframe = timeframe
-            self.params["timeframe"] = self.timeframe
+            trade_key = self.build_trade_key(symbol, timeframe)
 
-        try:
-            self._last_signal_monotonic = asyncio.get_running_loop().time()
-        except RuntimeError:
-            self._last_signal_monotonic = None
+            log(start_processing(symbol, "Fixed Stake"))
 
-        # ПРОВЕРКА АКТУАЛЬНОСТИ СИГНАЛА
-        current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
+            # Обновляем состояние стратегии по сигналу
+            self._apply_signal_context(signal_data)
 
-        if self._trade_type == "classic":
-            is_valid, reason = self._is_signal_valid_for_classic(
-                signal_data,
-                current_time,
-                for_placement=True,
-            )
-            if not is_valid:
-                log(signal_not_actual(symbol, "classic", reason))
-                return
-        else:
-            is_valid, reason = self._is_signal_valid_for_sprint(
-                signal_data,
-                current_time,
-            )
-            if not is_valid:
-                log(signal_not_actual(symbol, "sprint", reason))
+            if self._use_any_symbol:
+                self.symbol = symbol
+            if self._use_any_timeframe:
+                self.timeframe = timeframe
+                self.params["timeframe"] = self.timeframe
+
+            try:
+                self._last_signal_monotonic = asyncio.get_running_loop().time()
+            except RuntimeError:
+                self._last_signal_monotonic = None
+
+            # Проверяем лимит сделок
+            max_trades = int(self.params.get("repeat_count", 10))
+            if self._trades_counter >= max_trades:
+                if not self._stop_when_idle_requested:
+                    log(trade_limit_reached(symbol, self._trades_counter, max_trades))
+                    self._status("достигнут лимит сделок")
+                self._request_stop_when_idle("достигнут лимит сделок")
                 return
 
-        # Проверяем лимит сделок
-        max_trades = int(self.params.get("repeat_count", 10))
-        if self._trades_counter >= max_trades:
-            if not self._stop_when_idle_requested:
-                log(trade_limit_reached(symbol, self._trades_counter, max_trades))
-                self._status("достигнут лимит сделок")
-            self._request_stop_when_idle("достигнут лимит сделок")
-            return
+            # ПРОВЕРКА АКТУАЛЬНОСТИ СИГНАЛА (если не актуален — ждём новый)
+            current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
+            if self._trade_type == "classic":
+                is_valid, reason = self._is_signal_valid_for_classic(
+                    signal_data,
+                    current_time,
+                    for_placement=True,
+                )
+                if not is_valid:
+                    log(signal_not_actual(symbol, "classic", reason))
+                    common = getattr(self, "_common", None)
+                    if common is None:
+                        return
+                    timeout = float(self.params.get("signal_timeout_sec", 30.0))
+                    new_signal = await self._wait_for_new_signal(
+                        trade_key, log, symbol, timeframe, timeout=timeout
+                    )
+                    if not new_signal:
+                        return
+                    signal_data = new_signal
+                    continue
+            else:
+                is_valid, reason = self._is_signal_valid_for_sprint(signal_data, current_time)
+                if not is_valid:
+                    log(signal_not_actual(symbol, "sprint", reason))
+                    common = getattr(self, "_common", None)
+                    if common is None:
+                        return
+                    timeout = float(self.params.get("signal_timeout_sec", 30.0))
+                    new_signal = await self._wait_for_new_signal(
+                        trade_key, log, symbol, timeframe, timeout=timeout
+                    )
+                    if not new_signal:
+                        return
+                    signal_data = new_signal
+                    continue
 
-        # Запускаем обработку сделки с фиксированной ставкой
-        await self._process_fixed_trade(
-            symbol,
-            timeframe,
-            direction,
-            log,
-            signal_data["timestamp"],
-            signal_data,
-        )
+            # если актуален — пытаемся обработать сделку
+            await self._process_fixed_trade(
+                symbol,
+                timeframe,
+                direction,
+                log,
+                signal_data["timestamp"],
+                signal_data,
+            )
+            return  # одна сделка на один (актуальный) сигнал
 
     async def _process_fixed_trade(
         self,
@@ -194,203 +237,184 @@ class FixedStakeStrategy(BaseTradingStrategy):
         signal_received_time: datetime,
         signal_data: dict,
     ):
-        """Обрабатывает одну сделку с фиксированной ставкой"""
-        signal_at_str = signal_data.get("signal_time_str") or format_local_time(
-            signal_received_time
-        )
+        """Обрабатывает одну сделку с фиксированной ставкой.
+        Если сигнал устарел прямо перед сделкой — ждём новый и пробуем снова.
+        """
         trade_key = self.build_trade_key(symbol, timeframe)
 
-        # Проверяем баланс
-        try:
-            bal, _, _ = await get_balance_info(
-                self.http_client, self.user_id, self.user_hash
-            )
-        except Exception:
-            bal = 0.0
+        while self._running:
+            # Актуализируем строки времени
+            signal_at_str = signal_data.get("signal_time_str") or format_local_time(signal_received_time)
 
-        min_balance = float(self.params.get("min_balance", 100))
-        if bal < min_balance:
-            log(
-                balance_below_min(
-                    symbol,
-                    format_amount(bal),
-                    format_amount(min_balance),
+            # Проверяем баланс (общий)
+            try:
+                bal, _, _ = await get_balance_info(self.http_client, self.user_id, self.user_hash)
+            except Exception:
+                bal = 0.0
+
+            min_balance = float(self.params.get("min_balance", 100))
+            if bal < min_balance:
+                log(balance_below_min(symbol, format_amount(bal), format_amount(min_balance)))
+                return
+
+            stake = float(self.params.get("base_investment", 100))
+            min_pct = int(self.params.get("min_percent", 70))
+            wait_low = float(self.params.get("wait_on_low_percent", 1))
+            account_ccy = self._anchor_ccy
+
+            # payout
+            pct = await get_current_percent(
+                self.http_client,
+                investment=stake,
+                option=symbol,
+                minutes=self._trade_minutes,
+                account_ccy=account_ccy,
+                trade_type=self._trade_type,
+            )
+
+            if pct is None:
+                self._status("ожидание процента")
+                log(payout_missing(symbol))
+                return
+
+            if pct < min_pct:
+                self._status("ожидание высокого процента")
+                if not self._low_payout_notified:
+                    log(payout_too_low(symbol, pct, min_pct))
+                    self._low_payout_notified = True
+                return
+
+            if self._low_payout_notified:
+                log(payout_resumed(symbol, pct))
+                self._low_payout_notified = False
+
+            # Проверяем баланс для конкретной сделки
+            try:
+                cur_balance, _, _ = await get_balance_info(self.http_client, self.user_id, self.user_hash)
+            except Exception:
+                cur_balance = None
+
+            min_floor = float(self.params.get("min_balance", 100))
+            if cur_balance is None or (cur_balance - stake) < min_floor:
+                current_display = format_amount(cur_balance) if cur_balance is not None else None
+                log(
+                    stake_risk(
+                        symbol,
+                        format_amount(stake),
+                        account_ccy,
+                        format_amount(min_floor),
+                        current_display,
+                    )
                 )
-            )
-            return
+                return
 
-        stake = float(self.params.get("base_investment", 100))
-        min_pct = int(self.params.get("min_percent", 70))
-        wait_low = float(self.params.get("wait_on_low_percent", 1))
-        account_ccy = self._anchor_ccy
+            if not await self.ensure_account_conditions():
+                return
 
-        # Получаем payout
-        pct = await get_current_percent(
-            self.http_client,
-            investment=stake,
-            option=symbol,
-            minutes=self._trade_minutes,
-            account_ccy=account_ccy,
-            trade_type=self._trade_type,
-        )
-
-        if pct is None:
-            self._status("ожидание процента")
-            log(payout_missing(symbol))
-            return
-
-        if pct < min_pct:
-            self._status("ожидание высокого процента")
-            if not self._low_payout_notified:
-                log(payout_too_low(symbol, pct, min_pct))
-                self._low_payout_notified = True
-            return
-
-        if self._low_payout_notified:
-            log(payout_resumed(symbol, pct))
-            self._low_payout_notified = False
-
-        # Проверяем баланс для конкретной сделки
-        try:
-            cur_balance, _, _ = await get_balance_info(
-                self.http_client, self.user_id, self.user_hash
-            )
-        except Exception:
-            cur_balance = None
-
-        min_floor = float(self.params.get("min_balance", 100))
-        if cur_balance is None or (cur_balance - stake) < min_floor:
-            current_display = (
-                format_amount(cur_balance) if cur_balance is not None else None
-            )
-            log(
-                stake_risk(
-                    symbol,
-                    format_amount(stake),
-                    account_ccy,
-                    format_amount(min_floor),
-                    current_display,
+            # Финальная проверка актуальности (если не актуален — ждём новый сигнал и повторяем цикл)
+            current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
+            if self._trade_type == "classic":
+                is_valid, reason = self._is_signal_valid_for_classic(
+                    signal_data,
+                    current_time,
+                    for_placement=True,
                 )
-            )
-            return
+            else:
+                sprint_payload = signal_data if signal_data.get("timestamp") else {"timestamp": signal_received_time}
+                is_valid, reason = self._is_signal_valid_for_sprint(sprint_payload, current_time)
 
-        if not await self.ensure_account_conditions():
-            return
+            if not is_valid:
+                log(signal_not_actual_for_placement(symbol, reason))
+                common = getattr(self, "_common", None)
+                if common is None:
+                    return
+                timeout = float(self.params.get("signal_timeout_sec", 30.0))
+                new_signal = await self._wait_for_new_signal(trade_key, log, symbol, timeframe, timeout=timeout)
+                if not new_signal:
+                    return
+                # обновляем контекст и повторяем попытку
+                signal_data = new_signal
+                symbol = signal_data["symbol"]
+                timeframe = signal_data["timeframe"]
+                direction = signal_data["direction"]
+                signal_received_time = signal_data["timestamp"]
+                self._maybe_set_auto_minutes(timeframe)
+                self._apply_signal_context(signal_data)
+                continue
 
-        # Финальная проверка актуальности перед размещением сделки
-        current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
-        if self._trade_type == "classic":
-            is_valid, reason = self._is_signal_valid_for_classic(
-                signal_data,
-                current_time,
-                for_placement=True,
-            )
-        else:
-            sprint_payload = signal_data
-            if not sprint_payload.get("timestamp"):
-                sprint_payload = {"timestamp": signal_received_time}
-            is_valid, reason = self._is_signal_valid_for_sprint(
-                sprint_payload,
-                current_time,
-            )
+            # classic: экспирация = следующая свеча от "сейчас"
+            if self._trade_type == "classic":
+                self._next_expire_dt = self._calc_next_candle_from_now(timeframe)
 
-        if not is_valid:
-            log(signal_not_actual_for_placement(symbol, reason))
-            return
+            log(trade_summary(symbol, format_amount(stake), self._trade_minutes, direction, pct))
 
-        # Для classic: перед размещением сделки ВСЕГДА берём следующую свечу от текущего времени
-        if self._trade_type == "classic":
-            self._next_expire_dt = self._calc_next_candle_from_now(timeframe)
+            try:
+                demo_now = await is_demo_account(self.http_client)
+            except Exception:
+                demo_now = False
+            account_mode = "ДЕМО" if demo_now else "РЕАЛ"
 
-        log(
-            trade_summary(
+            # Размещаем сделку
+            self._status("делает ставку")
+            trade_id = await self.place_trade_with_retry(symbol, direction, stake, self._anchor_ccy)
+
+            if not trade_id:
+                log(trade_placement_failed(symbol, "Пропускаем сигнал."))
+                return
+
+            # Счётчик сделок растёт только на успешном размещении
+            self._trades_counter += 1
+
+            trade_seconds, expected_end_ts = self._calculate_trade_duration(symbol)
+            wait_seconds = self.params.get("result_wait_s")
+            wait_seconds = trade_seconds if wait_seconds is None else float(wait_seconds)
+
+            series_label = self.format_series_label(trade_key)
+            self._notify_pending_trade(
+                trade_id,
                 symbol,
-                format_amount(stake),
-                self._trade_minutes,
+                timeframe,
                 direction,
+                stake,
                 pct,
+                trade_seconds,
+                account_mode,
+                expected_end_ts,
+                signal_at=signal_at_str,
+                series_label=series_label,
             )
-        )
+            self._register_pending_trade(trade_id, symbol, timeframe)
 
-        try:
-            demo_now = await is_demo_account(self.http_client)
-        except Exception:
-            demo_now = False
-        account_mode = "ДЕМО" if demo_now else "РЕАЛ"
+            profit = await self.wait_for_trade_result(
+                trade_id=trade_id,
+                wait_seconds=float(wait_seconds),
+                placed_at=datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
+                signal_at=signal_at_str,
+                symbol=symbol,
+                timeframe=timeframe,
+                direction=direction,
+                stake=float(stake),
+                percent=int(pct),
+                account_mode=account_mode,
+                indicator=self._last_indicator,
+                series_label=series_label,
+            )
 
-        # Размещаем сделку
-        self._status("делает ставку")
-        trade_id = await self.place_trade_with_retry(
-            symbol,
-            direction,
-            stake,
-            self._anchor_ccy,
-        )
+            if profit is None:
+                log(result_unknown(symbol))
+            elif profit >= 0:
+                log(result_win(symbol, f"Результат: {format_amount(profit)}"))
+            else:
+                log(result_loss(symbol, f"Результат: {format_amount(profit)}"))
 
-        if not trade_id:
-            log(trade_placement_failed(symbol, "Пропускаем сигнал."))
-            return  # ПРОПУСКАЕМ СИГНАЛ ВМЕСТО УВЕЛИЧЕНИЯ СЧЕТЧИКА
-
-        # Увеличиваем счетчик сделок ТОЛЬКО при успешном размещении
-        self._trades_counter += 1
-
-        # Определяем длительность сделки
-        trade_seconds, expected_end_ts = self._calculate_trade_duration(symbol)
-        wait_seconds = self.params.get("result_wait_s")
-        if wait_seconds is None:
-            wait_seconds = trade_seconds
-        else:
-            wait_seconds = float(wait_seconds)
-
-        # Уведомляем о pending сделке
-        series_label = self.format_series_label(trade_key)
-        self._notify_pending_trade(
-            trade_id,
-            symbol,
-            timeframe,
-            direction,
-            stake,
-            pct,
-            trade_seconds,
-            account_mode,
-            expected_end_ts,
-            signal_at=signal_at_str,
-            series_label=series_label,
-        )
-        self._register_pending_trade(trade_id, symbol, timeframe)
-
-        # Ожидаем результат сделки
-        profit = await self.wait_for_trade_result(
-            trade_id=trade_id,
-            wait_seconds=float(wait_seconds),
-            placed_at=datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
-            signal_at=signal_at_str,
-            symbol=symbol,
-            timeframe=timeframe,
-            direction=direction,
-            stake=float(stake),
-            percent=int(pct),
-            account_mode=account_mode,
-            indicator=self._last_indicator,
-            series_label=series_label,
-        )
-
-        # Логируем результат
-        if profit is None:
-            log(result_unknown(symbol))
-        elif profit >= 0:
-            log(result_win(symbol, f"Результат: {format_amount(profit)}"))
-        else:
-            log(result_loss(symbol, f"Результат: {format_amount(profit)}"))
-
-        # Обновляем статус с оставшимися сделками
-        max_trades = int(self.params.get("repeat_count", 10))
-        remaining = max_trades - self._trades_counter
-        if remaining > 0:
-            self._status(f"сделок осталось: {remaining}")
-        else:
-            self._status("достигнут лимит сделок")
-            self._request_stop_when_idle("достигнут лимит сделок")
+            max_trades = int(self.params.get("repeat_count", 10))
+            remaining = max_trades - self._trades_counter
+            if remaining > 0:
+                self._status(f"сделок осталось: {remaining}")
+            else:
+                self._status("достигнут лимит сделок")
+                self._request_stop_when_idle("достигнут лимит сделок")
+            return
 
     def _calculate_trade_duration(self, symbol: str) -> tuple[float, float]:
         """Рассчитывает длительность сделки"""
@@ -447,12 +471,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
             except Exception:
                 pass
 
-    def format_series_label(
-        self,
-        trade_key: str,
-        *,
-        series_left: int | None = None,
-    ) -> str | None:
+    def format_series_label(self, trade_key: str, *, series_left: int | None = None) -> str | None:
         """Для фиксированной стратегии показываем счётчик сделок: текущая/максимум."""
         try:
             total = int(self.params.get("repeat_count", 0))
@@ -464,15 +483,12 @@ class FixedStakeStrategy(BaseTradingStrategy):
         return f"{current}/{total}"
 
     def stop(self):
-        """Остановка стратегии"""
         log = self.log or (lambda s: None)
         log(fixed_stake_stopped(self.symbol, self._trades_counter))
         super().stop()
 
     def update_params(self, **params):
-        """Обновление параметров с дополнительной логикой"""
         super().update_params(**params)
-
         if "repeat_count" in params:
             max_trades = int(params["repeat_count"])
             remaining = max_trades - self._trades_counter
