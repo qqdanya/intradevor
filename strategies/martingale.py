@@ -533,6 +533,51 @@ class MartingaleStrategy(BaseTradingStrategy):
             series_left = self._series_remaining.get(trade_key)
         return super().format_series_label(trade_key, series_left=series_left)
 
+    def _notify_pending_trade(
+        self,
+        trade_id: str,
+        symbol: str,
+        timeframe: str,
+        direction: int,
+        stake: float,
+        percent: int,
+        trade_seconds: float,
+        account_mode: str,
+        expected_end_ts: float,
+        *,
+        signal_at: Optional[str] = None,
+        series_label: Optional[str] = None,
+        step_label: Optional[str] = None,
+    ):
+        placed_at = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+        trade_key = self.build_trade_key(symbol, timeframe)
+
+        if series_label is None:
+            series_label = self.format_series_label(trade_key)
+
+        self._set_planned_stake(trade_key, stake)
+
+        if callable(self._on_trade_pending):
+            try:
+                self._on_trade_pending(
+                    trade_id=trade_id,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    signal_at=signal_at or self._last_signal_at_str,
+                    placed_at=placed_at,
+                    direction=direction,
+                    stake=float(stake),
+                    percent=int(percent),
+                    wait_seconds=float(trade_seconds),
+                    account_mode=account_mode,
+                    indicator=self._last_indicator,
+                    expected_end_ts=expected_end_ts,
+                    series=series_label,
+                    step=step_label,
+                )
+            except Exception:
+                pass
+
     def stop(self):
         super().stop()
         self._active_series.clear()
