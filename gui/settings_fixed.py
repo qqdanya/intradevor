@@ -27,7 +27,7 @@ class FixedSettingsDialog(QDialog):
         self.minutes.setValue(default_minutes)
 
         self.auto_minutes = QCheckBox("Авто")
-        self.auto_minutes.setChecked(bool(self.params.get("auto_minutes", False)))
+        self.auto_minutes.setChecked(bool(self.params.get("auto_minutes", True)))
         self.auto_minutes.toggled.connect(
             lambda checked: self.minutes.setEnabled(not checked)
         )
