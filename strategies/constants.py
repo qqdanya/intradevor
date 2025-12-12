@@ -23,6 +23,8 @@ DEFAULTS = {
     "classic_signal_max_age_sec": 170.0,
     "classic_trade_buffer_sec": 10.0,
     "classic_min_time_before_next_sec": 180.0,
-    "use_common_series": False,
+    # По умолчанию объединяем серию для всех сигналов, чтобы UI и стартовые
+    # параметры стратегии были согласованы (чекбокс включён).
+    "use_common_series": True,
     "auto_minutes": False,
 }
