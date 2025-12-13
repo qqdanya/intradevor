@@ -42,7 +42,14 @@ class TradeQueue:
                 await self._worker_task
             except asyncio.CancelledError:
                 pass
+        # Очистим все ожидающие задачи, чтобы вызывающие не зависали
+        while not self._queue.empty():
+            future, _ = self._queue.get_nowait()
+            if not future.done():
+                future.set_exception(asyncio.CancelledError())
+            self._queue.task_done()
         self._started = False
+        self._worker_task = None
 
     async def enqueue(self, factory: Callable[[], Awaitable[T]]) -> T:
         """Добавить задачу в очередь и дождаться результата.
