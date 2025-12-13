@@ -82,50 +82,53 @@ def push_signal(
     Положить НОВОЕ сообщение сигнала.
     Любой приход (включая None) повышает версию и будит всех ожидающих.
     """
-    keys = {
+    keys = (
         _key(symbol, timeframe),
         _key(ANY_SYMBOL, timeframe),
         _key(symbol, ANY_TIMEFRAME),
         _key(ANY_SYMBOL, ANY_TIMEFRAME),
-    }
-
-    async def _update_and_notify(st: _State):
-        async with st.cond:
-            now_monotonic = asyncio.get_running_loop().time()
-            st.version += 1
-            st.value = direction if direction in (1, 2) else None
-            st.last_monotonic = now_monotonic
-            sec = _tf_to_seconds(timeframe)
-            if sec:
-                st.tf_sec = sec
-            if indicator is not None:
-                st.last_indicator = indicator
-            st.last_symbol = symbol
-            st.last_timeframe = timeframe
-            st.next_timestamp = next_timestamp
-            st.timestamp = timestamp
-            if st.value in (1, 2):
-                meta_snapshot = {
-                    "indicator": st.last_indicator,
-                    "tf_sec": st.tf_sec,
-                    "symbol": st.last_symbol,
-                    "timeframe": st.last_timeframe,
-                    "next_timestamp": st.next_timestamp,
-                    "timestamp": st.timestamp,
-                }
-                st.history.append(
-                    {
-                        "version": int(st.version),
-                        "direction": int(st.value),
-                        "monotonic": now_monotonic,
-                        "meta": meta_snapshot,
-                    }
-                )
-            st.cond.notify_all()
+    )
+    states = [_states[k] for k in set(keys)]
 
     loop = asyncio.get_running_loop()
-    for k in keys:
-        loop.create_task(_update_and_notify(_states[k]))
+    now_monotonic = loop.time()
+    tf_seconds = _tf_to_seconds(timeframe)
+    direction_value = direction if direction in (1, 2) else None
+
+    async def _update_and_notify() -> None:
+        for st in states:
+            async with st.cond:
+                st.version += 1
+                st.value = direction_value
+                st.last_monotonic = now_monotonic
+                if tf_seconds:
+                    st.tf_sec = tf_seconds
+                if indicator is not None:
+                    st.last_indicator = indicator
+                st.last_symbol = symbol
+                st.last_timeframe = timeframe
+                st.next_timestamp = next_timestamp
+                st.timestamp = timestamp
+                if st.value in (1, 2):
+                    meta_snapshot = {
+                        "indicator": st.last_indicator,
+                        "tf_sec": st.tf_sec,
+                        "symbol": st.last_symbol,
+                        "timeframe": st.last_timeframe,
+                        "next_timestamp": st.next_timestamp,
+                        "timestamp": st.timestamp,
+                    }
+                    st.history.append(
+                        {
+                            "version": int(st.version),
+                            "direction": int(st.value),
+                            "monotonic": now_monotonic,
+                            "meta": meta_snapshot,
+                        }
+                    )
+                st.cond.notify_all()
+
+    loop.create_task(_update_and_notify())
 
 
 async def _maybe_await(func: Callable[[], Awaitable[None] | None]) -> None:
