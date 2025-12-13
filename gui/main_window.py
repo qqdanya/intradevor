@@ -160,7 +160,7 @@ class MainWindow(QWidget):
         self.moscow_time_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         time_font = QFont("Monospace")
         time_font.setStyleHint(QFont.StyleHint.TypeWriter)
-        time_font.setPixelSize(42)
+        time_font.setPixelSize(40)
         self.moscow_time_label.setFont(time_font)
         self.moscow_time_label.setStyleSheet(
             "font-weight: 400; letter-spacing: 1px;"
