@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 from typing import Any, Callable, Optional, Type
 
 
@@ -24,6 +25,7 @@ class Bot:
         self._task: Optional[asyncio.Task] = None
         self._strategy: Optional[Any] = None
         self._started = False
+        self._log = logging.getLogger(__name__)
 
     def start(self) -> None:
         """Создать экземпляр стратегии и запустить её."""
@@ -36,8 +38,9 @@ class Bot:
         if callable(init_start):
             try:
                 init_start()
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                self._log.exception("Strategy start() failed")
+                self.on_log(f"⚠️ Ошибка при старте стратегии: {exc!r}")
 
         self._task = asyncio.create_task(self._run())
         self._started = True
@@ -61,6 +64,15 @@ class Bot:
         self._call_strategy_method("stop")
         if self._task and not self._task.done():
             self._task.cancel()
+
+    async def stop_and_wait(self) -> None:
+        """Остановить стратегию и дождаться завершения задачи."""
+        self.stop()
+        if self._task:
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
 
     def pause(self) -> None:
         """Поставить стратегию на паузу, если она поддерживает паузу."""
@@ -91,8 +103,9 @@ class Bot:
         if callable(method):
             try:
                 method()
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                self._log.exception("Strategy method %s failed", name)
+                self.on_log(f"⚠️ Ошибка при вызове {name}: {exc!r}")
 
     async def _close_http_client(self) -> None:
         """Закрыть HttpClient стратегии, если он задан."""
@@ -113,5 +126,6 @@ class Bot:
             result = close_callable()
             if inspect.isawaitable(result):
                 await result
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            self._log.exception("HttpClient close failed")
+            self.on_log(f"⚠️ Ошибка при закрытии http_client: {exc!r}")

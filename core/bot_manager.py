@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Iterable, List, Optional, Type
 
 from core.bot import Bot
@@ -29,8 +30,13 @@ class BotManager:
 
     def stop_all(self) -> None:
         """Остановить всех ботов."""
+        loop = asyncio.get_running_loop()
+        tasks = []
         for bot in list(self.bots):
-            bot.stop()
+            tasks.append(loop.create_task(bot.stop_and_wait()))
+        self.bots.clear()
+        if tasks:
+            loop.create_task(asyncio.gather(*tasks, return_exceptions=True))
 
     def find_by_symbol_and_strategy(
         self, symbol: str, strategy_cls: Type

@@ -125,13 +125,13 @@ class HttpClient:
         while attempt < self._cfg.max_retries:
             try:
                 resp = await func()
-                if resp.status >= 500:
+                if resp.status >= 400:
                     text = await resp.text()
                     raise aiohttp.ClientResponseError(
                         request_info=resp.request_info,
                         history=resp.history,
                         status=resp.status,
-                        message=f"Server error body: {text[:500]}",
+                        message=f"HTTP {resp.status} body: {text[:500]}",
                         headers=resp.headers,
                     )
                 if resp.status == 204:
