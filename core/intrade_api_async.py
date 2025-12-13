@@ -6,8 +6,6 @@ from typing import Optional, Tuple
 
 from bs4 import BeautifulSoup
 
-from core import config
-from core import test_backend
 from core.http_async import HttpClient
 from core.policy import DEFAULT_ACCOUNT_CCY, clamp_stake, normalize_sprint
 from core.money import format_amount
@@ -35,11 +33,6 @@ async def get_balance_info(
     """
     Возвращает (amount, currency, display) как sync-версия.
     """
-    if config.is_test_mode():
-        return await test_backend.get_balance_info(
-            client, user_id=user_id, user_hash=user_hash
-        )
-
     payload = {"user_id": user_id, "user_hash": user_hash}
     text = await client.post(PATH_BALANCE, data=payload, expect_json=False)
     amount, currency, display = _parse_balance_text(text)
@@ -82,16 +75,6 @@ async def get_current_percent(
     """
     Совместимая версия: отправляет form-data как sync, возвращает int|None.
     """
-    if config.is_test_mode():
-        return await test_backend.get_current_percent(
-            client,
-            investment=investment,
-            option=option,
-            minutes=minutes,
-            account_ccy=account_ccy,
-            trade_type=trade_type,
-        )
-
     t = "Classic" if str(trade_type).lower() == "classic" else "Sprint"
     payload = {
         "type": t,
@@ -137,22 +120,6 @@ async def place_trade(
       - POST и парсинг HTML ответа для data-id
     Возвращает trade_id или None.
     """
-    if config.is_test_mode():
-        return await test_backend.place_trade(
-            client,
-            user_id=user_id,
-            user_hash=user_hash,
-            investment=investment,
-            option=option,
-            status=status,
-            minutes=minutes,
-            account_ccy=account_ccy,
-            strict=strict,
-            on_log=on_log,
-            trade_type=trade_type,
-            date=date,
-        )
-
     if str(trade_type).lower() == "classic":
         time_value = str(minutes)
     else:
@@ -237,15 +204,6 @@ async def check_trade_result(
 
     Возвращает прибыль (``result - investment``) как ``float``.
     """
-    if config.is_test_mode():
-        return await test_backend.check_trade_result(
-            client,
-            user_id=user_id,
-            user_hash=user_hash,
-            trade_id=trade_id,
-            wait_time=wait_time,
-        )
-
     await asyncio.sleep(wait_time)
     payload = {"user_id": user_id, "user_hash": user_hash, "trade_id": trade_id}
 
@@ -273,11 +231,6 @@ async def check_trade_result(
 
 
 async def change_currency(client: HttpClient, user_id: str, user_hash: str) -> bool:
-    if config.is_test_mode():
-        return await test_backend.change_currency(
-            client, user_id=user_id, user_hash=user_hash
-        )
-
     payload = {"user_id": user_id, "user_hash": user_hash}
     try:
         await client.post(PATH_CCY, data=payload, expect_json=False)
@@ -293,15 +246,6 @@ async def set_risk(
     risk_min: int | float,
     risk_max: int | float,
 ) -> bool:
-    if config.is_test_mode():
-        return await test_backend.set_risk(
-            client,
-            user_id=user_id,
-            user_hash=user_hash,
-            risk_manage_min=risk_min,
-            risk_manage_max=risk_max,
-        )
-
     payload = {
         "user_id": user_id,
         "user_hash": user_hash,
@@ -321,11 +265,6 @@ async def toggle_real_demo(client: HttpClient, user_id: str, user_hash: str) -> 
     API: POST user_real_trade.php с user_id и user_hash.
     Возвращает True при отсутствии сетевых ошибок (сервер сам переключит режим).
     """
-    if config.is_test_mode():
-        return await test_backend.toggle_real_demo(
-            client, user_id=user_id, user_hash=user_hash
-        )
-
     payload = {"user_id": user_id, "user_hash": user_hash}
     try:
         # Ответ не важен, достаточно, что запрос успешно прошёл
@@ -340,9 +279,6 @@ async def is_demo_account(client: HttpClient) -> bool:
     Проверить, активен ли демо-счёт.
     Признак: в /profile есть <input type="hidden" name="demo_update" value="1">.
     """
-    if config.is_test_mode():
-        return await test_backend.is_demo_account(client)
-
     try:
         html = await client.get(PATH_PROFILE, expect_json=False)
         soup = BeautifulSoup(html, "html.parser")
