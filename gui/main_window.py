@@ -163,7 +163,7 @@ class MainWindow(QWidget):
         time_font.setPixelSize(42)
         self.moscow_time_label.setFont(time_font)
         self.moscow_time_label.setStyleSheet(
-            "font-weight: 600; letter-spacing: 1px;"
+            "font-weight: 400; letter-spacing: 1px;"
         )
 
         self.time_gif_label = QLabel()
