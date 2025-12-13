@@ -1,7 +1,7 @@
 from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Set
+from typing import Any, Dict, Optional, Set, Tuple
 from zoneinfo import ZoneInfo
 from core.policy import (
     can_open_new_trade,
@@ -12,6 +12,8 @@ from core.policy import (
 )
 from core.time_utils import format_local_time
 from strategies.constants import MOSCOW_TZ
+
+MOSCOW_ZONE = ZoneInfo(MOSCOW_TZ)
 from strategies.log_messages import (
     global_limit_before_start,
     global_lock_acquired,
@@ -50,6 +52,28 @@ class StrategyCommon:
         # Глобальная блокировка — только одна сделка в системе
         self._global_trade_lock = asyncio.Lock()
 
+    @staticmethod
+    def _drain_queue(
+        queue: asyncio.Queue,
+        *,
+        return_last: bool = False,
+    ) -> int | Tuple[int, Optional[Any]]:
+        """Очистить очередь и по желанию вернуть последний элемент."""
+
+        removed = 0
+        last_item: Optional[Any] = None
+        while True:
+            try:
+                last_item = queue.get_nowait()
+                queue.task_done()
+                removed += 1
+            except asyncio.QueueEmpty:
+                break
+
+        if return_last:
+            return removed, last_item
+        return removed
+
     async def signal_listener(self, queue: asyncio.Queue):
         """Прослушиватель — кладёт в нужную очередь по trade_key"""
         log = self.log
@@ -62,19 +86,19 @@ class StrategyCommon:
                 direction, ver, meta = await self.strategy._fetch_signal_payload(self.strategy._last_signal_ver)
                 
                 # Извлекаем timestamp и next_timestamp
-                signal_timestamp = datetime.now(ZoneInfo(MOSCOW_TZ))
+                signal_timestamp = datetime.now(MOSCOW_ZONE)
                 next_expire = None
                 if meta and isinstance(meta, dict):
                     ts_raw = meta.get('timestamp')
                     if ts_raw and isinstance(ts_raw, datetime):
-                        signal_timestamp = ts_raw.astimezone(ZoneInfo(MOSCOW_TZ))
+                        signal_timestamp = ts_raw.astimezone(MOSCOW_ZONE)
                     
                     next_raw = meta.get('next_timestamp')
                     if next_raw and isinstance(next_raw, datetime):
-                        next_expire = next_raw.astimezone(ZoneInfo(MOSCOW_TZ))
+                        next_expire = next_raw.astimezone(MOSCOW_ZONE)
                 
                 # ПРОВЕРКА АКТУАЛЬНОСТИ ПЕРЕД ДОБАВЛЕНИЕМ В ОЧЕРЕДЬ
-                current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
+                current_time = datetime.now(MOSCOW_ZONE)
                 symbol = meta.get('symbol') if meta else self.strategy.symbol
                 
                 if self.strategy._trade_type == "classic":
@@ -141,14 +165,7 @@ class StrategyCommon:
 
                 # Удаляем предыдущие сигналы для этой пары и таймфрейма,
                 # чтобы в очереди всегда оставался только самый свежий
-                removed = 0
-                while not queue.empty():
-                    try:
-                        queue.get_nowait()
-                        queue.task_done()
-                        removed += 1
-                    except asyncio.QueueEmpty:
-                        break
+                removed = self._drain_queue(queue)
 
                 if removed:
                     log(removed_stale_signals(symbol, removed))
@@ -284,7 +301,7 @@ class StrategyCommon:
 
     def _validate_signal_for_processing(self, signal_data: dict) -> tuple[bool, str]:
         """Проверяет, что сигнал всё ещё актуален перед запуском сделки."""
-        current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
+        current_time = datetime.now(MOSCOW_ZONE)
         trade_type = getattr(self.strategy, "_trade_type", "sprint")
 
         if trade_type == "classic":
@@ -303,24 +320,15 @@ class StrategyCommon:
 
         if trade_key not in self._pending_signals:
             self._pending_signals[trade_key] = asyncio.Queue(maxsize=1)  # Только 1 слот!
-        
+
         # Очищаем очередь и кладём только последний сигнал
-        while not self._pending_signals[trade_key].empty():
-            try:
-                self._pending_signals[trade_key].get_nowait()
-                self._pending_signals[trade_key].task_done()
-            except asyncio.QueueEmpty:
-                break
+        self._drain_queue(self._pending_signals[trade_key])
         
         # Если очередь полная, заменяем старый сигнал
         try:
             self._pending_signals[trade_key].put_nowait(signal_data)
         except asyncio.QueueFull:
-            try:
-                self._pending_signals[trade_key].get_nowait()
-                self._pending_signals[trade_key].task_done()
-            except asyncio.QueueEmpty:
-                pass
+            self._drain_queue(self._pending_signals[trade_key])
             self._pending_signals[trade_key].put_nowait(signal_data)
 
         log(signal_deferred(symbol))
@@ -336,23 +344,11 @@ class StrategyCommon:
 
         queue = self._signal_queues.get(trade_key)
         if queue is not None:
-            while not queue.empty():
-                try:
-                    queue.get_nowait()
-                    queue.task_done()
-                    removed += 1
-                except asyncio.QueueEmpty:
-                    break
+            removed += self._drain_queue(queue)
 
         pending = self._pending_signals.get(trade_key)
         if pending is not None:
-            while not pending.empty():
-                try:
-                    pending.get_nowait()
-                    pending.task_done()
-                    removed += 1
-                except asyncio.QueueEmpty:
-                    break
+            removed += self._drain_queue(pending)
 
         return removed
 
@@ -421,14 +417,10 @@ class StrategyCommon:
         
         if trade_key not in self._pending_signals or self._pending_signals[trade_key].empty():
             return
-        
-        last_signal = None
-        while True:
-            try:
-                last_signal = self._pending_signals[trade_key].get_nowait()
-                self._pending_signals[trade_key].task_done()
-            except asyncio.QueueEmpty:
-                break
+
+        _, last_signal = self._drain_queue(
+            self._pending_signals[trade_key], return_last=True
+        )
         
         if last_signal:
             signal_symbol = last_signal.get('symbol') or symbol
@@ -445,12 +437,7 @@ class StrategyCommon:
                 log(strategy_limit_deferred(signal_symbol, max_trades, get_current_open_trades()))
 
                 queue = self._pending_signals.setdefault(trade_key, asyncio.Queue(maxsize=1))
-                while not queue.empty():
-                    try:
-                        queue.get_nowait()
-                        queue.task_done()
-                    except asyncio.QueueEmpty:
-                        break
+                self._drain_queue(queue)
                 queue.put_nowait(last_signal)
                 self._reschedule_pending_processing(trade_key)
                 return
@@ -519,13 +506,7 @@ class StrategyCommon:
         if queue is None or queue.empty():
             return None
 
-        latest_signal = None
-        while True:
-            try:
-                latest_signal = queue.get_nowait()
-                queue.task_done()
-            except asyncio.QueueEmpty:
-                break
+        _, latest_signal = self._drain_queue(queue, return_last=True)
 
         return latest_signal
 
@@ -541,23 +522,13 @@ class StrategyCommon:
         for task in all_tasks:
             if not task.done():
                 task.cancel()
-        
+
         # Очищаем все очереди
         for queue in list(self._signal_queues.values()):
-            while not queue.empty():
-                try:
-                    queue.get_nowait()
-                    queue.task_done()
-                except asyncio.QueueEmpty:
-                    break
-        
+            self._drain_queue(queue)
+
         for queue in list(self._pending_signals.values()):
-            while not queue.empty():
-                try:
-                    queue.get_nowait()
-                    queue.task_done()
-                except asyncio.QueueEmpty:
-                    break
+            self._drain_queue(queue)
         
         self._signal_queues.clear()
         self._signal_processors.clear()
