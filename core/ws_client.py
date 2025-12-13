@@ -156,7 +156,7 @@ async def listen_to_signals() -> None:
             _log(f"[WS] Соединение закрыто сервером: code={e.code}, reason={e.reason}")
             await asyncio.sleep(3)
         except Exception as e:
-            if not isinstance(e, (TimeoutError, asyncio.TimeoutError)):
+            if not isinstance(e, (TimeoutError, asyncio.TimeoutError, ConnectionRefusedError)):
                 _log(f"[WS] Ошибка соединения: {type(e).__name__} — {e}")
             if not waiting_logged:
                 _log("Ожидание подключения к WebSocket-серверу...")
