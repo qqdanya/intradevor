@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Callable, Awaitable, Union
 
@@ -21,9 +22,12 @@ class HttpConfig:
     user_agent: str = "Intradevor/1.0"
     max_retries: int = 3
     retry_backoff: float = 0.5  # 0.5, 1.0, 2.0...
+    retry_backoff_max: float = 5.0
+    retry_jitter: float = 0.1  # +/-10%
     timeout: aiohttp.ClientTimeout = DEFAULT_TIMEOUT
     verify_ssl: bool = True
     limit: int = 100  # max concurrent connections
+    concurrency_limit: Optional[int] = None
 
 
 class HttpClient:
@@ -42,6 +46,8 @@ class HttpClient:
         self._ext_headers = headers or {}
         self._init_cookies = cookies or {}
         self._session: Optional[aiohttp.ClientSession] = None
+        limit = self._cfg.concurrency_limit or self._cfg.limit
+        self._semaphore = asyncio.Semaphore(max(1, limit))
 
     # ---------- session lifecycle ----------
 
@@ -144,10 +150,16 @@ class HttpClient:
                     "HTTP attempt %s failed: %s; retry in %.2fs",
                     attempt,
                     repr(e),
-                    delay,
+                    min(self._cfg.retry_backoff_max, delay),
                 )
-                await asyncio.sleep(delay)
-                delay *= 2
+                jitter_ratio = 1 + random.uniform(
+                    -self._cfg.retry_jitter, self._cfg.retry_jitter
+                )
+                sleep_for = max(
+                    0.0, min(self._cfg.retry_backoff_max, delay) * jitter_ratio
+                )
+                await asyncio.sleep(sleep_for)
+                delay = min(self._cfg.retry_backoff_max, delay * 2)
         assert last_exc is not None
         raise last_exc
 
@@ -162,12 +174,12 @@ class HttpClient:
         **kwargs,
     ) -> Union[Dict[str, Any], str]:
         session = await self.ensure_session()
-        if expect_json:
-            return await self._retry(
-                lambda: session.get(url, params=params, **kwargs),
-                lambda r: r.json(content_type=None),
-            )
-        else:
+        async with self._semaphore:
+            if expect_json:
+                return await self._retry(
+                    lambda: session.get(url, params=params, **kwargs),
+                    lambda r: r.json(content_type=None),
+                )
             return await self._retry(
                 lambda: session.get(url, params=params, **kwargs), lambda r: r.text()
             )
@@ -182,12 +194,12 @@ class HttpClient:
         **kwargs,
     ) -> Union[Dict[str, Any], str]:
         session = await self.ensure_session()
-        if expect_json:
-            return await self._retry(
-                lambda: session.post(url, data=data, json=json, **kwargs),
-                lambda r: r.json(content_type=None),
-            )
-        else:
+        async with self._semaphore:
+            if expect_json:
+                return await self._retry(
+                    lambda: session.post(url, data=data, json=json, **kwargs),
+                    lambda r: r.json(content_type=None),
+                )
             return await self._retry(
                 lambda: session.post(url, data=data, json=json, **kwargs),
                 lambda r: r.text(),

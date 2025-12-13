@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Optional, Tuple
 
 from bs4 import BeautifulSoup
@@ -12,6 +13,8 @@ from core.money import format_amount
 from core.intrade_api import (
     _parse_balance_text,
 )  # переиспользуем точный парсер sync-версии
+
+log = logging.getLogger(__name__)
 
 # те же пути, но как относительные — HttpClient добавит base_url сам
 PATH_BALANCE = "balance.php"
@@ -86,9 +89,9 @@ async def get_current_percent(
     if str(trade_type).lower() == "sprint":
         payload["time"] = str(int(minutes))
 
-    print(payload)
+    log.debug("Requesting percent with payload: %s", payload)
     text = await client.post(PATH_PERCENT, data=payload, expect_json=False)
-    print(text)
+    log.debug("Received percent response: %s", text)
     try:
         return int(str(text).strip())
     except Exception:
@@ -193,21 +196,30 @@ async def check_trade_result(
     user_hash: str,
     trade_id: str,
     wait_time: float = 60.0,
+    *,
+    max_attempts: int = 60,
+    initial_poll_delay: float = 1.0,
+    backoff_factor: float = 1.5,
+    max_poll_delay: float = 10.0,
 ) -> Optional[float]:
     """Fetch trade result, polling until it becomes available.
 
     Первоначально ждём ``wait_time`` секунд (время закрытия спринта),
     затем запрашиваем результат сделки. Если результат не получен, то
-    продолжаем проверять его каждую секунду до тех пор, пока платформа
-    не вернёт корректные данные. Короутина прерывается только исключением
-    ``asyncio.CancelledError``.
+    продолжаем проверять его с растущей задержкой, пока не достигнем
+    ``max_attempts``. Короутина прерывается исключением
+    ``asyncio.CancelledError`` или возвращает ``None``, если ответ так и
+    не получен.
 
     Возвращает прибыль (``result - investment``) как ``float``.
     """
     await asyncio.sleep(wait_time)
     payload = {"user_id": user_id, "user_hash": user_hash, "trade_id": trade_id}
 
-    while True:
+    attempts = 0
+    poll_delay = max(0.0, initial_poll_delay)
+
+    while attempts < max_attempts:
         try:
             text = await client.post(PATH_TRADE_CHECK, data=payload, expect_json=False)
         except asyncio.CancelledError:  # уважать отмену стратегии
@@ -223,8 +235,12 @@ async def check_trade_result(
             except Exception:
                 pass
 
+        attempts += 1
         # результат ещё не готов — подождём и попробуем снова
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(poll_delay)
+        poll_delay = min(max_poll_delay, poll_delay * backoff_factor)
+
+    return None
 
 
 # ---------------- Прочее: риск/валюта аккаунта ----------------
