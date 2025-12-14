@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from core.payout_provider import get_cached_payout
 from core.time_utils import format_local_time
-from strategies.base_trading_strategy import _minutes_from_timeframe
+from strategies.timeframe_utils import minutes_from_timeframe
 from strategies.constants import MOSCOW_TZ
 
 MOSCOW_ZONE = ZoneInfo(MOSCOW_TZ)
@@ -28,7 +28,7 @@ class SignalContext:
 
 def calc_next_candle_from_now(timeframe: str) -> datetime:
     now = datetime.now(MOSCOW_ZONE)
-    tf_minutes = _minutes_from_timeframe(timeframe)
+    tf_minutes = minutes_from_timeframe(timeframe)
 
     base = now.replace(second=0, microsecond=0)
     total_min = base.hour * 60 + base.minute
