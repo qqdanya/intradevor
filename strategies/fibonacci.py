@@ -1,19 +1,22 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
-from zoneinfo import ZoneInfo
 
-from strategies.base_trading_strategy import BaseTradingStrategy, _minutes_from_timeframe
-from strategies.constants import MOSCOW_TZ
+from strategies.base_trading_strategy import BaseTradingStrategy
+from strategies.strategy_helpers import (
+    MOSCOW_ZONE,
+    calc_next_candle_from_now,
+    is_payout_low_now,
+    update_signal_context,
+    wait_for_new_signal,
+)
 from core.money import format_amount
 from core.intrade_api_async import (
     is_demo_account,
     get_balance_info,
 )
-from core.payout_provider import get_cached_payout
-from core.time_utils import format_local_time
 from strategies.log_messages import (
     repeat_count_empty,
     series_already_active,
@@ -91,55 +94,6 @@ class FibonacciStrategy(BaseTradingStrategy):
 
         self._active_series: dict[str, bool] = {}
 
-    # ================= ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ =================
-
-    def _calc_next_candle_from_now(self, timeframe: str) -> datetime:
-        """Для classic: время начала СЛЕДУЮЩЕЙ свечи относительно текущего момента."""
-        now = datetime.now(ZoneInfo(MOSCOW_TZ))
-        tf_minutes = _minutes_from_timeframe(timeframe)
-
-        base = now.replace(second=0, microsecond=0)
-        total_min = base.hour * 60 + base.minute
-        next_total = (total_min // tf_minutes + 1) * tf_minutes
-
-        days_add = next_total // (24 * 60)
-        minutes_in_day = next_total % (24 * 60)
-        hour = minutes_in_day // 60
-        minute = minutes_in_day % 60
-
-        return (base + timedelta(days=days_add)).replace(hour=hour, minute=minute)
-
-    async def _is_payout_low_now(self, symbol: str) -> bool:
-        """
-        Проверка payout "прямо сейчас" ДО старта серии.
-        Важно: НЕ ждём новый сигнал 15м/1ч, а коротко ждём восстановления процента.
-        """
-        min_pct = int(self.params.get("min_percent", 70))
-        stake = float(self.params.get("base_investment", 100))
-        account_ccy = self._anchor_ccy
-
-        try:
-            pct = await get_cached_payout(
-                self.http_client,
-                investment=stake,
-                option=symbol,
-                minutes=self._trade_minutes,
-                account_ccy=account_ccy,
-                trade_type=self._trade_type,
-            )
-        except Exception:
-            pct = None
-
-        if pct is None:
-            self._status("ожидание процента")
-            return True
-
-        if pct < min_pct:
-            self._status("ожидание высокого процента")
-            return True
-
-        return False
-
     # ================= ПУБЛИЧНЫЕ МЕТОДЫ =================
 
     def is_series_active(self, trade_key: str) -> bool:
@@ -169,35 +123,38 @@ class FibonacciStrategy(BaseTradingStrategy):
         # --- LOW PAYOUT ДО СТАРТА СЕРИИ ---
         # НЕ выходим и не "паркуем" сигнал, а коротко ждём восстановления payout.
         # Пока ждём — подхватываем самый свежий сигнал из StrategyCommon.
-        while self._running and await self._is_payout_low_now(symbol):
+        while self._running and await is_payout_low_now(self, symbol):
             await self._pause_point()
 
             if hasattr(self, "_common") and self._common is not None:
                 newer = self._common.pop_latest_signal(trade_key)
                 if newer:
-                    signal_data = newer
+                    (
+                        signal_data,
+                        signal_received_time,
+                        direction,
+                        signal_at_str,
+                    ) = update_signal_context(
+                        self,
+                        newer,
+                        update_symbol=self._use_any_symbol,
+                        update_timeframe=self._use_any_timeframe,
+                    )
                     symbol = signal_data["symbol"]
                     timeframe = signal_data["timeframe"]
-                    direction = signal_data["direction"]
                     self._maybe_set_auto_minutes(timeframe)
                     trade_key = self.build_trade_key(symbol, timeframe)
 
             await asyncio.sleep(float(self.params.get("wait_on_low_percent", 1)))
 
-        # Обновляем информацию о сигнале
-        self._last_signal_ver = signal_data["version"]
-        self._last_indicator = signal_data["indicator"]
-        self._last_signal_at_str = format_local_time(signal_data["timestamp"])
-
-        ts = signal_data.get("meta", {}).get("next_timestamp") if signal_data.get("meta") else None
-        self._next_expire_dt = ts.astimezone(ZoneInfo(MOSCOW_TZ)) if ts else None
-
-        # Обновляем символ и таймфрейм если используются "все"
-        if self._use_any_symbol:
-            self.symbol = symbol
-        if self._use_any_timeframe:
-            self.timeframe = timeframe
-            self.params["timeframe"] = self.timeframe
+        signal_data, signal_received_time, direction, signal_at_str = update_signal_context(
+            self,
+            signal_data,
+            update_symbol=self._use_any_symbol,
+            update_timeframe=self._use_any_timeframe,
+        )
+        symbol = signal_data["symbol"]
+        timeframe = signal_data["timeframe"]
 
         try:
             self._last_signal_monotonic = asyncio.get_running_loop().time()
@@ -205,7 +162,7 @@ class FibonacciStrategy(BaseTradingStrategy):
             self._last_signal_monotonic = None
 
         # ПРОВЕРКА АКТУАЛЬНОСТИ СИГНАЛА (перед стартом серии)
-        current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
+        current_time = datetime.now(MOSCOW_ZONE)
 
         if self._trade_type == "classic":
             is_valid, reason = self._is_signal_valid_for_classic(
@@ -281,26 +238,21 @@ class FibonacciStrategy(BaseTradingStrategy):
         need_new_signal = False
         series_direction = int(initial_direction)
 
-        signal_at_str = signal_data.get("signal_time_str") or format_local_time(signal_received_time)
+        signal_at_str = signal_data.get("signal_time_str") or self._last_signal_at_str
         series_label = self.format_series_label(trade_key, series_left=series_left)
 
-        def update_signal_context(new_signal: Optional[dict]) -> None:
+        def refresh_signal_context(new_signal: Optional[dict]) -> None:
             nonlocal signal_data, signal_received_time, series_direction, signal_at_str, needs_signal_validation
             if not new_signal:
                 return
 
-            signal_data = new_signal
-            signal_received_time = new_signal["timestamp"]
-            series_direction = int(new_signal["direction"])
+            (
+                signal_data,
+                signal_received_time,
+                series_direction,
+                signal_at_str,
+            ) = update_signal_context(self, new_signal)
             needs_signal_validation = True
-
-            self._last_signal_ver = new_signal.get("version", self._last_signal_ver)
-            self._last_indicator = new_signal.get("indicator", self._last_indicator)
-            signal_at_str = new_signal.get("signal_time_str") or format_local_time(signal_received_time)
-            self._last_signal_at_str = signal_at_str
-
-            ts = new_signal.get("meta", {}).get("next_timestamp") if new_signal.get("meta") else None
-            self._next_expire_dt = ts.astimezone(ZoneInfo(MOSCOW_TZ)) if ts else None
 
         while self._running and step_idx < max_steps:
             await self._pause_point()
@@ -310,7 +262,7 @@ class FibonacciStrategy(BaseTradingStrategy):
 
             # --- 1) Предварительная валидация сигнала ---
             if needs_signal_validation:
-                current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
+                current_time = datetime.now(MOSCOW_ZONE)
 
                 if self._trade_type == "classic":
                     is_valid, reason = self._is_signal_valid_for_classic(
@@ -327,10 +279,11 @@ class FibonacciStrategy(BaseTradingStrategy):
                     # ждём новый сигнал, серию НЕ завершаем
                     if hasattr(self, "_common") and self._common is not None:
                         timeout = float(self.params.get("signal_timeout_sec", 30.0))
-                        new_signal = await self._wait_for_new_signal(trade_key, log, symbol, timeframe, timeout=timeout)
+                        new_signal = await wait_for_new_signal(self, trade_key, timeout=timeout)
                         if not new_signal:
+                            log(trade_timeout(symbol, timeout))
                             return series_left
-                        update_signal_context(new_signal)
+                        refresh_signal_context(new_signal)
                         continue
                     return series_left
 
@@ -353,7 +306,7 @@ class FibonacciStrategy(BaseTradingStrategy):
             )
 
             # --- 3) Финальная проверка актуальности перед размещением ---
-            current_time = datetime.now(ZoneInfo(MOSCOW_TZ))
+            current_time = datetime.now(MOSCOW_ZONE)
             if self._trade_type == "classic":
                 is_valid, reason = self._is_signal_valid_for_classic(signal_data, current_time, for_placement=True)
             else:
@@ -364,10 +317,11 @@ class FibonacciStrategy(BaseTradingStrategy):
                 log(signal_not_actual_for_placement(symbol, reason))
                 if hasattr(self, "_common") and self._common is not None:
                     timeout = float(self.params.get("signal_timeout_sec", 30.0))
-                    new_signal = await self._wait_for_new_signal(trade_key, log, symbol, timeframe, timeout=timeout)
+                    new_signal = await wait_for_new_signal(self, trade_key, timeout=timeout)
                     if not new_signal:
+                        log(trade_timeout(symbol, timeout))
                         return series_left
-                    update_signal_context(new_signal)
+                    refresh_signal_context(new_signal)
                     needs_signal_validation = True
                     continue
                 return series_left
@@ -376,7 +330,7 @@ class FibonacciStrategy(BaseTradingStrategy):
 
             # classic: экспирация = следующая свеча от "сейчас"
             if self._trade_type == "classic":
-                self._next_expire_dt = self._calc_next_candle_from_now(timeframe)
+                self._next_expire_dt = calc_next_candle_from_now(timeframe)
 
             try:
                 demo_now = await is_demo_account(self.http_client)
@@ -462,15 +416,16 @@ class FibonacciStrategy(BaseTradingStrategy):
             if requires_fresh_signal and need_new_signal:
                 if hasattr(self, "_common") and self._common is not None:
                     timeout = float(self.params.get("signal_timeout_sec", 30.0))
-                    new_signal = await self._wait_for_new_signal(trade_key, log, symbol, timeframe, timeout=timeout)
+                    new_signal = await wait_for_new_signal(self, trade_key, timeout=timeout)
                     if not new_signal:
+                        log(trade_timeout(symbol, timeout))
                         break
-                    update_signal_context(new_signal)
+                    refresh_signal_context(new_signal)
                     need_new_signal = False
                 else:
                     break
             elif hasattr(self, "_common") and self._common is not None:
-                update_signal_context(self._common.pop_latest_signal(trade_key))
+                refresh_signal_context(self._common.pop_latest_signal(trade_key))
 
         if did_place_any_trade:
             if step_idx >= max_steps:
@@ -480,36 +435,12 @@ class FibonacciStrategy(BaseTradingStrategy):
 
         return series_left
 
-    async def _wait_for_new_signal(
-        self,
-        trade_key: str,
-        log,
-        symbol: str,
-        timeframe: str,
-        timeout: float = 30.0,
-    ) -> Optional[dict]:
-        """Ожидает новый сигнал в течение timeout секунд."""
-        start_time = asyncio.get_event_loop().time()
-
-        while self._running and (asyncio.get_event_loop().time() - start_time) < timeout:
-            await self._pause_point()
-
-            if hasattr(self, "_common") and self._common is not None:
-                new_signal = self._common.pop_latest_signal(trade_key)
-                if new_signal:
-                    return new_signal
-
-            await asyncio.sleep(0.5)
-
-        log(trade_timeout(symbol, timeout))
-        return None
-
     def _calculate_trade_duration(self, symbol: str) -> tuple[float, float]:
         """Рассчитывает длительность сделки."""
         if self._trade_type == "classic" and self._next_expire_dt is not None:
             trade_seconds = max(
                 0.0,
-                (self._next_expire_dt - datetime.now(ZoneInfo(MOSCOW_TZ))).total_seconds(),
+                (self._next_expire_dt - datetime.now(MOSCOW_ZONE)).total_seconds(),
             )
             expected_end_ts = self._next_expire_dt.timestamp()
         else:
