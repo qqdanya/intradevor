@@ -24,7 +24,7 @@ from datetime import datetime
 from PyQt6.QtGui import QColor, QBrush, QTextCursor, QFont
 from PyQt6.QtCore import QTimer, Qt
 from core.money import format_amount
-from strategies.martingale import _minutes_from_timeframe
+from strategies.timeframe_utils import minutes_from_timeframe
 from core.policy import normalize_sprint
 from core.money import format_money
 from core.logger import ts
@@ -171,7 +171,7 @@ class StrategyControlDialog(QWidget):
 
         symbol = str(self.bot.strategy_kwargs.get("symbol", ""))
         tf = str(getv("timeframe", self.bot.strategy_kwargs.get("timeframe", "M1")))
-        default_minutes = int(getv("minutes", _minutes_from_timeframe(tf)))
+        default_minutes = int(getv("minutes", minutes_from_timeframe(tf)))
         self.timeframe = tf
 
         self.trade_type = QComboBox()
@@ -563,7 +563,7 @@ class StrategyControlDialog(QWidget):
         norm = m
         raw_minutes = m
         if auto_minutes and trade_type == "sprint":
-            raw_minutes = _minutes_from_timeframe(self.timeframe)
+            raw_minutes = minutes_from_timeframe(self.timeframe)
             norm = raw_minutes
         if trade_type != "classic" and self.minutes is not None:
             norm = normalize_sprint(symbol, raw_minutes)

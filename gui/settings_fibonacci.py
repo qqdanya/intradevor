@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QWidget,
 )
-from strategies.martingale import _minutes_from_timeframe
+from strategies.timeframe_utils import minutes_from_timeframe
 from core.policy import normalize_sprint
 
 
@@ -20,7 +20,7 @@ class FibonacciSettingsDialog(QDialog):
 
         tf = str(self.params.get("timeframe", "M1"))
         symbol = str(self.params.get("symbol", ""))
-        default_minutes = int(self.params.get("minutes", _minutes_from_timeframe(tf)))
+        default_minutes = int(self.params.get("minutes", minutes_from_timeframe(tf)))
 
         self.minutes = QSpinBox()
         self.minutes.setRange(5 if symbol == "BTCUSDT" else 1, 500)
@@ -98,7 +98,7 @@ class FibonacciSettingsDialog(QDialog):
     def get_params(self) -> dict:
         symbol = str(self.params.get("symbol", ""))
         auto_minutes = bool(self.auto_minutes.isChecked())
-        raw_minutes = _minutes_from_timeframe(tf) if auto_minutes else int(self.minutes.value())
+        raw_minutes = minutes_from_timeframe(tf) if auto_minutes else int(self.minutes.value())
         norm = normalize_sprint(symbol, raw_minutes)
         if norm is None:
             norm = 5 if symbol == "BTCUSDT" else (1 if raw_minutes < 3 else max(3, min(500, raw_minutes)))
