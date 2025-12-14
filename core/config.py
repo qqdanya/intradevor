@@ -22,7 +22,6 @@ domain: str = os.getenv("DOMAIN", "intrade27.bar")
 base_url: str = f"https://{domain}"
 
 ws_url: str = os.getenv("WS_URL", "ws://localhost:8080")
-ws_auth_token: str | None = os.getenv("WS_AUTH_TOKEN")
 
 # Параметры шрифта приложения
 FONT_FAMILY: str | None = os.getenv("FONT_FAMILY")
@@ -150,10 +149,6 @@ def get_domain() -> str:
 
 def get_ws_url() -> str:
     return ws_url
-
-
-def get_ws_auth_token() -> str | None:
-    return ws_auth_token
 
 
 def get_app_name() -> str:
