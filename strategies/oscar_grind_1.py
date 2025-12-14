@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from strategies.oscar_grind_strategy import OscarGrindStrategy
+from strategies.oscar_grind_base import OscarGrindStrategy
 from core.money import format_amount
 from strategies.log_messages import oscar_win_basic, oscar_refund, oscar_loss
 
