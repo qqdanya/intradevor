@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QWidget,
 )
-from strategies.martingale import _minutes_from_timeframe
+from strategies.timeframe_utils import minutes_from_timeframe
 from core.policy import normalize_sprint
 
 
@@ -22,7 +22,7 @@ class OscarGrindSettingsDialog(QDialog):
         tf = str(self.params.get("timeframe", "M1"))
         symbol = str(self.params.get("symbol", ""))  # прокинут из MainWindow
 
-        default_minutes = int(self.params.get("minutes", _minutes_from_timeframe(tf)))
+        default_minutes = int(self.params.get("minutes", minutes_from_timeframe(tf)))
         base_default = int(self.params.get("base_investment", 100))
 
         # Время экспирации
@@ -114,7 +114,7 @@ class OscarGrindSettingsDialog(QDialog):
         # Мягкая нормализация минут через policy
         symbol = str(self.params.get("symbol", ""))
         auto_minutes = bool(self.auto_minutes.isChecked())
-        raw_minutes = _minutes_from_timeframe(tf) if auto_minutes else int(self.minutes.value())
+        raw_minutes = minutes_from_timeframe(tf) if auto_minutes else int(self.minutes.value())
         norm = normalize_sprint(symbol, raw_minutes)
         if norm is None:
             norm = 5 if symbol == "BTCUSDT" else (1 if raw_minutes < 3 else max(3, min(500, raw_minutes)))
