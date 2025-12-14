@@ -7,10 +7,16 @@ from zoneinfo import ZoneInfo
 
 from strategies.base_trading_strategy import BaseTradingStrategy, _minutes_from_timeframe
 from strategies.constants import MOSCOW_TZ
+from strategies.strategy_helpers import (
+    calc_next_candle_from_now,
+    extract_next_expire_dt,
+    is_payout_low_now,
+    update_signal_context,
+    wait_for_new_signal,
+)
 from core.time_utils import format_local_time
 from core.money import format_amount
 from core.intrade_api_async import is_demo_account
-from core.payout_provider import get_cached_payout
 from strategies.log_messages import (
     repeat_count_empty,
     series_already_active,
@@ -90,26 +96,6 @@ class MartingaleStrategy(BaseTradingStrategy):
     # ожидание нового сигнала / обновление контекста
     # =====================================================================
 
-    async def _wait_for_new_signal(
-        self,
-        trade_key: str,
-        log,
-        symbol: str,
-        timeframe: str,
-        timeout: float,
-    ) -> Optional[dict]:
-        """Ждём новый сигнал по trade_key из StrategyCommon."""
-        start = asyncio.get_event_loop().time()
-        while self._running and (asyncio.get_event_loop().time() - start) < timeout:
-            await self._pause_point()
-            common = getattr(self, "_common", None)
-            if common is not None:
-                new_signal = common.pop_latest_signal(trade_key)
-                if new_signal:
-                    return new_signal
-            await asyncio.sleep(0.5)
-        return None
-
     def _update_signal_context_in_series(
         self,
         *,
@@ -119,69 +105,7 @@ class MartingaleStrategy(BaseTradingStrategy):
         Обновляет локальный контекст серии по новому сигналу.
         Возвращает: (signal_data, signal_received_time, series_direction, signal_at_str)
         """
-        signal_data = new_signal
-        signal_received_time = new_signal["timestamp"]
-        series_direction = int(new_signal["direction"])
-        signal_at_str = new_signal.get("signal_time_str") or format_local_time(signal_received_time)
-
-        self._last_signal_ver = new_signal.get("version", self._last_signal_ver)
-        self._last_indicator = new_signal.get("indicator", self._last_indicator)
-        self._last_signal_at_str = signal_at_str
-
-        ts = new_signal.get("meta", {}).get("next_timestamp") if new_signal.get("meta") else None
-        self._next_expire_dt = ts.astimezone(ZoneInfo(MOSCOW_TZ)) if ts else None
-
-        return signal_data, signal_received_time, series_direction, signal_at_str
-
-    # =====================================================================
-    # Classic helper
-    # =====================================================================
-
-    def _calc_next_candle_from_now(self, timeframe: str) -> datetime:
-        now = datetime.now(ZoneInfo(MOSCOW_TZ))
-        tf_minutes = _minutes_from_timeframe(timeframe)
-        base = now.replace(second=0, microsecond=0)
-
-        total_min = base.hour * 60 + base.minute
-        next_total = (total_min // tf_minutes + 1) * tf_minutes
-
-        days_add = next_total // (24 * 60)
-        minutes_in_day = next_total % (24 * 60)
-        hour = minutes_in_day // 60
-        minute = minutes_in_day % 60
-
-        return (base + timedelta(days=days_add)).replace(hour=hour, minute=minute)
-
-    # =====================================================================
-    # low payout helper (без локальной очереди)
-    # =====================================================================
-
-    async def _is_payout_low_now(self, symbol: str) -> bool:
-        min_pct = int(self.params.get("min_percent", 70))
-        stake = float(self.params.get("base_investment", 100))
-        account_ccy = self._anchor_ccy
-
-        try:
-            pct = await get_cached_payout(
-                self.http_client,
-                investment=stake,
-                option=symbol,
-                minutes=self._trade_minutes,
-                account_ccy=account_ccy,
-                trade_type=self._trade_type,
-            )
-        except Exception:
-            pct = None
-
-        if pct is None:
-            self._status("ожидание процента")
-            return True
-
-        if pct < min_pct:
-            self._status("ожидание высокого процента")
-            return True
-
-        return False
+        return update_signal_context(self, new_signal)
 
     # =====================================================================
     # Sprint расширенная валидация для мартингейла
@@ -241,7 +165,7 @@ class MartingaleStrategy(BaseTradingStrategy):
         # === LOW PAYOUT ДО СТАРТА СЕРИИ ===
         # Не уходим в "ждать новый сигнал 15м/1ч". Ждём восстановления payout коротко,
         # и по пути подхватываем самый свежий сигнал из StrategyCommon.
-        while self._running and await self._is_payout_low_now(symbol):
+        while self._running and await is_payout_low_now(self, symbol):
             await self._pause_point()
 
             common = getattr(self, "_common", None)
@@ -295,7 +219,7 @@ class MartingaleStrategy(BaseTradingStrategy):
                     if not is_valid:
                         log(signal_not_actual(symbol, "classic", reason))
                         timeout = float(self.params.get("signal_timeout_sec", 30.0))
-                        new_signal = await self._wait_for_new_signal(trade_key, log, symbol, timeframe, timeout=timeout)
+                        new_signal = await wait_for_new_signal(self, trade_key, timeout=timeout)
                         if not new_signal:
                             return
                         signal_data, _, direction, _ = self._update_signal_context_in_series(new_signal=new_signal)
@@ -308,7 +232,7 @@ class MartingaleStrategy(BaseTradingStrategy):
                     if not is_valid:
                         log(signal_not_actual(symbol, "sprint", reason))
                         timeout = float(self.params.get("signal_timeout_sec", 30.0))
-                        new_signal = await self._wait_for_new_signal(trade_key, log, symbol, timeframe, timeout=timeout)
+                        new_signal = await wait_for_new_signal(self, trade_key, timeout=timeout)
                         if not new_signal:
                             return
                         signal_data, _, direction, _ = self._update_signal_context_in_series(new_signal=new_signal)
@@ -376,7 +300,7 @@ class MartingaleStrategy(BaseTradingStrategy):
                 if not is_valid:
                     log(signal_not_actual_for_placement(symbol, reason))
                     timeout = float(self.params.get("signal_timeout_sec", 30.0))
-                    new_signal = await self._wait_for_new_signal(trade_key, log, symbol, timeframe, timeout=timeout)
+                    new_signal = await wait_for_new_signal(self, trade_key, timeout=timeout)
                     if not new_signal:
                         return
                     signal_data, signal_received_time, series_direction, signal_at_str = \
@@ -425,7 +349,7 @@ class MartingaleStrategy(BaseTradingStrategy):
             if not is_valid:
                 log(signal_not_actual_for_placement(symbol, reason))
                 timeout = float(self.params.get("signal_timeout_sec", 30.0))
-                new_signal = await self._wait_for_new_signal(trade_key, log, symbol, timeframe, timeout=timeout)
+                new_signal = await wait_for_new_signal(self, trade_key, timeout=timeout)
                 if not new_signal:
                     return
                 signal_data, signal_received_time, series_direction, signal_at_str = \
@@ -437,7 +361,7 @@ class MartingaleStrategy(BaseTradingStrategy):
 
             # classic: экспирация = следующая свеча от "сейчас"
             if self._trade_type == "classic":
-                self._next_expire_dt = self._calc_next_candle_from_now(timeframe)
+                self._next_expire_dt = calc_next_candle_from_now(timeframe)
 
             try:
                 demo_now = await is_demo_account(self.http_client)
