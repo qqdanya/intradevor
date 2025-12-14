@@ -115,13 +115,18 @@ def _parse_message(message: str) -> Optional[SignalMessage]:
 
 
 async def listen_to_signals() -> None:
-    from core.config import ws_url
+    from core.config import get_ws_auth_token, ws_url
 
     waiting_logged = False
     while True:
+        headers = {}
+        token = get_ws_auth_token()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+
         try:
             async with websockets.connect(
-                ws_url, ping_interval=None, ping_timeout=None
+                ws_url, ping_interval=None, ping_timeout=None, extra_headers=headers
             ) as websocket:
                 waiting_logged = False
                 _log("[WS] Подключено к WebSocket-серверу.")

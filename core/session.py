@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-import pickle
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -26,13 +26,13 @@ def show_critical_error(text: str):
 
 
 def _default_cookies_file() -> Path:
-    """Определить путь для cookies.pkl в зависимости от режима запуска."""
+    """Определить путь для cookies.json в зависимости от режима запуска."""
     if getattr(sys, "frozen", False):  # PyInstaller onefile/onedir
-        return Path(sys.executable).resolve().parent / "cookies.pkl"
-    return Path(__file__).resolve().parent.parent / "cookies.pkl"
+        return Path(sys.executable).resolve().parent / "cookies.json"
+    return Path(__file__).resolve().parent.parent / "cookies.json"
 
 
-# путь к cookies.pkl — рядом с exe в собранной версии, либо рядом с исходниками
+# путь к cookies.json — рядом с exe в собранной версии, либо рядом с исходниками
 COOKIES_FILE = _default_cookies_file()
 
 
@@ -42,9 +42,8 @@ def _cookies_for_domain(domain: str) -> Dict[str, str]:
     то вызывает внешний скрипт extract_cookies.py.
     """
     from pathlib import Path
-    import pickle
 
-    # путь к cookies.pkl (тот же, что у тебя уже используется)
+    # путь к cookies.json (тот же, что у тебя уже используется)
     path = COOKIES_FILE
 
     # если запущено из PyInstaller exe — использовать внешний скрипт
@@ -57,8 +56,8 @@ def _cookies_for_domain(domain: str) -> Dict[str, str]:
             print(f"[INFO] Running external extractor: {script_path}")
             subprocess.run(["python", str(script_path), domain], check=True)
             if path.exists():
-                print("[INFO] External extractor created cookies.pkl")
-                return pickle.load(open(path, "rb"))
+                print("[INFO] External extractor created cookies.json")
+                return load_cookies(path) or {}
         except Exception as e:
             print(f"[ERROR] External cookie extraction failed: {e}")
             return {}
@@ -127,21 +126,27 @@ def _cookies_via_chromedriver(login_url: str) -> Dict[str, str]:
 
 
 def save_cookies(cookies: Dict[str, str], path: Path = COOKIES_FILE) -> None:
-    """Persist cookies to ``path``."""
+    """Persist cookies to ``path`` using JSON (no code execution)."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("wb") as fh:
-        pickle.dump(cookies, fh)
+    with path.open("w", encoding="utf-8") as fh:
+        json.dump(cookies, fh, ensure_ascii=False, indent=2)
 
 
 def load_cookies(path: Path = COOKIES_FILE) -> Dict[str, str] | None:
-    """Load cookies from ``path`` if it exists."""
+    """Load cookies from ``path`` if it exists and contains a plain dict."""
     try:
-        with path.open("rb") as fh:
-            return pickle.load(fh)
+        with path.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in data.items()):
+            return data
+        print(f"[WARN] Ignoring malformed cookies file at {path}")
     except FileNotFoundError:
         return None
-    except Exception:
-        return None
+    except json.JSONDecodeError:
+        print(f"[WARN] Failed to decode cookies from {path}")
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"[WARN] Unexpected error reading cookies from {path}: {exc}")
+    return None
 
 
 def clear_saved_cookies(path: Path = COOKIES_FILE) -> None:
