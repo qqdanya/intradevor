@@ -32,6 +32,14 @@ class HttpConfig:
 
 
 class HttpClient:
+    """
+    Обёртка над aiohttp:
+    - ретраи с эксп. backoff + jitter
+    - JSON/текст ответы
+    - ограничение параллелизма (semaphore)
+    - управление cookies + fork() (копия кук в отдельный клиент)
+    """
+
     def __init__(
         self,
         cfg: HttpConfig,
@@ -43,8 +51,11 @@ class HttpClient:
         self._ext_headers = headers or {}
         self._init_cookies = cookies or {}
         self._session: Optional[aiohttp.ClientSession] = None
+
         limit = self._cfg.concurrency_limit or self._cfg.limit
-        self._semaphore = asyncio.Semaphore(max(1, limit))
+        self._semaphore = asyncio.Semaphore(max(1, int(limit)))
+
+    # ---------- session lifecycle ----------
 
     async def __aenter__(self) -> "HttpClient":
         await self.ensure_session()
@@ -63,11 +74,6 @@ class HttpClient:
             connector = aiohttp.TCPConnector(
                 ssl=self._cfg.verify_ssl,
                 limit=self._cfg.limit,
-                # опционально:
-                # limit_per_host=self._cfg.limit,
-                # enable_cleanup_closed=True,
-                # ttl_dns_cache=300,
-                # keepalive_timeout=30,
             )
             self._session = aiohttp.ClientSession(
                 base_url=self._cfg.base_url,
@@ -83,6 +89,37 @@ class HttpClient:
     async def aclose(self) -> None:
         if self._session and not self._session.closed:
             await self._session.close()
+
+    # ---------- cookies ----------
+
+    async def update_cookies(self, cookies: Dict[str, str]) -> None:
+        """Горячо обновить куки в текущей сессии."""
+        session = await self.ensure_session()
+        session.cookie_jar.update_cookies(cookies)
+
+    async def clear_cookies(self) -> None:
+        """Очистить cookie jar."""
+        session = await self.ensure_session()
+        session.cookie_jar.clear()
+
+    async def cookies_snapshot(self) -> Dict[str, str]:
+        """
+        Плоская копия кук (name->value) для base_url.
+        Удобно для fork().
+        """
+        session = await self.ensure_session()
+        simple = session.cookie_jar.filter_cookies(self._cfg.base_url)
+        return {k: morsel.value for k, morsel in simple.items()}
+
+    async def fork(self) -> "HttpClient":
+        """
+        Изолированный клиент со СВОЕЙ aiohttp-сессией и копией текущих кук.
+        Используй для «заморозки» сессии под отдельного бота.
+        """
+        snap = await self.cookies_snapshot()
+        return HttpClient(self._cfg, cookies=snap, headers=dict(self._ext_headers))
+
+    # ---------- core retry ----------
 
     async def _retry_request(
         self,
@@ -122,7 +159,6 @@ class HttpClient:
                         )
 
                     if resp.status == 204:
-                        # чтобы точно вернуть соединение в пул, освобождаем явно
                         resp.release()
                         return {}
 
@@ -134,7 +170,7 @@ class HttpClient:
                 aiohttp.ClientConnectionError,
                 aiohttp.ServerTimeoutError,
                 aiohttp.ClientResponseError,
-                asyncio.TimeoutError,  # важно
+                asyncio.TimeoutError,
             ) as e:
                 last_exc = e
                 attempt += 1
@@ -156,10 +192,13 @@ class HttpClient:
                 )
                 sleep_for = max(0.0, backoff * jitter_ratio)
                 await asyncio.sleep(sleep_for)
+
                 delay = min(self._cfg.retry_backoff_max, delay * 2)
 
         assert last_exc is not None
         raise last_exc
+
+    # ---------- requests ----------
 
     async def get(
         self,
