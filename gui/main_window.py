@@ -211,16 +211,13 @@ class MainWindow(QWidget):
 
         top_layout = QGridLayout()
         top_layout.addWidget(info_box, 0, 0, alignment=Qt.AlignmentFlag.AlignTop)
-        top_layout.addWidget(right_box, 0, 2, alignment=Qt.AlignmentFlag.AlignTop)
         top_layout.addWidget(
             time_box,
-            1,
             0,
             1,
-            3,
-            alignment=Qt.AlignmentFlag.AlignHCenter
-            | Qt.AlignmentFlag.AlignTop,
+            alignment=Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
         )
+        top_layout.addWidget(right_box, 0, 2, alignment=Qt.AlignmentFlag.AlignTop)
         top_layout.setColumnStretch(0, 1)
         top_layout.setColumnStretch(1, 1)
         top_layout.setColumnStretch(2, 1)
