@@ -198,8 +198,8 @@ class MainWindow(QWidget):
         time_box = QWidget()
         time_layout = QVBoxLayout(time_box)
         time_layout.setContentsMargins(0, 0, 0, 0)
-        time_layout.addWidget(self.moscow_time_label, alignment=Qt.AlignmentFlag.AlignHCenter)
         time_layout.addWidget(self.time_gif_label, alignment=Qt.AlignmentFlag.AlignHCenter)
+        time_layout.addWidget(self.moscow_time_label, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         right_box = QWidget()
         right_v = QVBoxLayout(right_box)
