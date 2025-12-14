@@ -1,6 +1,9 @@
+# strategies/strategy_helpers.py
+
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -13,8 +16,17 @@ from strategies.constants import MOSCOW_TZ
 MOSCOW_ZONE = ZoneInfo(MOSCOW_TZ)
 
 
+@dataclass(slots=True)
+class SignalContext:
+    data: dict
+    received_time: datetime
+    direction: int
+    signal_at_str: str
+    symbol: str
+    timeframe: str
+
+
 def calc_next_candle_from_now(timeframe: str) -> datetime:
-    """Возвращает время начала следующей свечи для указанного таймфрейма."""
     now = datetime.now(MOSCOW_ZONE)
     tf_minutes = _minutes_from_timeframe(timeframe)
 
@@ -31,7 +43,6 @@ def calc_next_candle_from_now(timeframe: str) -> datetime:
 
 
 def extract_next_expire_dt(signal: dict) -> Optional[datetime]:
-    """Извлекает поле next_expire/next_timestamp с учётом временной зоны."""
     next_expire = signal.get("next_expire")
     if isinstance(next_expire, datetime):
         return next_expire.replace(tzinfo=MOSCOW_ZONE) if next_expire.tzinfo is None else next_expire.astimezone(MOSCOW_ZONE)
@@ -44,6 +55,54 @@ def extract_next_expire_dt(signal: dict) -> Optional[datetime]:
     return None
 
 
+def refresh_signal_context(
+    strategy,
+    signal: dict,
+    *,
+    update_symbol: bool = False,
+    update_timeframe: bool = False,
+) -> SignalContext:
+    """
+    ЕДИНАЯ точка обновления контекста стратегии по сигналу.
+    Возвращает структурированный SignalContext.
+    """
+    received_time = signal["timestamp"]
+    if isinstance(received_time, datetime):
+        if received_time.tzinfo is None:
+            received_time = received_time.replace(tzinfo=MOSCOW_ZONE)
+        else:
+            received_time = received_time.astimezone(MOSCOW_ZONE)
+
+    direction = int(signal["direction"])
+    signal_at_str = signal.get("signal_time_str") or format_local_time(received_time)
+
+    symbol = signal.get("symbol") or getattr(strategy, "symbol", "*")
+    timeframe = (signal.get("timeframe") or getattr(strategy, "timeframe", "M1")).upper()
+
+    # метаданные в стратегию
+    strategy._last_signal_ver = signal.get("version", getattr(strategy, "_last_signal_ver", 0))
+    strategy._last_indicator = signal.get("indicator", getattr(strategy, "_last_indicator", "-"))
+    strategy._last_signal_at_str = signal_at_str
+    strategy._next_expire_dt = extract_next_expire_dt(signal)
+
+    if update_symbol:
+        strategy.symbol = symbol
+
+    if update_timeframe:
+        strategy.timeframe = timeframe
+        strategy.params["timeframe"] = timeframe
+
+    return SignalContext(
+        data=signal,
+        received_time=received_time,
+        direction=direction,
+        signal_at_str=signal_at_str,
+        symbol=symbol,
+        timeframe=timeframe,
+    )
+
+
+# --- Backward-compat wrapper (чтобы не переписывать всё разом) ---
 def update_signal_context(
     strategy,
     new_signal: dict,
@@ -51,28 +110,16 @@ def update_signal_context(
     update_symbol: bool = False,
     update_timeframe: bool = False,
 ) -> tuple[dict, datetime, int, str]:
-    """Обновляет стандартные поля контекста стратегии и возвращает расшифровку сигнала."""
-    signal_received_time = new_signal["timestamp"]
-    direction = int(new_signal["direction"])
-    signal_at_str = new_signal.get("signal_time_str") or format_local_time(signal_received_time)
-
-    strategy._last_signal_ver = new_signal.get("version", strategy._last_signal_ver)
-    strategy._last_indicator = new_signal.get("indicator", strategy._last_indicator)
-    strategy._last_signal_at_str = signal_at_str
-    strategy._next_expire_dt = extract_next_expire_dt(new_signal)
-
-    if update_symbol:
-        strategy.symbol = new_signal["symbol"]
-
-    if update_timeframe:
-        strategy.timeframe = new_signal["timeframe"]
-        strategy.params["timeframe"] = strategy.timeframe
-
-    return new_signal, signal_received_time, direction, signal_at_str
+    ctx = refresh_signal_context(
+        strategy,
+        new_signal,
+        update_symbol=update_symbol,
+        update_timeframe=update_timeframe,
+    )
+    return ctx.data, ctx.received_time, ctx.direction, ctx.signal_at_str
 
 
 async def wait_for_new_signal(strategy, trade_key: str, *, timeout: float, poll_interval: float = 0.5) -> Optional[dict]:
-    """Ожидание нового сигнала из общего слушателя для указанного ключа сделки."""
     common = getattr(strategy, "_common", None)
     if common is None:
         return None
@@ -89,7 +136,6 @@ async def wait_for_new_signal(strategy, trade_key: str, *, timeout: float, poll_
 
 
 async def is_payout_low_now(strategy, symbol: str) -> bool:
-    """Проверяет актуальный payout и обновляет статус стратегии."""
     min_pct = int(strategy.params.get("min_percent", 70))
     stake = float(strategy.params.get("base_investment", 100))
     account_ccy = strategy._anchor_ccy
