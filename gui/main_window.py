@@ -199,7 +199,6 @@ class MainWindow(QWidget):
         time_layout = QVBoxLayout(time_box)
         time_layout.setContentsMargins(0, 0, 0, 0)
         time_layout.addWidget(self.time_gif_label, alignment=Qt.AlignmentFlag.AlignHCenter)
-        time_layout.addWidget(self.moscow_time_label, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         right_box = QWidget()
         right_v = QVBoxLayout(right_box)
@@ -211,6 +210,12 @@ class MainWindow(QWidget):
 
         top_layout = QGridLayout()
         top_layout.addWidget(info_box, 0, 0, alignment=Qt.AlignmentFlag.AlignTop)
+        top_layout.addWidget(
+            self.moscow_time_label,
+            0,
+            1,
+            alignment=Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+        )
         top_layout.addWidget(right_box, 0, 2, alignment=Qt.AlignmentFlag.AlignTop)
         top_layout.addWidget(
             time_box,
