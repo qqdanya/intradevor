@@ -168,7 +168,7 @@ class MainWindow(QWidget):
 
         self.time_gif_label = QLabel()
         self.time_gif_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        self.time_gif_label.setFixedSize(600, 120)
+        self.time_gif_label.setFixedSize(1200, 120)
         self.time_gif_label.setStyleSheet("padding-top: 8px;")
         self.time_gif_movie: QMovie | None = None
 
@@ -408,7 +408,7 @@ class MainWindow(QWidget):
             self.time_gif_label.setText("Не удалось загрузить гифку")
             return
 
-        movie.setScaledSize(QSize(600, 120))
+        movie.setScaledSize(QSize(1200, 120))
         self.time_gif_movie = movie
         self.time_gif_label.setMovie(movie)
         movie.start()
