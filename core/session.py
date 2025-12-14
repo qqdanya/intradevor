@@ -161,7 +161,7 @@ async def create_http_client_from_browser_cookies(
     """Создаёт глобальный HttpClient с куками браузера для текущего домена."""
     cfg = HttpConfig(
         base_url=get_base_url(),
-        user_agent="Mozilla/5.0 (X11; Linux x86_64; rv:141.0) Gecko/20100101 Firefox/141.0",
+        user_agent="Mozilla/5.0 (X11; Linux x86_64; rv:142.0) Gecko/20100101 Firefox/142.0",
     )
 
     cookies: Dict[str, str] | None = None
