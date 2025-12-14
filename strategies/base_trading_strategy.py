@@ -21,6 +21,7 @@ from strategies.base import StrategyBase
 from strategies.strategy_common import StrategyCommon
 from strategies.constants import *  # noqa: F403, F401
 from strategies.strategy_helpers import MOSCOW_ZONE, refresh_signal_context
+from strategies.timeframe_utils import minutes_from_timeframe
 from strategies.log_messages import (
     account_mode,
     account_mode_error,
@@ -33,26 +34,6 @@ from strategies.log_messages import (
     strategy_shutdown,
     trade_retry,
 )
-
-
-def _minutes_from_timeframe(tf: str) -> int:
-    """Конвертация таймфрейма в минуты"""
-    if not tf:
-        return 1
-    unit = tf[0].upper()
-    try:
-        n = int(tf[1:])
-    except Exception:
-        return 1
-    if unit == "M":
-        return n
-    if unit == "H":
-        return n * 60
-    if unit == "D":
-        return n * 60 * 24
-    if unit == "W":
-        return n * 60 * 24 * 7
-    return 1
 
 
 class BaseTradingStrategy(StrategyBase):
@@ -361,9 +342,9 @@ class BaseTradingStrategy(StrategyBase):
         self._auto_minutes = bool(self.params.get("auto_minutes", False))
         self.params["auto_minutes"] = self._auto_minutes
 
-        raw_minutes = int(self.params.get("minutes", _minutes_from_timeframe(self.timeframe)))
+        raw_minutes = int(self.params.get("minutes", minutes_from_timeframe(self.timeframe)))
         if self._auto_minutes and str(self.params.get("trade_type", "sprint")).lower() == "sprint":
-            raw_minutes = _minutes_from_timeframe(self.timeframe)
+            raw_minutes = minutes_from_timeframe(self.timeframe)
 
         self._apply_minutes(raw_minutes)
         self._trade_type = str(self.params.get("trade_type", "sprint")).lower()
@@ -867,7 +848,7 @@ class BaseTradingStrategy(StrategyBase):
     def _apply_minutes(self, requested: int, allow_correction: bool = False) -> None:
         norm = normalize_sprint(self.symbol, requested)
         if norm is None:
-            fallback = _minutes_from_timeframe(self.timeframe)
+            fallback = minutes_from_timeframe(self.timeframe)
             norm = normalize_sprint(self.symbol, fallback) or fallback
             if self.log and allow_correction:
                 self.log(minutes_invalid(self.symbol, requested, norm, corrected=True))
@@ -879,7 +860,7 @@ class BaseTradingStrategy(StrategyBase):
     def _maybe_set_auto_minutes(self, timeframe: str) -> None:
         if not (self._auto_minutes and self._trade_type == "sprint"):
             return
-        raw = _minutes_from_timeframe(timeframe)
+        raw = minutes_from_timeframe(timeframe)
         self._apply_minutes(raw)
 
     def _update_minutes_param(self, minutes) -> None:
@@ -898,7 +879,7 @@ class BaseTradingStrategy(StrategyBase):
         if self._auto_minutes and self._trade_type == "sprint":
             self._maybe_set_auto_minutes(self.timeframe)
         elif "minutes" not in self.params:
-            raw = _minutes_from_timeframe(self.timeframe)
+            raw = minutes_from_timeframe(self.timeframe)
             norm = normalize_sprint(self.symbol, raw) or raw
             self._trade_minutes = int(norm)
             self.params["minutes"] = self._trade_minutes
