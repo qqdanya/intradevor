@@ -219,7 +219,7 @@ class MainWindow(QWidget):
             1,
             3,
             alignment=Qt.AlignmentFlag.AlignHCenter
-            | Qt.AlignmentFlag.AlignVCenter,
+            | Qt.AlignmentFlag.AlignTop,
         )
         top_layout.setColumnStretch(0, 1)
         top_layout.setColumnStretch(1, 1)
