@@ -1,14 +1,11 @@
 import asyncio
 import json
-import os
-from datetime import datetime
-
 import websockets
+from datetime import datetime
 
 HOST = "0.0.0.0"
 PORT = 8080
 connected = set()
-AUTH_TOKEN = os.getenv("WS_AUTH_TOKEN")
 
 DIRECTIONS = {0: "none", 1: "up", 2: "down", 3: "both"}
 
@@ -33,16 +30,6 @@ async def handle(ws):
         ip, port = ws.remote_address
     except Exception:
         ip, port = "?", "?"
-
-    if AUTH_TOKEN:
-        provided = ws.request_headers.get("Authorization", "")
-        expected = f"Bearer {AUTH_TOKEN}"
-        if provided != expected:
-            log(
-                f"[!] Отклонено подключение без токена ({ip}:{port})."
-            )
-            await ws.close(code=4401, reason="Unauthorized")
-            return
 
     connected.add(ws)
     log(f"[+] Клиент подключился: {ip}:{port}")
