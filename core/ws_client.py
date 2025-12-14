@@ -146,7 +146,7 @@ async def listen_to_signals() -> None:
                     tail = ""
                     if sig.next_timestamp:
                         n1 = sig.next_timestamp.astimezone(MOSCOW_TZ).strftime("%H:%M")
-                        tail = f" | next: {n1}"
+                        tail = f" | Следующая: {n1}"
                     _log(
                         f"[WS] {sig.symbol} / {sig.timeframe}. Прогноз: {msg_dir} от {sig.indicator}. "
                         f"Свеча: {dt_naive.strftime('%H:%M')}{tail}"
