@@ -6,7 +6,8 @@ from datetime import datetime
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-from strategies.base_trading_strategy import BaseTradingStrategy, _minutes_from_timeframe
+from strategies.base_trading_strategy import BaseTradingStrategy
+from strategies.timeframe_utils import minutes_from_timeframe
 from strategies.constants import MOSCOW_TZ
 from strategies.strategy_helpers import (
     calc_next_candle_from_now,
@@ -337,7 +338,7 @@ class MartingaleStrategy(BaseTradingStrategy):
             if self._trade_type == "classic":
                 # Расширяем окно актуальности classic внутри серии по consecutive_non_win
                 original_max_age = self.params.get("classic_signal_max_age_sec", 170.0)
-                tf_minutes = _minutes_from_timeframe(timeframe)
+                tf_minutes = minutes_from_timeframe(timeframe)
                 candles = max(1, 1 + consecutive_non_win)
                 extended_max_age = candles * tf_minutes * 60
                 self.params["classic_signal_max_age_sec"] = extended_max_age
