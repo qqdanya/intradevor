@@ -13,7 +13,7 @@ import aiohttp
 log = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = aiohttp.ClientTimeout(
-    total=15, connect=5, sock_connect=5, sock_read=10
+    total=30, connect=5, sock_connect=5, sock_read=25
 )
 
 
