@@ -20,7 +20,7 @@ DEFAULT_TIMEOUT = aiohttp.ClientTimeout(
 @dataclass
 class HttpConfig:
     base_url: str
-    user_agent: str = "Intradevor/1.0"
+    user_agent: str = "Mozilla/5.0 (X11; Linux x86_64; rv:142.0) Gecko/20100101 Firefox/142.0"
     max_retries: int = 3
     retry_backoff: float = 0.5
     retry_backoff_max: float = 5.0
