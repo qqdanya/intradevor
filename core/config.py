@@ -9,7 +9,7 @@ _CONFIG_FILE = "config.json"
 
 # ===== Значения по умолчанию (могут быть переопределены окружением) =====
 APP_NAME: str = os.getenv("APP_NAME", "Intradevor")
-APP_VERSION: str = os.getenv("APP_VERSION", "1.1.0")
+APP_VERSION: str = os.getenv("APP_VERSION", "1.1.1")
 
 # Режим работы приложения: normal / test
 MODE: str = (
