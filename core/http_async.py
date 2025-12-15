@@ -86,7 +86,7 @@ class HttpClient:
                 timeout=self._cfg.timeout,
                 connector=connector,
                 headers=headers,
-                trust_env=True,
+                trust_env=False,
             )
             if self._init_cookies:
                 self._session.cookie_jar.update_cookies(self._init_cookies)
