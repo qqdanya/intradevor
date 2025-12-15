@@ -5,7 +5,6 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QDialogButtonBox,
     QCheckBox,
-    QComboBox,
     QHBoxLayout,
     QLabel,
     QWidget,
@@ -62,14 +61,21 @@ class MartingaleSettingsDialog(QDialog):
         self.min_percent.setRange(0, 100)
         self.min_percent.setValue(self.params.get("min_percent", 70))
 
-        allow_parallel = bool(self.params.get("allow_parallel_trades", True))
-        use_common = bool(self.params.get("use_common_series", True))
-        single_series = use_common or not allow_parallel
-        self.series_mode = QComboBox()
-        self.series_mode.addItems(
-            ["Вести единую серию", "Обрабатывать множество сигналов"]
+        self.parallel_trades = QCheckBox()
+        self.parallel_trades.setChecked(
+            bool(self.params.get("allow_parallel_trades", True))
         )
-        self.series_mode.setCurrentIndex(0 if single_series else 1)
+        parallel_label = QLabel("Обрабатывать множество сигналов")
+        parallel_label.mousePressEvent = lambda event: self.parallel_trades.toggle()
+
+        self.common_series = QCheckBox()
+        self.common_series.setChecked(
+            bool(self.params.get("use_common_series", True))
+        )
+        common_series_label = QLabel("Общая серия для всех сигналов")
+        common_series_label.mousePressEvent = (
+            lambda event: self.common_series.toggle()
+        )
 
         form = QFormLayout()
         minutes_row = QWidget()
@@ -87,7 +93,8 @@ class MartingaleSettingsDialog(QDialog):
         form.addRow("Мин. баланс", self.min_balance)
         form.addRow("Коэффициент", self.coefficient)
         form.addRow("Мин. процент", self.min_percent)
-        form.addRow("Режим сигналов", self.series_mode)
+        form.addRow(parallel_label, self.parallel_trades)
+        form.addRow(common_series_label, self.common_series)
 
         btns = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -116,6 +123,6 @@ class MartingaleSettingsDialog(QDialog):
             "min_balance": self.min_balance.value(),
             "coefficient": self.coefficient.value(),
             "min_percent": self.min_percent.value(),
-            "allow_parallel_trades": self.series_mode.currentIndex() == 1,
-            "use_common_series": self.series_mode.currentIndex() == 0,
+            "allow_parallel_trades": bool(self.parallel_trades.isChecked()),
+            "use_common_series": bool(self.common_series.isChecked()),
         }
