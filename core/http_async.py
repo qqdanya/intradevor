@@ -12,8 +12,12 @@ import aiohttp
 
 log = logging.getLogger(__name__)
 
+# More relaxed defaults to tolerate slow endpoints.
 DEFAULT_TIMEOUT = aiohttp.ClientTimeout(
-    total=30, connect=5, sock_connect=5, sock_read=25
+    total=60,
+    connect=10,
+    sock_connect=10,
+    sock_read=55,
 )
 
 
@@ -21,7 +25,7 @@ DEFAULT_TIMEOUT = aiohttp.ClientTimeout(
 class HttpConfig:
     base_url: str
     user_agent: str = "Mozilla/5.0 (X11; Linux x86_64; rv:142.0) Gecko/20100101 Firefox/142.0"
-    max_retries: int = 3
+    max_retries: int = 5
     retry_backoff: float = 0.5
     retry_backoff_max: float = 5.0
     retry_jitter: float = 0.1
