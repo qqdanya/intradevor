@@ -19,7 +19,7 @@ class TradeQueue:
     небольшую задержку, чтобы снизить риск таймаутов на стороне API.
     """
 
-    def __init__(self, trade_delay_seconds: float = 0.25) -> None:
+    def __init__(self, trade_delay_seconds: float = 0.0) -> None:
         """Создает очередь с опциональной задержкой между вызовами фабрики."""
 
         self._queue: asyncio.Queue[tuple[asyncio.Future[T], Callable[[], Awaitable[T]]]] = (
