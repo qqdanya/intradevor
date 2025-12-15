@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from typing import Optional, Tuple
 
 from bs4 import BeautifulSoup
@@ -205,10 +204,10 @@ async def check_trade_result(
 ) -> Optional[float]:
     """Fetch trade result, polling until it becomes available.
 
-    Вместо длинной первоначальной паузы начинаем опрашивать результат
-    практически сразу, но продолжаем делать это не реже чем раз в
-    ``initial_poll_delay`` секунды, пока не истечёт ``wait_time`` и не
-    наступит окно бэк-оффа. Короутина прерывается исключением
+    Первоначально ждём ``wait_time`` секунд (время закрытия спринта),
+    затем запрашиваем результат сделки. Если результат не получен, то
+    продолжаем проверять его с растущей задержкой, пока не достигнем
+    ``max_attempts``. Короутина прерывается исключением
     ``asyncio.CancelledError`` или возвращает ``None``, если ответ так и
     не получен.
 
