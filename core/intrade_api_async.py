@@ -198,7 +198,7 @@ async def check_trade_result(
     wait_time: float = 60.0,
     *,
     max_attempts: int = 60,
-    initial_poll_delay: float = 0.2,
+    initial_poll_delay: float = 1.0,
     backoff_factor: float = 1.5,
     max_poll_delay: float = 10.0,
 ) -> Optional[float]:
@@ -213,18 +213,13 @@ async def check_trade_result(
 
     Возвращает прибыль (``result - investment``) как ``float``.
     """
+    await asyncio.sleep(wait_time)
     payload = {"user_id": user_id, "user_hash": user_hash, "trade_id": trade_id}
 
     attempts = 0
     poll_delay = max(0.0, initial_poll_delay)
-    wait_deadline = time.monotonic() + max(0.0, wait_time)
 
     while attempts < max_attempts:
-        if wait_time > 0:
-            remaining_before_close = wait_deadline - time.monotonic()
-            if remaining_before_close > 0:
-                await asyncio.sleep(min(poll_delay, remaining_before_close))
-
         try:
             text = await client.post(PATH_TRADE_CHECK, data=payload, expect_json=False)
         except asyncio.CancelledError:  # уважать отмену стратегии
@@ -241,7 +236,7 @@ async def check_trade_result(
                 pass
 
         attempts += 1
-        
+        # результат ещё не готов — подождём и попробуем снова
         await asyncio.sleep(poll_delay)
         poll_delay = min(max_poll_delay, poll_delay * backoff_factor)
 
