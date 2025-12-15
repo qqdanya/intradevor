@@ -83,6 +83,9 @@ class TradeQueue:
                 future.set_result(result)
 
             self._queue.task_done()
+            # Отдаём управление циклу, чтобы не забивать его при большом количестве
+            # быстрых операций.
+            await asyncio.sleep(0)
 
 
 trade_queue = TradeQueue()
