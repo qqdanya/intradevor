@@ -204,10 +204,6 @@ def signal_deferred(symbol: str) -> str:
     return f"[{symbol}] Сигнал отложен (активная сделка)"
 
 
-def signal_ignored(symbol: str) -> str:
-    return f"[{symbol}] ⚠ Сигнал проигнорирован (активная сделка)"
-
-
 def deferred_signal_outdated(symbol: str, reason: str) -> str:
     return f"[{symbol}] ⏰ Отложенный сигнал устарел: {reason} -> пропуск"
 
