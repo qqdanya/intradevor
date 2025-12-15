@@ -364,7 +364,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
             )
 
             # результат
-            profit = await self.wait_for_trade_result(
+            self._spawn_result_checker(
                 trade_id=str(trade_id),
                 wait_seconds=float(wait_seconds),
                 placed_at=datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
@@ -379,13 +379,6 @@ class FixedStakeStrategy(BaseTradingStrategy):
                 series_label=series_label,
                 step_label=step_label,
             )
-
-            if profit is None:
-                log(result_unknown(symbol))
-            elif profit >= 0:
-                log(result_win(symbol, f"Результат: {format_amount(profit)}"))
-            else:
-                log(result_loss(symbol, f"Результат: {format_amount(profit)}"))
 
             if (left_after_place or 0) > 0:
                 self._status(f"сделок осталось: {left_after_place}")

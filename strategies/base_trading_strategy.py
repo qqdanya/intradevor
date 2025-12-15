@@ -520,7 +520,10 @@ class BaseTradingStrategy(StrategyBase):
         series_label: str | None = None,
         step_label: str | None = None,
     ) -> Optional[float]:
-        self._status("ожидание результата")
+        self._update_pending_status()
+
+        cancelled = False
+        profit: Optional[float] = None
         try:
             profit = await check_trade_result(
                 self.http_client,
@@ -529,8 +532,17 @@ class BaseTradingStrategy(StrategyBase):
                 trade_id=trade_id,
                 wait_time=wait_seconds,
             )
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
         except Exception:
             profit = None
+        finally:
+            trade_key = self.build_trade_key(symbol, timeframe)
+            self._planned_stakes.pop(trade_key, None)
+
+            if cancelled:
+                self._unregister_pending_trade(trade_id)
 
         if callable(self._on_trade_result):
             try:
@@ -552,11 +564,60 @@ class BaseTradingStrategy(StrategyBase):
             except Exception:
                 pass
 
-        trade_key = self.build_trade_key(symbol, timeframe)
-        self._planned_stakes.pop(trade_key, None)
-
         self._unregister_pending_trade(trade_id)
         return None if profit is None else float(profit)
+
+    def _on_trade_task_done(self, trade_id: str, task: asyncio.Task) -> None:
+        self._active_trades.pop(str(trade_id), None)
+        self._pending_tasks.discard(task)
+
+        if task.cancelled():
+            return
+
+        try:
+            task.result()
+        except Exception:
+            self._unregister_pending_trade(trade_id)
+
+    def _spawn_result_checker(
+        self,
+        *,
+        trade_id: str,
+        wait_seconds: float,
+        placed_at: str,
+        signal_at: Optional[str],
+        symbol: str,
+        timeframe: str,
+        direction: int,
+        stake: float,
+        percent: int,
+        account_mode: Optional[str],
+        indicator: str,
+        series_label: str | None = None,
+        step_label: str | None = None,
+    ) -> asyncio.Task:
+        task = asyncio.create_task(
+            self.wait_for_trade_result(
+                trade_id=trade_id,
+                wait_seconds=wait_seconds,
+                placed_at=placed_at,
+                signal_at=signal_at,
+                symbol=symbol,
+                timeframe=timeframe,
+                direction=direction,
+                stake=stake,
+                percent=percent,
+                account_mode=account_mode,
+                indicator=indicator,
+                series_label=series_label,
+                step_label=step_label,
+            )
+        )
+
+        self._active_trades[str(trade_id)] = task
+        self._pending_tasks.add(task)
+        task.add_done_callback(lambda t, tid=str(trade_id): self._on_trade_task_done(tid, t))
+        return task
 
     async def check_payout_and_balance(
         self,
@@ -783,9 +844,15 @@ class BaseTradingStrategy(StrategyBase):
             self._signal_listener_task.cancel()
 
         if self._active_trades:
+            for task in list(self._active_trades.values()):
+                if not task.done():
+                    task.cancel()
             await asyncio.gather(*list(self._active_trades.values()), return_exceptions=True)
 
         if self._pending_tasks:
+            for task in list(self._pending_tasks):
+                if not task.done():
+                    task.cancel()
             await asyncio.gather(*list(self._pending_tasks), return_exceptions=True)
 
         self._pending_tasks.clear()
@@ -799,6 +866,11 @@ class BaseTradingStrategy(StrategyBase):
         self._stop_when_idle_reason = None
         self._common.stop()
         super().stop()
+        for task in list(self._active_trades.values()) + list(self._pending_tasks):
+            try:
+                task.cancel()
+            except Exception:
+                pass
         self._pending_for_status.clear()
         self._active_trades.clear()
         self._series_counters.clear()

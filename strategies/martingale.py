@@ -412,7 +412,7 @@ class MartingaleStrategy(BaseTradingStrategy):
             )
             self._register_pending_trade(trade_id, symbol, timeframe)
 
-            profit = await self.wait_for_trade_result(
+            self._spawn_result_checker(
                 trade_id=str(trade_id),
                 wait_seconds=float(wait_seconds),
                 placed_at=datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
@@ -427,23 +427,7 @@ class MartingaleStrategy(BaseTradingStrategy):
                 series_label=series_label,
                 step_label=step_label,
             )
-
-            if profit is None:
-                log(result_unknown(symbol, treat_as_loss=True))
-                step += 1
-                consecutive_non_win += 1
-            elif profit > 0:
-                log(win_with_series_finish(symbol, format_amount(profit)))
-                break
-            elif abs(profit) < 1e-9:
-                log(push_repeat(symbol))
-                consecutive_non_win += 1
-            else:
-                log(loss_with_increase(symbol, format_amount(profit)))
-                step += 1
-                consecutive_non_win += 1
-
-            await self.sleep(0.2)
+            break
 
         # Завершение серии: если была хотя бы 1 попытка — серия считается потраченной
         if did_place_any_trade:
