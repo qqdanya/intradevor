@@ -4,6 +4,7 @@ from PyQt6.QtWidgets import (
     QSpinBox,
     QDialogButtonBox,
     QCheckBox,
+    QComboBox,
     QHBoxLayout,
     QLabel,
     QWidget,
@@ -52,21 +53,14 @@ class FibonacciSettingsDialog(QDialog):
         self.min_percent.setRange(0, 100)
         self.min_percent.setValue(self.params.get("min_percent", 70))
 
-        self.parallel_trades = QCheckBox()
-        self.parallel_trades.setChecked(
-            bool(self.params.get("allow_parallel_trades", True))
+        allow_parallel = bool(self.params.get("allow_parallel_trades", True))
+        use_common = bool(self.params.get("use_common_series", True))
+        single_series = use_common or not allow_parallel
+        self.series_mode = QComboBox()
+        self.series_mode.addItems(
+            ["Вести единую серию", "Обрабатывать множество сигналов"]
         )
-        parallel_label = QLabel("Обрабатывать множество сигналов")
-        parallel_label.mousePressEvent = lambda event: self.parallel_trades.toggle()
-
-        self.common_series = QCheckBox()
-        self.common_series.setChecked(
-            bool(self.params.get("use_common_series", True))
-        )
-        common_series_label = QLabel("Общая серия для всех сигналов")
-        common_series_label.mousePressEvent = (
-            lambda event: self.common_series.toggle()
-        )
+        self.series_mode.setCurrentIndex(0 if single_series else 1)
 
         minutes_row = QWidget()
         minutes_layout = QHBoxLayout(minutes_row)
@@ -83,8 +77,7 @@ class FibonacciSettingsDialog(QDialog):
         form.addRow("Повторов серии", self.repeat_count)
         form.addRow("Мин. баланс", self.min_balance)
         form.addRow("Мин. процент", self.min_percent)
-        form.addRow(parallel_label, self.parallel_trades)
-        form.addRow(common_series_label, self.common_series)
+        form.addRow("Режим сигналов", self.series_mode)
 
         btns = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -110,6 +103,6 @@ class FibonacciSettingsDialog(QDialog):
             "repeat_count": self.repeat_count.value(),
             "min_balance": self.min_balance.value(),
             "min_percent": self.min_percent.value(),
-            "allow_parallel_trades": bool(self.parallel_trades.isChecked()),
-            "use_common_series": bool(self.common_series.isChecked()),
+            "allow_parallel_trades": self.series_mode.currentIndex() == 1,
+            "use_common_series": self.series_mode.currentIndex() == 0,
         }
