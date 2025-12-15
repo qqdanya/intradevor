@@ -12,12 +12,14 @@ import aiohttp
 
 log = logging.getLogger(__name__)
 
-# More relaxed defaults to tolerate slow endpoints.
+# Более агрессивные таймауты, чтобы не зависать на минуту при глухом сервере.
+# Даже при 5 ретраях суммарное ожидание теперь считается секундами, а не
+# минутами, что уменьшает задержку постановки сделок.
 DEFAULT_TIMEOUT = aiohttp.ClientTimeout(
-    total=60,
-    connect=10,
-    sock_connect=10,
-    sock_read=55,
+    total=25,
+    connect=8,
+    sock_connect=8,
+    sock_read=12,
 )
 
 
