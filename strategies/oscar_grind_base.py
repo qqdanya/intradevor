@@ -378,8 +378,7 @@ class OscarGrindStrategy(BaseTradingStrategy):
                 series_label=series_label,
                 step_label=step_label,
             )
-
-            profit = await self.wait_for_trade_result(
+            self._spawn_result_checker(
                 trade_id=str(trade_id),
                 wait_seconds=float(wait_seconds),
                 placed_at=datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
@@ -394,66 +393,7 @@ class OscarGrindStrategy(BaseTradingStrategy):
                 series_label=series_label,
                 step_label=step_label,
             )
-
-            # outcome
-            if profit is None:
-                profit_val = -float(stake)
-                outcome = "loss"
-            else:
-                profit_val = float(profit)
-                outcome = "win" if profit_val > 0 else "refund" if profit_val == 0 else "loss"
-
-            cum_profit += profit_val
-
-            # если достигли цели — серия завершена
-            if cum_profit >= target_profit:
-                log(target_profit_reached(symbol, format_amount(cum_profit)))
-                self._series_state.pop(trade_key, None)
-                series_left = max(0, int(series_left) - 1)
-                log(series_remaining_oscar(symbol, series_left))
-                return series_left
-
-            # вычисляем need и новую ставку
-            need = max(0.0, target_profit - cum_profit)
-            stake = float(
-                self._next_stake(
-                    outcome=outcome,
-                    stake=float(stake),
-                    base_unit=float(base_unit),
-                    pct=float(pct),
-                    need=float(need),
-                    profit=float(profit_val),
-                    cum_profit=float(cum_profit),
-                )
-            )
-
-            step_idx += 1
-
-            # сохранить состояние если серия продолжается
-            if step_idx < max_steps and self._running:
-                self._series_state[trade_key] = {
-                    "stake": stake,
-                    "cum_profit": cum_profit,
-                    "step_idx": step_idx,
-                    "series_started": series_started,
-                    "has_repeated": has_repeated,
-                }
-            else:
-                self._series_state.pop(trade_key, None)
-
-            # double entry: один повтор после loss без нового сигнала
-            should_repeat = double_entry and outcome == "loss" and not has_repeated
-            if should_repeat:
-                has_repeated = True
-                skip_signal_checks_once = True
-                needs_signal_validation = False
-                require_new_signal = False
-                await self.sleep(0.2)
-                continue
-
-            needs_signal_validation = True
-            require_new_signal = True
-            await self.sleep(0.2)
+            break
 
         # дошли до лимита шагов
         if step_idx >= max_steps:

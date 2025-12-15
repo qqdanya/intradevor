@@ -355,7 +355,7 @@ class FibonacciStrategy(BaseTradingStrategy):
             )
 
             # --- 5) ожидание результата ---
-            profit = await self.wait_for_trade_result(
+            self._spawn_result_checker(
                 trade_id=str(trade_id),
                 wait_seconds=float(wait_seconds),
                 placed_at=datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
@@ -372,37 +372,7 @@ class FibonacciStrategy(BaseTradingStrategy):
             )
 
             step_idx += 1
-
-            # --- 6) обработка результата и сдвиг индекса ---
-            if profit is None:
-                log(result_unknown(symbol, treat_as_loss=True))
-                fib_index += 1
-                if requires_fresh_signal:
-                    need_new_signal = True
-
-            elif profit > 0:
-                fib_index = max(1, fib_index - 2)
-                log(fibonacci_win(symbol, format_amount(profit), fib_index))
-                # если дошли до 1 — серия считается успешной и завершается
-                if fib_index <= 1:
-                    break
-
-            elif abs(profit) < 1e-9:
-                log(fibonacci_push(symbol, fib_index))
-
-            else:
-                log(fibonacci_loss(symbol, format_amount(profit)))
-                fib_index += 1
-                if requires_fresh_signal:
-                    need_new_signal = True
-
-            await self.sleep(0.2)
-
-            # если новый сигнал не нужен — можно “подхватить” свежий pending сигнал (если есть)
-            if not need_new_signal:
-                common = getattr(self, "_common", None)
-                if common is not None:
-                    _refresh_from(common.pop_latest_signal(trade_key))
+            break
 
         # --- завершение серии ---
         if did_place_any_trade:

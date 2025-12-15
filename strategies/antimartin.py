@@ -268,7 +268,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
             )
 
             # --- результат ---
-            profit = await self.wait_for_trade_result(
+            self._spawn_result_checker(
                 trade_id=str(trade_id),
                 wait_seconds=float(trade_seconds),
                 placed_at=self.now_moscow().strftime("%d.%m.%Y %H:%M:%S"),
@@ -283,58 +283,6 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
                 series_label=series_label,
                 step_label=step_label,
             )
-
-            if profit is None:
-                log(result_unknown(symbol))
-                return series_left
-
-            if profit > 0:
-                log(win_with_parlay(symbol, format_amount(profit)))
-                stake += profit  # увеличиваем ставку
-                step += 1
-
-                # 🔴 ВАЖНО: ждём НОВЫЙ сигнал, а не повторяем
-                timeout = float(self.params.get("signal_timeout_sec", 30))
-                new_signal = await wait_for_new_signal(self, trade_key, timeout=timeout)
-                if not new_signal:
-                    return series_left
-
-                ctx = refresh_signal_context(
-                    self,
-                    new_signal,
-                    update_symbol=self._use_any_symbol,
-                    update_timeframe=self._use_any_timeframe,
-                )
-                symbol = ctx.symbol
-                timeframe = ctx.timeframe
-                direction = ctx.direction
-                signal_data = new_signal
-                self._maybe_set_auto_minutes(timeframe)
-                continue
-
-            if abs(profit) < 1e-9:
-                log(push_repeat_same_stake(symbol))
-
-                timeout = float(self.params.get("signal_timeout_sec", 30))
-                new_signal = await wait_for_new_signal(self, trade_key, timeout=timeout)
-                if not new_signal:
-                    return series_left
-
-                ctx = refresh_signal_context(
-                    self,
-                    new_signal,
-                    update_symbol=self._use_any_symbol,
-                    update_timeframe=self._use_any_timeframe,
-                )
-                symbol = ctx.symbol
-                timeframe = ctx.timeframe
-                direction = ctx.direction
-                signal_data = new_signal
-                self._maybe_set_auto_minutes(timeframe)
-                continue
-
-            # LOSS
-            log(loss_series_finish(symbol, format_amount(profit)))
             break
 
         # --- завершение серии ---
