@@ -29,7 +29,6 @@ from strategies.log_messages import (
     queue_processor_started,
     queue_signal_outdated,
     removed_stale_signals,
-    signal_ignored,
     signal_deferred,
     signal_enqueued,
     signal_listener_started,
@@ -46,10 +45,6 @@ class StrategyCommon:
     def __init__(self, strategy_instance):
         self.strategy = strategy_instance
         self.log = strategy_instance.log or (lambda s: None)
-
-        self._queue_pending_signals = bool(
-            strategy_instance.params.get("queue_pending_signals", False)
-        )
 
         self._signal_queues: Dict[str, asyncio.Queue] = {}
         self._signal_processors: Dict[str, asyncio.Task] = {}
@@ -318,10 +313,6 @@ class StrategyCommon:
     async def _handle_pending_signal(self, trade_key: str, signal_data: dict):
         symbol, _ = trade_key.split("_", 1)
         log = self.log
-
-        if not self._queue_pending_signals:
-            log(signal_ignored(symbol))
-            return
 
         if trade_key not in self._pending_signals:
             self._pending_signals[trade_key] = asyncio.Queue(maxsize=1)  # только 1 слот
