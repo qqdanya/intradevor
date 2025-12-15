@@ -198,14 +198,16 @@ async def check_trade_result(
     wait_time: float = 60.0,
     *,
     max_attempts: int = 60,
-    poll_interval: float = 0.5,
+    initial_poll_delay: float = 1.0,
+    backoff_factor: float = 1.5,
+    max_poll_delay: float = 10.0,
 ) -> Optional[float]:
     """Fetch trade result, polling until it becomes available.
 
     Первоначально ждём ``wait_time`` секунд (время закрытия спринта),
     затем запрашиваем результат сделки. Если результат не получен, то
-    продолжаем проверять его каждые ``poll_interval`` секунд, пока не
-    достигнем ``max_attempts``. Короутина прерывается исключением
+    продолжаем проверять его с растущей задержкой, пока не достигнем
+    ``max_attempts``. Короутина прерывается исключением
     ``asyncio.CancelledError`` или возвращает ``None``, если ответ так и
     не получен.
 
@@ -215,7 +217,7 @@ async def check_trade_result(
     payload = {"user_id": user_id, "user_hash": user_hash, "trade_id": trade_id}
 
     attempts = 0
-    poll_interval = max(0.0, poll_interval)
+    poll_delay = max(0.0, initial_poll_delay)
 
     while attempts < max_attempts:
         try:
@@ -235,7 +237,8 @@ async def check_trade_result(
 
         attempts += 1
         # результат ещё не готов — подождём и попробуем снова
-        await asyncio.sleep(poll_interval)
+        await asyncio.sleep(poll_delay)
+        poll_delay = min(max_poll_delay, poll_delay * backoff_factor)
 
     return None
 
