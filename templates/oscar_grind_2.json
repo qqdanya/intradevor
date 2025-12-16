@@ -9,7 +9,7 @@
       "min_percent": 70,
       "double_entry": true,
       "trade_type": "classic",
-      "allow_parallel_trades": true
+      "allow_parallel_trades": false
     }
   }
 ]

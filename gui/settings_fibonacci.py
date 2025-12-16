@@ -54,7 +54,7 @@ class FibonacciSettingsDialog(QDialog):
 
         self.parallel_trades = QCheckBox()
         self.parallel_trades.setChecked(
-            bool(self.params.get("allow_parallel_trades", True))
+            bool(self.params.get("allow_parallel_trades", False))
         )
         parallel_label = QLabel("Обрабатывать множество сигналов")
         parallel_label.mousePressEvent = lambda event: self.parallel_trades.toggle()

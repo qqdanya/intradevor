@@ -105,7 +105,7 @@ class BaseTradingStrategy(StrategyBase):
         self._series_counters: dict[str, int] = {}
 
         # Параллельная обработка
-        self._allow_parallel_trades = bool(self.params.get("allow_parallel_trades", True))
+        self._allow_parallel_trades = bool(self.params.get("allow_parallel_trades", False))
         self.params["allow_parallel_trades"] = self._allow_parallel_trades
 
         # Активные сделки и задачи

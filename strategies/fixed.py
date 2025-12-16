@@ -108,7 +108,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
         return lock
 
     def allow_concurrent_trades_per_key(self) -> bool:
-        return bool(self.params.get("allow_parallel_trades", True))
+        return bool(self.params.get("allow_parallel_trades", False))
 
     def is_series_active(self, trade_key: str) -> bool:
         # Для FixedStake серии нет, но если параллель запрещена — блокируем ключ
