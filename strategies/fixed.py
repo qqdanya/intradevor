@@ -39,7 +39,7 @@ FIXED_DEFAULTS = {
     "result_wait_s": None,  # ждём всю длительность сделки
     "grace_delay_sec": 30.0,
     "trade_type": "classic",
-    "allow_parallel_trades": True,
+    "allow_parallel_trades": False,
 }
 
 
