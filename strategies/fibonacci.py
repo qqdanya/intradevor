@@ -362,7 +362,7 @@ class FibonacciStrategy(BaseTradingStrategy):
             )
 
             # --- 5) ожидание результата ---
-            self._spawn_result_checker(
+            task = self._spawn_result_checker(
                 trade_id=str(trade_id),
                 wait_seconds=float(wait_seconds),
                 placed_at=datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
