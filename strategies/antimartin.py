@@ -167,11 +167,31 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
         step = 0
         stake = base_stake
         direction = int(initial_direction)
+        need_new_signal = False
 
         series_label = self.format_series_label(trade_key, series_left=series_left)
 
         while self._running and step < max_steps:
             await self._pause_point()
+
+            if need_new_signal:
+                timeout = float(self.params.get("signal_timeout_sec", 30))
+                new_signal = await wait_for_new_signal(self, trade_key, timeout=timeout)
+                if not new_signal:
+                    return series_left
+
+                ctx = refresh_signal_context(
+                    self,
+                    new_signal,
+                    update_symbol=self._use_any_symbol,
+                    update_timeframe=self._use_any_timeframe,
+                )
+                symbol = ctx.symbol
+                timeframe = ctx.timeframe
+                direction = ctx.direction
+                signal_data = new_signal
+                self._maybe_set_auto_minutes(timeframe)
+                need_new_signal = False
 
             # --- проверка аккаунта ---
             if not await self.ensure_account_conditions():
@@ -268,7 +288,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
             )
 
             # --- результат ---
-            self._spawn_result_checker(
+            task = self._spawn_result_checker(
                 trade_id=str(trade_id),
                 wait_seconds=float(trade_seconds),
                 placed_at=self.now_moscow().strftime("%d.%m.%Y %H:%M:%S"),
@@ -283,6 +303,30 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
                 series_label=series_label,
                 step_label=step_label,
             )
+
+            try:
+                profit = await task
+            except asyncio.CancelledError:
+                return series_left
+
+            step += 1
+
+            if profit is None:
+                log(result_unknown(symbol, treat_as_loss=True))
+                profit = -1.0
+
+            if profit > 0:
+                stake = float(stake) + float(profit)
+                log(win_with_parlay(symbol, format_amount(profit)))
+                need_new_signal = True
+                continue
+
+            if profit == 0:
+                log(push_repeat_same_stake(symbol))
+                need_new_signal = True
+                continue
+
+            log(loss_series_finish(symbol, format_amount(profit)))
             break
 
         # --- завершение серии ---

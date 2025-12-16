@@ -26,6 +26,7 @@ from strategies.log_messages import (
     series_remaining_oscar,
     steps_limit_reached,
     trade_timeout,
+    result_unknown,
 )
 
 OSCAR_GRIND_DEFAULTS = {
@@ -378,7 +379,8 @@ class OscarGrindStrategy(BaseTradingStrategy):
                 series_label=series_label,
                 step_label=step_label,
             )
-            self._spawn_result_checker(
+
+            task = self._spawn_result_checker(
                 trade_id=str(trade_id),
                 wait_seconds=float(wait_seconds),
                 placed_at=datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
@@ -393,7 +395,62 @@ class OscarGrindStrategy(BaseTradingStrategy):
                 series_label=series_label,
                 step_label=step_label,
             )
-            break
+
+            try:
+                profit = await task
+            except asyncio.CancelledError:
+                return series_left
+
+            if profit is None:
+                log(result_unknown(symbol, treat_as_loss=True))
+                profit = -1.0
+
+            step_idx += 1
+            cum_profit += float(profit)
+
+            outcome = "win" if profit > 0 else ("refund" if profit == 0 else "loss")
+            need = float(target_profit - cum_profit)
+
+            stake = self._next_stake(
+                outcome=outcome,
+                stake=float(stake),
+                base_unit=float(base_unit),
+                pct=float(pct),
+                need=float(need),
+                profit=float(profit),
+                cum_profit=float(cum_profit),
+            )
+
+            needs_signal_validation = True
+
+            if outcome == "win":
+                has_repeated = False
+                require_new_signal = True
+                if cum_profit >= target_profit:
+                    log(target_profit_reached(symbol, format_amount(cum_profit)))
+                    break
+            elif outcome == "refund":
+                has_repeated = False
+                require_new_signal = True
+            else:
+                if double_entry and not has_repeated:
+                    skip_signal_checks_once = True
+                    has_repeated = True
+                    require_new_signal = False
+                else:
+                    has_repeated = False
+                    require_new_signal = True
+
+            self._series_state[trade_key] = {
+                "step_idx": step_idx,
+                "cum_profit": cum_profit,
+                "stake": stake,
+                "series_started": series_started,
+                "has_repeated": has_repeated,
+            }
+
+            if step_idx >= max_steps:
+                break
 
         # дошли до лимита шагов
         if step_idx >= max_steps:
