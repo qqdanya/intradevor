@@ -124,15 +124,11 @@ async def wait_for_new_signal(strategy, trade_key: str, *, timeout: float, poll_
     if common is None:
         return None
 
-    start = asyncio.get_event_loop().time()
-    while strategy._running and (asyncio.get_event_loop().time() - start) < timeout:
-        await strategy._pause_point()
-        new_signal = common.pop_latest_signal(trade_key)
-        if new_signal:
-            return new_signal
-        await asyncio.sleep(poll_interval)
-
-    return None
+    return await common.wait_for_pending_signal(
+        trade_key,
+        timeout=timeout,
+        poll_interval=poll_interval,
+    )
 
 
 async def is_payout_low_now(strategy, symbol: str) -> bool:

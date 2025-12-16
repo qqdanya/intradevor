@@ -507,6 +507,43 @@ class StrategyCommon:
         _, latest_signal = self._drain_queue(q, return_last=True)
         return latest_signal
 
+    async def wait_for_pending_signal(
+        self,
+        trade_key: str,
+        *,
+        timeout: float,
+        poll_interval: float = 0.5,
+    ) -> Optional[dict]:
+        """
+        Ожидает поступления сигнала в pending-очередь для trade_key и возвращает самый свежий.
+        Используется стратегиями на шагах, где требуется новый сигнал/очередной сигнал из очереди.
+        """
+        queue = self._pending_signals.setdefault(trade_key, asyncio.Queue(maxsize=1))
+        loop = asyncio.get_event_loop()
+        start = loop.time()
+
+        while self.strategy._running and (loop.time() - start) < timeout:
+            await self.strategy._pause_point()
+
+            removed, latest = self._drain_queue(queue, return_last=True)
+            if latest is not None:
+                return latest
+
+            remaining = timeout - (loop.time() - start)
+            wait_for = min(max(0.0, remaining), float(poll_interval))
+            if wait_for <= 0.0:
+                break
+
+            try:
+                new_signal = await asyncio.wait_for(queue.get(), timeout=wait_for)
+                queue.task_done()
+                _, newest = self._drain_queue(queue, return_last=True)
+                return newest or new_signal
+            except asyncio.TimeoutError:
+                continue
+
+        return None
+
     def stop(self):
         all_tasks: list[asyncio.Task] = []
         all_tasks.extend(self._signal_processors.values())
