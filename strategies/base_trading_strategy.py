@@ -15,7 +15,7 @@ from core.payout_provider import get_cached_payout
 from core.signal_waiter import wait_for_signal_versioned
 from core.money import format_amount
 from core.policy import normalize_sprint
-from core.trade_queue import trade_queue, result_check_queue
+from core.trade_queue import trade_queue
 
 from strategies.base import StrategyBase
 from strategies.strategy_common import StrategyCommon
@@ -527,14 +527,12 @@ class BaseTradingStrategy(StrategyBase):
         cancelled = False
         profit: Optional[float] = None
         try:
-            profit = await result_check_queue.enqueue(
-                lambda: check_trade_result(
-                    self.http_client,
-                    user_id=self.user_id,
-                    user_hash=self.user_hash,
-                    trade_id=trade_id,
-                    wait_time=wait_seconds,
-                )
+            profit = await check_trade_result(
+                self.http_client,
+                user_id=self.user_id,
+                user_hash=self.user_hash,
+                trade_id=trade_id,
+                wait_time=wait_seconds,
             )
         except asyncio.CancelledError:
             cancelled = True
