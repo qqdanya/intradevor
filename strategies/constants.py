@@ -19,7 +19,7 @@ DEFAULTS = {
     "result_wait_s": 60.0,
     "grace_delay_sec": 30.0,
     "trade_type": "classic",
-    "allow_parallel_trades": True,
+    "allow_parallel_trades": False,
     "classic_signal_max_age_sec": 170.0,
     "classic_trade_buffer_sec": 10.0,
     "classic_min_time_before_next_sec": 180.0,
