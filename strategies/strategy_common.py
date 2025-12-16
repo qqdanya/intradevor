@@ -522,25 +522,66 @@ class StrategyCommon:
         loop = asyncio.get_event_loop()
         start = loop.time()
 
+        def _pop_latest(q: Optional[asyncio.Queue]) -> Optional[dict]:
+            if q is None:
+                return None
+            _, latest = self._drain_queue(q, return_last=True)
+            return latest
+
+        def _consume_any_available() -> Optional[dict]:
+            latest = _pop_latest(queue)
+            if latest is not None:
+                return latest
+            return _pop_latest(self._signal_queues.get(trade_key))
+
         while self.strategy._running and (loop.time() - start) < timeout:
             await self.strategy._pause_point()
 
-            removed, latest = self._drain_queue(queue, return_last=True)
+            latest = _consume_any_available()
             if latest is not None:
                 return latest
+            signal_queue = self._signal_queues.get(trade_key)
 
             remaining = timeout - (loop.time() - start)
             wait_for = min(max(0.0, remaining), float(poll_interval))
             if wait_for <= 0.0:
                 break
+            wait_pairs: list[tuple[asyncio.Queue, asyncio.Task]] = []
+            for q in (queue, signal_queue):
+                if q is None:
+                    continue
+                wait_pairs.append((q, asyncio.create_task(q.get())))
+
+            if not wait_pairs:
+                await asyncio.sleep(wait_for)
+                continue
+
+            tasks = [task for _, task in wait_pairs]
+            done, pending = await asyncio.wait(
+                tasks,
+                timeout=wait_for,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
 
             try:
-                new_signal = await asyncio.wait_for(queue.get(), timeout=wait_for)
-                queue.task_done()
-                _, newest = self._drain_queue(queue, return_last=True)
-                return newest or new_signal
-            except asyncio.TimeoutError:
-                continue
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+
+                for q, task in wait_pairs:
+                    if task in done:
+                        try:
+                            item = task.result()
+                        except Exception:
+                            continue
+                        try:
+                            q.task_done()
+                        except Exception:
+                            pass
+                        _, newest = self._drain_queue(q, return_last=True)
+                        return newest or item
+            finally:
+                await asyncio.gather(*(task for _, task in wait_pairs), return_exceptions=True)
 
         return None
 
