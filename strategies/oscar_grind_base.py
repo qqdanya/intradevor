@@ -42,7 +42,7 @@ OSCAR_GRIND_DEFAULTS = {
     "grace_delay_sec": 30.0,
     "double_entry": True,   # повтор одной и той же ставки после LOSS без нового сигнала
     "trade_type": "classic",
-    "allow_parallel_trades": True,
+    "allow_parallel_trades": False,
 }
 
 
