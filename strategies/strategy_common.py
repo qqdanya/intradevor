@@ -45,6 +45,7 @@ class StrategyCommon:
     def __init__(self, strategy_instance):
         self.strategy = strategy_instance
         self.log = strategy_instance.log or (lambda s: None)
+        self._single_trade_executed = False
 
         self._signal_queues: Dict[str, asyncio.Queue] = {}
         self._signal_processors: Dict[str, asyncio.Task] = {}
@@ -220,7 +221,12 @@ class StrategyCommon:
 
                 elif not allow_parallel:
                     # Глобальная блокировка для всех символов
-                    if self._global_trade_lock.locked():
+                    if self._single_trade_executed:
+                        await self._handle_pending_signal(
+                            trade_key, signal_data, schedule_processing=False
+                        )
+                        processed_immediately = True
+                    elif self._global_trade_lock.locked():
                         await self._handle_pending_signal(trade_key, signal_data)
                         processed_immediately = True
                     else:
@@ -244,6 +250,7 @@ class StrategyCommon:
                                         self.strategy._process_single_signal(signal_data)
                                     )
                                     await task
+                                    self._single_trade_executed = True
                                 finally:
                                     await release_trade_slot()
                             log(global_lock_released(symbol))
@@ -310,7 +317,9 @@ class StrategyCommon:
 
         return self.strategy._is_signal_valid_for_sprint(signal_data, current_time)
 
-    async def _handle_pending_signal(self, trade_key: str, signal_data: dict):
+    async def _handle_pending_signal(
+        self, trade_key: str, signal_data: dict, *, schedule_processing: bool = True
+    ):
         symbol, _ = trade_key.split("_", 1)
         log = self.log
 
@@ -327,7 +336,7 @@ class StrategyCommon:
 
         log(signal_deferred(symbol))
 
-        if trade_key not in self._pending_processing:
+        if schedule_processing and trade_key not in self._pending_processing:
             self._pending_processing[trade_key] = asyncio.create_task(
                 self._process_pending_signals(trade_key)
             )
@@ -351,6 +360,9 @@ class StrategyCommon:
         allow_parallel = self.strategy.params.get("allow_parallel_trades", True)
 
         try:
+            if not allow_parallel and self._single_trade_executed:
+                return
+
             if not allow_parallel:
                 async with self._global_trade_lock:
                     log(global_lock_acquired(symbol))
@@ -388,6 +400,9 @@ class StrategyCommon:
     async def _process_one_pending(self, trade_key: str):
         symbol, _ = trade_key.split("_", 1)
         log = self.log
+
+        if not self.strategy.params.get("allow_parallel_trades", True) and self._single_trade_executed:
+            return
 
         if not can_open_new_trade():
             max_trades = get_max_open_trades()
