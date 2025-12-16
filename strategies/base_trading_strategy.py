@@ -814,6 +814,7 @@ class BaseTradingStrategy(StrategyBase):
 
         try:
             while self._running:
+                await self._pause_point()
                 await asyncio.sleep(1.0)
         except asyncio.CancelledError:
             pass
