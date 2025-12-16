@@ -31,6 +31,7 @@ class HttpConfig:
     retry_backoff: float = 0.5
     retry_backoff_max: float = 5.0
     retry_jitter: float = 0.1
+    request_spacing: float = 0.5
     timeout: aiohttp.ClientTimeout = DEFAULT_TIMEOUT
     verify_ssl: bool = True
     limit: int = 100
@@ -57,6 +58,8 @@ class HttpClient:
         self._ext_headers = headers or {}
         self._init_cookies = cookies or {}
         self._session: Optional[aiohttp.ClientSession] = None
+        self._throttle_lock = asyncio.Lock()
+        self._last_request_at: float = 0.0
 
         limit = self._cfg.concurrency_limit or self._cfg.limit
         self._semaphore = asyncio.Semaphore(max(1, int(limit)))
@@ -146,6 +149,7 @@ class HttpClient:
 
         while attempt < self._cfg.max_retries:
             try:
+                await self._throttle()
                 async with session.request(
                     method,
                     url,
@@ -205,6 +209,16 @@ class HttpClient:
         raise last_exc
 
     # ---------- requests ----------
+
+    async def _throttle(self) -> None:
+        async with self._throttle_lock:
+            now = asyncio.get_running_loop().time()
+            elapsed = now - self._last_request_at
+            wait_for = max(0.0, self._cfg.request_spacing - elapsed)
+            if wait_for:
+                await asyncio.sleep(wait_for)
+                now = asyncio.get_running_loop().time()
+            self._last_request_at = now
 
     async def get(
         self,
