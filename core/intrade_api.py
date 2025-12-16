@@ -280,8 +280,9 @@ async def check_trade_result(session, user_id, user_hash, trade_id, wait_time=60
 
     После ожидания ``wait_time`` секунд отправляется запрос на получение
     результата сделки. Если ответ не содержит нужных данных, выполняется
-    повторная проверка каждую секунду до появления результата. Отмена
-    корутины приводит к немедленному выходу из функции.
+    повторная проверка без дополнительной задержки до появления
+    результата. Отмена корутины приводит к немедленному выходу из
+    функции.
     """
 
     await asyncio.sleep(wait_time)
@@ -299,4 +300,4 @@ async def check_trade_result(session, user_id, user_hash, trade_id, wait_time=60
         except Exception:
             pass
 
-        await asyncio.sleep(1)
+        await asyncio.sleep(0)
