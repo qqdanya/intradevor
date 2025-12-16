@@ -195,7 +195,7 @@ class StrategyCommon:
         symbol, timeframe = trade_key.split("_", 1)
         log = self.log
 
-        allow_parallel = self.strategy.params.get("allow_parallel_trades", True)
+        allow_parallel = self.strategy.params.get("allow_parallel_trades", False)
         log(queue_processor_started(symbol, trade_key, allow_parallel))
 
         while self.strategy._running:
@@ -353,7 +353,7 @@ class StrategyCommon:
     async def _process_pending_signals(self, trade_key: str):
         symbol, _ = trade_key.split("_", 1)
         log = self.log
-        allow_parallel = self.strategy.params.get("allow_parallel_trades", True)
+        allow_parallel = self.strategy.params.get("allow_parallel_trades", False)
 
         try:
             if not allow_parallel:
@@ -444,7 +444,7 @@ class StrategyCommon:
             self._reschedule_pending_processing(trade_key)
             return
 
-        if not self.strategy.params.get("allow_parallel_trades", True):
+        if not self.strategy.params.get("allow_parallel_trades", False):
             try:
                 task = asyncio.create_task(self.strategy._process_single_signal(last_signal))
                 await task

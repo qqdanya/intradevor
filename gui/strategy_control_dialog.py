@@ -218,7 +218,7 @@ class StrategyControlDialog(QWidget):
         box_v.addWidget(template_row)
 
         self.parallel_trades = QCheckBox()
-        self.parallel_trades.setChecked(bool(getv("allow_parallel_trades", True)))
+        self.parallel_trades.setChecked(bool(getv("allow_parallel_trades", False)))
         self.common_series = QCheckBox()
         self.common_series.setChecked(bool(getv("use_common_series", True)))
         if strategy_key == "fixed":
