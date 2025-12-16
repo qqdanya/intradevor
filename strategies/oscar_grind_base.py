@@ -350,6 +350,7 @@ class OscarGrindStrategy(BaseTradingStrategy):
             trade_id = await self.place_trade_with_retry(symbol, series_direction, stake, self._anchor_ccy)
             if not trade_id:
                 log(trade_placement_failed(symbol, "Ждем новый сигнал."))
+                self._status("ожидание сигнала")
                 await self.sleep(2.0)
                 require_new_signal = True
                 needs_signal_validation = True

@@ -308,6 +308,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
                     trade_id = await self.place_trade_with_retry(symbol, direction, stake, self._anchor_ccy)
                     if not trade_id:
                         log(trade_placement_failed(symbol, "Пропускаем сигнал."))
+                        self._status("ожидание сигнала")
                         return  # лимит НЕ уменьшаем
 
                     new_left = max(0, int(current_left) - 1)
@@ -329,6 +330,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
                     trade_id = await self.place_trade_with_retry(symbol, direction, stake, self._anchor_ccy)
                     if not trade_id:
                         log(trade_placement_failed(symbol, "Пропускаем сигнал."))
+                        self._status("ожидание сигнала")
                         return  # лимит НЕ уменьшаем
 
                     new_left = max(0, int(current_left) - 1)

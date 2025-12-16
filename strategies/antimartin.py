@@ -168,6 +168,7 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
         stake = base_stake
         direction = int(initial_direction)
         need_new_signal = False
+        did_place_any_trade = False
 
         series_label = self.format_series_label(trade_key, series_left=series_left)
 
@@ -259,10 +260,13 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
             )
             if not trade_id:
                 log(trade_placement_failed(symbol, "Пропуск сигнала"))
-                return series_left
+                self._status("ожидание сигнала")
+                need_new_signal = True
+                continue
 
             # --- pending ---
             self._register_pending_trade(trade_id, symbol, timeframe)
+            did_place_any_trade = True
 
             try:
                 demo_now = await is_demo_account(self.http_client)
@@ -330,11 +334,11 @@ class AntiMartingaleStrategy(BaseTradingStrategy):
             break
 
         # --- завершение серии ---
-        if step >= max_steps:
-            log(steps_limit_reached(symbol, max_steps))
-
-        series_left = max(0, series_left - 1)
-        log(series_remaining(symbol, series_left))
+        if did_place_any_trade:
+            if step >= max_steps:
+                log(steps_limit_reached(symbol, max_steps))
+            series_left = max(0, series_left - 1)
+            log(series_remaining(symbol, series_left))
         return series_left
 
     # ======================================================================

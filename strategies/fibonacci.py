@@ -326,7 +326,14 @@ class FibonacciStrategy(BaseTradingStrategy):
             trade_id = await self.place_trade_with_retry(symbol, series_direction, stake, self._anchor_ccy)
             if not trade_id:
                 log(trade_placement_failed(symbol, "Пропускаем сигнал."))
-                return series_left
+                self._status("ожидание сигнала")
+                timeout = float(self.params.get("signal_timeout_sec", 30.0))
+                new_sig = await wait_for_new_signal(self, trade_key, timeout=timeout)
+                if not new_sig:
+                    log(trade_timeout(symbol, timeout))
+                    return series_left
+                _refresh_from(new_sig)
+                continue
 
             did_place_any_trade = True
 
