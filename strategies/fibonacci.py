@@ -371,8 +371,34 @@ class FibonacciStrategy(BaseTradingStrategy):
                 step_label=step_label,
             )
 
+            # --- результат и продолжение серии ---
+            try:
+                profit = await task
+            except asyncio.CancelledError:
+                return series_left
+
             step_idx += 1
-            break
+
+            if profit is None:
+                log(result_unknown(symbol, treat_as_loss=True))
+                profit = -1.0
+
+            if profit > 0:
+                fib_index = max(1, fib_index - 2)
+                log(fibonacci_win(symbol, format_amount(profit), fib_index))
+                break
+
+            if profit == 0:
+                log(fibonacci_push(symbol, fib_index))
+            else:
+                fib_index += 1
+                log(fibonacci_loss(symbol, format_amount(profit)))
+                need_new_signal = requires_fresh_signal
+
+            needs_signal_validation = True
+
+            if step_idx >= max_steps:
+                break
 
         # --- завершение серии ---
         if did_place_any_trade:

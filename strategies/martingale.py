@@ -412,7 +412,7 @@ class MartingaleStrategy(BaseTradingStrategy):
             )
             self._register_pending_trade(trade_id, symbol, timeframe)
 
-            self._spawn_result_checker(
+            task = self._spawn_result_checker(
                 trade_id=str(trade_id),
                 wait_seconds=float(wait_seconds),
                 placed_at=datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
@@ -427,7 +427,42 @@ class MartingaleStrategy(BaseTradingStrategy):
                 series_label=series_label,
                 step_label=step_label,
             )
-            break
+
+            # Дожидаемся результата и продолжаем серию внутри цикла
+            try:
+                profit = await task
+            except asyncio.CancelledError:
+                return series_left
+
+            if profit is None:
+                log(result_unknown(symbol, treat_as_loss=True))
+                profit = -1.0
+
+            if profit > 0:
+                log(win_with_series_finish(symbol, format_amount(profit)))
+                break
+
+            if profit == 0:
+                log(push_repeat(symbol))
+            else:
+                consecutive_non_win += 1
+                step += 1
+                log(loss_with_increase(symbol, format_amount(profit)))
+
+            if step >= max_steps:
+                break
+
+            # Обновляем сигнал для следующего шага серии
+            timeout = float(self.params.get("signal_timeout_sec", 30.0))
+            new_signal = await wait_for_new_signal(self, trade_key, timeout=timeout)
+            if not new_signal:
+                return series_left
+
+            signal_data, signal_received_time, series_direction, signal_at_str = \
+                self._update_signal_context_in_series(new_signal=new_signal)
+            symbol = signal_data["symbol"]
+            timeframe = signal_data["timeframe"]
+            self._maybe_set_auto_minutes(timeframe)
 
         # Завершение серии: если была хотя бы 1 попытка — серия считается потраченной
         if did_place_any_trade:
