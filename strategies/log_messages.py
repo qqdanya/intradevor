@@ -74,7 +74,7 @@ def trade_summary(
     direction: int,
     payout: int,
 ) -> str:
-    side = "UP" if direction == 1 else "DOWN"
+    side = "ВВЕРХ" if direction == 1 else "ВНИЗ"
     return f"[{symbol}] stake={stake} min={minutes} side={side} payout={payout}%"
 
 
@@ -239,7 +239,7 @@ def series_completed(symbol: str, timeframe: str, strategy_name: str) -> str:
 
 
 def trade_step(symbol: str, step: int, stake: str, minutes: int, direction: int, payout: int) -> str:
-    side = "UP" if direction == 1 else "DOWN"
+    side = "ВВЕРХ" if direction == 1 else "ВНИЗ"
     return (
         f"[{symbol}] step={step} stake={stake} min={minutes} "
         f"side={side} payout={payout}%"
@@ -397,4 +397,3 @@ def oscar_loss(symbol: str, profit: str, next_stake: str) -> str:
         f"[{symbol}] ❌ LOSS: profit={profit}. "
         f"Следующая ставка остаётся {next_stake}."
     )
-

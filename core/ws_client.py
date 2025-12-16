@@ -142,7 +142,7 @@ async def listen_to_signals() -> None:
 
                     # Лог: время без таймзоны
                     dt_naive = sig.timestamp.astimezone(MOSCOW_TZ).replace(tzinfo=None)
-                    msg_dir = {1: "UP", 2: "DOWN", None: "none"}[sig.direction]
+                    msg_dir = {1: "ВВЕРХ", 2: "ВНИЗ", None: "none"}[sig.direction]
                     tail = ""
                     if sig.next_timestamp:
                         n1 = sig.next_timestamp.astimezone(MOSCOW_TZ).strftime("%H:%M")
