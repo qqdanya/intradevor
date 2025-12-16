@@ -1,4 +1,4 @@
-"""Очередь для последовательной проверки результатов сделок."""
+"""Очередь для проверки результатов сделок."""
 
 from __future__ import annotations
 
@@ -15,9 +15,10 @@ T = TypeVar("T")
 class TradeResultQueue:
     """Асинхронная очередь для проверки результатов сделок.
 
-    Проверка результатов через API выполняется строго по очереди, чтобы избежать
-    одновременных запросов от нескольких стратегий. Возвращает результат проверки
-    обратно в вызывающий контекст.
+    Задачи проверки результатов передаются в общий диспетчер и исполняются в
+    отдельных фоновых задачах, поэтому ожидание ответа по одной сделке не
+    блокирует остальные. Возвращает результат проверки обратно в вызывающий
+    контекст.
     """
 
     def __init__(self) -> None:
@@ -25,6 +26,7 @@ class TradeResultQueue:
             asyncio.Queue()
         )
         self._worker_task: Optional[asyncio.Task] = None
+        self._active_tasks: set[asyncio.Task] = set()
         self._started = False
 
     def _ensure_started(self) -> None:
@@ -40,6 +42,13 @@ class TradeResultQueue:
                 await self._worker_task
             except asyncio.CancelledError:
                 pass
+
+        if self._active_tasks:
+            for task in list(self._active_tasks):
+                task.cancel()
+            await asyncio.gather(*list(self._active_tasks), return_exceptions=True)
+            self._active_tasks.clear()
+
         while not self._queue.empty():
             future, _ = self._queue.get_nowait()
             if not future.done():
@@ -85,6 +94,24 @@ class TradeResultQueue:
             )
         )
 
+    async def _run_job(
+        self, future: asyncio.Future[T], factory: Callable[[], Awaitable[T]]
+    ) -> None:
+        try:
+            result = await factory()
+        except asyncio.CancelledError:
+            if not future.cancelled():
+                future.cancel()
+            raise
+        except Exception as exc:  # noqa: BLE001 - важно передать исключение вызывающему
+            if not future.done():
+                future.set_exception(exc)
+        else:
+            if not future.done():
+                future.set_result(result)
+        finally:
+            self._queue.task_done()
+
     async def _worker(self) -> None:
         while True:
             future, factory = await self._queue.get()
@@ -92,18 +119,9 @@ class TradeResultQueue:
                 self._queue.task_done()
                 continue
 
-            try:
-                result = await factory()
-            except asyncio.CancelledError:
-                future.cancel()
-                self._queue.task_done()
-                raise
-            except Exception as exc:  # noqa: BLE001 - важно передать исключение вызывающему
-                future.set_exception(exc)
-            else:
-                future.set_result(result)
-
-            self._queue.task_done()
+            task = asyncio.create_task(self._run_job(future, factory))
+            self._active_tasks.add(task)
+            task.add_done_callback(lambda t: self._active_tasks.discard(t))
 
 
 trade_result_queue = TradeResultQueue()
