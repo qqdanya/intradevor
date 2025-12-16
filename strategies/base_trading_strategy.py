@@ -474,6 +474,7 @@ class BaseTradingStrategy(StrategyBase):
         if self._trade_type == "classic":
             if not self._next_expire_dt:
                 log(classic_expire_missing(symbol))
+                self._status("ожидание сигнала")
                 return None
             time_arg = self._next_expire_dt.strftime("%H:%M")
             trade_kwargs["date"] = self._next_expire_dt.strftime("%d-%m-%Y")
@@ -501,6 +502,7 @@ class BaseTradingStrategy(StrategyBase):
                 log(trade_retry(symbol))
                 await self.sleep(1.0)
 
+        self._status("ожидание сигнала")
         return None
 
     async def wait_for_trade_result(
