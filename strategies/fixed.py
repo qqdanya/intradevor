@@ -366,7 +366,7 @@ class FixedStakeStrategy(BaseTradingStrategy):
             )
 
             # результат
-            self._spawn_result_checker(
+            result_task = self._spawn_result_checker(
                 trade_id=str(trade_id),
                 wait_seconds=float(wait_seconds),
                 placed_at=datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
@@ -381,6 +381,14 @@ class FixedStakeStrategy(BaseTradingStrategy):
                 series_label=series_label,
                 step_label=step_label,
             )
+
+            # если параллель запрещена — дожидаемся результата перед следующей ставкой
+            if not self.allow_concurrent_trades_per_key():
+                try:
+                    await result_task
+                except asyncio.CancelledError:
+                    result_task.cancel()
+                    raise
 
             if (left_after_place or 0) > 0:
                 self._status(f"сделок осталось: {left_after_place}")
