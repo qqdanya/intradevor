@@ -202,6 +202,7 @@ class MartingaleStrategy(BaseTradingStrategy):
 
         # Стартовая валидация (если невалидно — ждём новый сигнал, НЕ завершая серию)
         while self._running:
+            await self._pause_point()
             current_time = datetime.now(MOSCOW_ZONE)
 
             if self._trade_type == "classic":

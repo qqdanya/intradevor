@@ -215,11 +215,16 @@ class StrategyBase:
         queue = self._signal_queue
         fetcher = self._signal_listener_fetcher
         since_version = self._signal_queue_since_version
-       
+
         while self._running and not self._stop_event.is_set():
             if fetcher is None or queue is None:
                 break
-               
+
+            try:
+                await self._pause_point()
+            except asyncio.CancelledError:
+                break
+
             try:
                 payload = await fetcher(since_version)
             except asyncio.CancelledError:

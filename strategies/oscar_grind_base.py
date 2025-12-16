@@ -157,6 +157,7 @@ class OscarGrindStrategy(BaseTradingStrategy):
 
         # Важно: если сигнал неактуален — ждём новый, а не выходим
         while self._running:
+            await self._pause_point()
             now = self.now_moscow()
             if self._trade_type == "classic":
                 ok, reason = self._is_signal_valid_for_classic(signal_data, now, for_placement=True)
