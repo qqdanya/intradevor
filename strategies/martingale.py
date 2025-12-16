@@ -463,17 +463,7 @@ class MartingaleStrategy(BaseTradingStrategy):
             if step >= max_steps:
                 break
 
-            # Обновляем сигнал для следующего шага серии
-            timeout = float(self.params.get("signal_timeout_sec", 30.0))
-            new_signal = await wait_for_new_signal(self, trade_key, timeout=timeout)
-            if not new_signal:
-                return series_left
-
-            signal_data, signal_received_time, series_direction, signal_at_str = \
-                self._update_signal_context_in_series(new_signal=new_signal)
-            symbol = signal_data["symbol"]
-            timeframe = signal_data["timeframe"]
-            self._maybe_set_auto_minutes(timeframe)
+            # Используем прежний сигнал для повторной ставки (без ожидания нового)
 
         # Завершение серии: если была хотя бы 1 попытка — серия считается потраченной
         if did_place_any_trade:
