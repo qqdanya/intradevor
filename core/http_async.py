@@ -27,7 +27,7 @@ class HttpConfig:
     user_agent: str = "Mozilla/5.0 (X11; Linux x86_64; rv:142.0) Gecko/20100101 Firefox/142.0"
 
     # Короткие ретраи (1-2) вместо долгих ожиданий
-    max_retries: int = 2
+    max_retries: int = 3
     retry_backoff: float = 0.2
     retry_backoff_max: float = 0.7
     retry_jitter: float = 0.1
