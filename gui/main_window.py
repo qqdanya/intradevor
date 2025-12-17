@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QTextCursor, QColor, QFont, QMovie
 from PyQt6.QtCore import Qt, QTimer, QSize
 from pathlib import Path
+from importlib import resources
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from collections import defaultdict
@@ -57,6 +58,9 @@ from strategies.oscar_grind_2 import OscarGrind2Strategy
 from strategies.antimartin import AntiMartingaleStrategy
 from strategies.fibonacci import FibonacciStrategy
 from strategies.fixed import FixedStakeStrategy
+
+
+DEFAULT_TIME_GIF_NAME = "u5ch1llotxtqrikuzhqeyak4odq.gif"
 
 
 class MainWindow(QWidget):
@@ -401,21 +405,43 @@ class MainWindow(QWidget):
     def _load_time_gif(self):
         gif_path = config.get_time_gif_path()
 
-        if not gif_path:
-            self.time_gif_label.setText("Гифка не указана")
-            return
+        # 1) Пробуем путь из конфига (если задан)
+        if gif_path:
+            movie = self._try_load_movie(Path(gif_path).expanduser())
+            if movie:
+                self._set_time_movie(movie)
+                return
 
-        path = Path(gif_path).expanduser()
-        if not path.exists():
+        # 2) Фоллбэк: встроенный ресурс из gui/assets
+        try:
+            default_resource = resources.files("gui.assets") / DEFAULT_TIME_GIF_NAME
+        except (FileNotFoundError, ModuleNotFoundError):
             self.time_gif_label.setText("Гифка не найдена")
             return
 
+        try:
+            with resources.as_file(default_resource) as resource_path:
+                movie = self._try_load_movie(resource_path)
+        except FileNotFoundError:
+            movie = None
+
+        if movie:
+            self._set_time_movie(movie)
+        else:
+            self.time_gif_label.setText("Не удалось загрузить гифку")
+
+    def _try_load_movie(self, path: Path) -> QMovie | None:
+        if not path.exists():
+            return None
+
         movie = QMovie(str(path))
         if not movie.isValid():
-            self.time_gif_label.setText("Не удалось загрузить гифку")
-            return
+            return None
 
         movie.setScaledSize(QSize(1200, 120))
+        return movie
+
+    def _set_time_movie(self, movie: QMovie) -> None:
         self.time_gif_movie = movie
         self.time_gif_label.setMovie(movie)
         movie.start()
