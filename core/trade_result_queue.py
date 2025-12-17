@@ -75,8 +75,7 @@ class TradeResultQueue:
         wait_time: float = 60.0,
         max_attempts: int = 60,
         initial_poll_delay: float = 1.0,
-        backoff_factor: float = 1.5,
-        max_poll_delay: float = 10.0,
+        poll_interval: float = 10.0,
     ) -> Optional[float]:
         """Поставить запрос проверки сделки в очередь."""
 
@@ -89,8 +88,7 @@ class TradeResultQueue:
                 wait_time=wait_time,
                 max_attempts=max_attempts,
                 initial_poll_delay=initial_poll_delay,
-                backoff_factor=backoff_factor,
-                max_poll_delay=max_poll_delay,
+                poll_interval=poll_interval,
             )
         )
 
