@@ -5,6 +5,7 @@ import asyncio
 import logging
 from typing import Optional, Tuple
 
+import aiohttp
 from bs4 import BeautifulSoup
 
 from core.http_async import HttpClient
@@ -25,6 +26,7 @@ PATH_RISK = "risk_manage.php"
 PATH_CCY = "user_currency_edit.php"
 PATH_TOGGLE_REAL_DEMO = "user_real_trade.php"
 PATH_PROFILE = "profile"
+PROFILE_TIMEOUT = aiohttp.ClientTimeout(total=5, sock_read=2)
 
 
 # ---------------- Баланс / валюта ----------------
@@ -292,7 +294,9 @@ async def is_demo_account(client: HttpClient) -> bool:
     Признак: в /profile есть <input type="hidden" name="demo_update" value="1">.
     """
     try:
-        html = await client.get(PATH_PROFILE, expect_json=False)
+        html = await client.get(
+            PATH_PROFILE, expect_json=False, timeout=PROFILE_TIMEOUT
+        )
         soup = BeautifulSoup(html, "html.parser")
         inp = soup.find("input", attrs={"name": "demo_update"})
         return bool(inp and inp.get("value") == "1")
